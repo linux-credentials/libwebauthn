@@ -180,7 +180,7 @@ impl UpgradableResponse<GetAssertionResponse, SignRequest> for SignResponse {
         };
 
         // Let authenticatorGetAssertionResponse be a CBOR map with the following keys whose values are as follows: [..]
-        let upgraded_response: GetAssertionResponse = Ctap2GetAssertionResponse {
+        let response = Ctap2GetAssertionResponse {
             credential_id: Some(Ctap2PublicKeyCredentialDescriptor {
                 r#type: Ctap2PublicKeyCredentialType::PublicKey,
                 id: ByteBuf::from(request.key_handle.clone()),
@@ -195,8 +195,8 @@ impl UpgradableResponse<GetAssertionResponse, SignRequest> for SignResponse {
             unsigned_extension_outputs: None,
             enterprise_attestation: None,
             attestation_statement: None,
-        }
-        .into();
+        };
+        let upgraded_response = [response.into_assertion_output(None)].as_slice().into();
 
         trace!(?upgraded_response);
         Ok(upgraded_response)

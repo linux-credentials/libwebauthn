@@ -3,6 +3,8 @@ use serde_bytes::ByteBuf;
 use serde_indexed::{DeserializeIndexed, SerializeIndexed};
 use serde_repr::{Deserialize_repr, Serialize_repr};
 
+use crate::pin::{PinUvAuthProtocol, PinUvAuthProtocolOne, PinUvAuthProtocolTwo};
+
 #[derive(Debug, Clone, SerializeIndexed)]
 #[serde_indexed(offset = 1)]
 pub struct Ctap2ClientPinRequest {
@@ -210,6 +212,15 @@ bitflags! {
 pub enum Ctap2PinUvAuthProtocol {
     One = 1,
     Two = 2,
+}
+
+impl Ctap2PinUvAuthProtocol {
+    pub(crate) fn create_protocol_object(&self) -> Box<dyn PinUvAuthProtocol> {
+        match self {
+            Ctap2PinUvAuthProtocol::One => Box::new(PinUvAuthProtocolOne::new()),
+            Ctap2PinUvAuthProtocol::Two => Box::new(PinUvAuthProtocolTwo::new()),
+        }
+    }
 }
 
 #[repr(u32)]

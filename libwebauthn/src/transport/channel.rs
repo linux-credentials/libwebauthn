@@ -9,6 +9,7 @@ use crate::proto::{
 use crate::transport::error::Error;
 
 use async_trait::async_trait;
+use cosey::PublicKey;
 
 use super::device::SupportedProtocols;
 
@@ -34,9 +35,9 @@ pub trait Channel: Send + Sync + Display + Ctap2AuthTokenStore {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ctap2AuthTokenPermission {
-    pin_uv_auth_protocol: Ctap2PinUvAuthProtocol,
-    role: Ctap2AuthTokenPermissionRole,
-    rpid: Option<String>,
+    pub(crate) pin_uv_auth_protocol: Ctap2PinUvAuthProtocol,
+    pub(crate) role: Ctap2AuthTokenPermissionRole,
+    pub(crate) rpid: Option<String>,
 }
 
 impl Ctap2AuthTokenPermission {
@@ -63,13 +64,26 @@ impl Ctap2AuthTokenPermission {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct AuthTokenData {
+    pub shared_secret: Vec<u8>,
+    pub permission: Ctap2AuthTokenPermission,
+    pub pin_uv_auth_token: Vec<u8>,
+    pub protocol_version: Ctap2PinUvAuthProtocol,
+    pub key_agreement: PublicKey,
+}
+
 #[async_trait]
 pub trait Ctap2AuthTokenStore {
-    fn store_uv_auth_token(
-        &mut self,
-        permission: Ctap2AuthTokenPermission,
-        pin_uv_auth_token: &[u8],
-    );
-    fn get_uv_auth_token(&self, requested_permission: &Ctap2AuthTokenPermission) -> Option<&[u8]>;
+    fn store_auth_data(&mut self, auth_token_data: AuthTokenData);
+    fn get_auth_data(&self) -> Option<&AuthTokenData>;
     fn clear_uv_auth_token_store(&mut self);
+    fn get_uv_auth_token(&self, requested_permission: &Ctap2AuthTokenPermission) -> Option<&[u8]> {
+        if let Some(stored_data) = self.get_auth_data() {
+            if stored_data.permission.contains(requested_permission) {
+                return Some(&stored_data.pin_uv_auth_token);
+            }
+        }
+        None
+    }
 }

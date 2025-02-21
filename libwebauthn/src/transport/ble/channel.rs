@@ -7,9 +7,7 @@ use crate::proto::ctap1::apdu::{ApduRequest, ApduResponse};
 use crate::proto::ctap2::cbor::{CborRequest, CborResponse};
 use crate::proto::CtapError;
 use crate::transport::ble::bluez;
-use crate::transport::channel::{
-    Channel, ChannelStatus, Ctap2AuthTokenPermission, Ctap2AuthTokenStore,
-};
+use crate::transport::channel::{AuthTokenData, Channel, ChannelStatus, Ctap2AuthTokenStore};
 use crate::transport::device::SupportedProtocols;
 use crate::transport::error::{Error, TransportError};
 
@@ -27,7 +25,7 @@ pub struct BleChannel<'a> {
     device: &'a BleDevice,
     connection: Connection,
     revision: FidoRevision,
-    auth_token: Option<(Ctap2AuthTokenPermission, Vec<u8>)>,
+    auth_token_data: Option<AuthTokenData>,
 }
 
 impl<'a> BleChannel<'a> {
@@ -46,7 +44,7 @@ impl<'a> BleChannel<'a> {
             device,
             connection,
             revision,
-            auth_token: None,
+            auth_token_data: None,
         };
         bluez::notify_start(&channel.connection)
             .await
@@ -159,24 +157,15 @@ impl<'a> Channel for BleChannel<'a> {
 }
 
 impl Ctap2AuthTokenStore for BleChannel<'_> {
-    fn store_uv_auth_token(
-        &mut self,
-        permission: Ctap2AuthTokenPermission,
-        pin_uv_auth_token: &[u8],
-    ) {
-        self.auth_token = Some((permission, pin_uv_auth_token.to_vec()));
+    fn store_auth_data(&mut self, auth_token_data: AuthTokenData) {
+        self.auth_token_data = Some(auth_token_data);
     }
 
-    fn get_uv_auth_token(&self, requested_permission: &Ctap2AuthTokenPermission) -> Option<&[u8]> {
-        if let Some((stored_permission, stored_token)) = &self.auth_token {
-            if stored_permission.contains(requested_permission) {
-                return Some(stored_token);
-            }
-        }
-        None
+    fn get_auth_data(&self) -> Option<&AuthTokenData> {
+        self.auth_token_data.as_ref()
     }
 
     fn clear_uv_auth_token_store(&mut self) {
-        self.auth_token = None;
+        self.auth_token_data = None;
     }
 }

@@ -7,7 +7,7 @@ use rand::{thread_rng, Rng};
 use tracing_subscriber::{self, EnvFilter};
 
 use libwebauthn::ops::webauthn::{
-    GetAssertionRequest, GetAssertionRequestExtensions, MakeCredentialRequest,
+    GetAssertionRequest, GetAssertionRequestExtensions, HMACGetSecretInput, MakeCredentialRequest,
     MakeCredentialsRequestExtensions, UserVerificationRequirement,
 };
 use libwebauthn::pin::{UvProvider, StdinPromptPinProvider};
@@ -100,6 +100,10 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             user_verification: UserVerificationRequirement::Discouraged,
             extensions: Some(GetAssertionRequestExtensions {
                 cred_blob: Some(true),
+                hmac_secret: Some(HMACGetSecretInput {
+                    salt1: [1; 32],
+                    salt2: None,
+                }),
             }),
             timeout: TIMEOUT,
         };
