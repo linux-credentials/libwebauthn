@@ -2,7 +2,7 @@ use crate::{
     ops::webauthn::UserVerificationRequirement,
     pin::{PinProvider, PinUvAuthProtocol},
     proto::ctap2::{
-        Ctap2, Ctap2AuthTokenPermissionRole, Ctap2CredentialData,
+        Ctap2, Ctap2AuthTokenPermissionRole, Ctap2ClientPinRequest, Ctap2CredentialData,
         Ctap2CredentialManagementMetadata, Ctap2CredentialManagementRequest, Ctap2GetInfoResponse,
         Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialUserEntity, Ctap2RPData,
         Ctap2UserVerifiableRequest,
@@ -88,7 +88,9 @@ where
             handle_errors!(
                 self,
                 self.ctap2_credential_management(&req, timeout).await,
-                uv_auth_used
+                uv_auth_used,
+                pin_provider,
+                timeout
             )
         }?;
         let metadata = Ctap2CredentialManagementMetadata::new(
@@ -118,7 +120,9 @@ where
             handle_errors!(
                 self,
                 self.ctap2_credential_management(&req, timeout).await,
-                uv_auth_used
+                uv_auth_used,
+                pin_provider,
+                timeout
             )
         }?;
         Ok((
@@ -150,7 +154,9 @@ where
             handle_errors!(
                 self,
                 self.ctap2_credential_management(&req, timeout).await,
-                uv_auth_used
+                uv_auth_used,
+                pin_provider,
+                timeout
             )
         }?;
         Ok(Ctap2RPData::new(
@@ -180,7 +186,9 @@ where
             handle_errors!(
                 self,
                 self.ctap2_credential_management(&req, timeout).await,
-                uv_auth_used
+                uv_auth_used,
+                pin_provider,
+                timeout
             )
         }?;
         let cred = Ctap2CredentialData::new(
@@ -214,7 +222,9 @@ where
             handle_errors!(
                 self,
                 self.ctap2_credential_management(&req, timeout).await,
-                uv_auth_used
+                uv_auth_used,
+                pin_provider,
+                timeout
             )
         }?;
         let cred = Ctap2CredentialData::new(
@@ -248,7 +258,9 @@ where
             handle_errors!(
                 self,
                 self.ctap2_credential_management(&req, timeout).await,
-                uv_auth_used
+                uv_auth_used,
+                pin_provider,
+                timeout
             )
         }?;
         Ok(())
@@ -282,7 +294,9 @@ where
             handle_errors!(
                 self,
                 self.ctap2_credential_management(&req, timeout).await,
-                uv_auth_used
+                uv_auth_used,
+                pin_provider,
+                timeout
             )
         }?;
         Ok(())

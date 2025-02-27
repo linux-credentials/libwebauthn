@@ -1,3 +1,4 @@
+use crate::proto::ctap2::Ctap2ClientPinRequest;
 pub use crate::transport::error::{CtapError, Error};
 use crate::transport::Channel;
 use crate::webauthn::handle_errors;
@@ -77,7 +78,9 @@ where
             handle_errors!(
                 self,
                 self.ctap2_authenticator_config(&req, timeout).await,
-                uv_auth_used
+                uv_auth_used,
+                pin_provider,
+                timeout
             )
         }
     }
@@ -102,7 +105,9 @@ where
             handle_errors!(
                 self,
                 self.ctap2_authenticator_config(&req, timeout).await,
-                uv_auth_used
+                uv_auth_used,
+                pin_provider,
+                timeout
             )
         }
     }
@@ -128,7 +133,9 @@ where
             handle_errors!(
                 self,
                 self.ctap2_authenticator_config(&req, timeout).await,
-                uv_auth_used
+                uv_auth_used,
+                pin_provider,
+                timeout
             )
         }
     }
@@ -154,7 +161,9 @@ where
             handle_errors!(
                 self,
                 self.ctap2_authenticator_config(&req, timeout).await,
-                uv_auth_used
+                uv_auth_used,
+                pin_provider,
+                timeout
             )
         }
     }
@@ -179,7 +188,9 @@ where
             handle_errors!(
                 self,
                 self.ctap2_authenticator_config(&req, timeout).await,
-                uv_auth_used
+                uv_auth_used,
+                pin_provider,
+                timeout
             )
         }
     }

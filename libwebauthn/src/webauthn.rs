@@ -12,7 +12,8 @@ use crate::ops::webauthn::{
 };
 use crate::ops::webauthn::{MakeCredentialRequest, MakeCredentialResponse};
 use crate::pin::{
-    pin_hash, PinProvider, PinUvAuthProtocol, PinUvAuthProtocolOne, PinUvAuthProtocolTwo,
+    pin_hash, PinProvider, PinRequestReason, PinUvAuthProtocol, PinUvAuthProtocolOne,
+    PinUvAuthProtocolTwo,
 };
 use crate::proto::ctap1::Ctap1;
 use crate::proto::ctap2::{
@@ -24,7 +25,7 @@ pub use crate::transport::error::{CtapError, Error, PlatformError, TransportErro
 use crate::transport::{Channel, Ctap2AuthTokenPermission};
 
 macro_rules! handle_errors {
-    ($channel: expr, $resp: expr, $uv_auth_used: expr) => {
+    ($channel: expr, $resp: expr, $uv_auth_used: expr, $pin_provider: expr, $timeout: expr) => {
         match $resp {
             Err(Error::Ctap(CtapError::PINAuthInvalid))
                 if $uv_auth_used == UsedPinUvAuthToken::FromStorage =>
@@ -32,6 +33,16 @@ macro_rules! handle_errors {
                 info!("PINAuthInvalid: Clearing auth token storage and trying again.");
                 $channel.clear_uv_auth_token_store();
                 continue;
+            }
+            Err(Error::Ctap(CtapError::UVInvalid)) => {
+                let attempts_left = $channel
+                    .ctap2_client_pin(&Ctap2ClientPinRequest::new_get_uv_retries(), $timeout)
+                    .await
+                    .map(|x| x.uv_retries)
+                    .ok() // It's optional, so soft-error here
+                    .flatten();
+                $pin_provider.notify_uv_failed(attempts_left).await;
+                break Err(Error::Ctap(CtapError::UVInvalid));
             }
             x => {
                 break x;
@@ -127,7 +138,9 @@ where
             handle_errors!(
                 self,
                 self.ctap2_make_credential(&ctap2_request, op.timeout).await,
-                uv_auth_used
+                uv_auth_used,
+                pin_provider,
+                op.timeout
             )
         }
     }
@@ -174,7 +187,9 @@ where
             handle_errors!(
                 self,
                 self.ctap2_get_assertion(&ctap2_request, op.timeout).await,
-                uv_auth_used
+                uv_auth_used,
+                pin_provider,
+                op.timeout
             )
         }?;
         let count = response.credentials_count.unwrap_or(1);
@@ -328,7 +343,7 @@ where
     let (uv_proto, token_response, shared_secret) = loop {
         let uv_operation = get_info_response
             .uv_operation(uv_blocked || skip_uv)
-            .ok_or_else(|| {
+            .ok_or({
                 if uv_blocked {
                     Error::Ctap(CtapError::UvBlocked)
                 } else {
@@ -342,6 +357,11 @@ where
         }
 
         let uv_proto = select_uv_proto(&get_info_response).await?;
+        let reason = if uv_blocked {
+            PinRequestReason::FallbackFromUV
+        } else {
+            PinRequestReason::Direct
+        };
         // For operations that include a PIN, we want to fetch one before obtaining a shared secret.
         // This prevents the shared secret from expiring whilst we wait for the user to enter a PIN.
         let pin = match uv_operation {
@@ -353,6 +373,7 @@ where
                     &get_info_response,
                     uv_proto.version(),
                     pin_provider,
+                    reason,
                     timeout,
                 )
                 .await?,
@@ -406,6 +427,26 @@ where
                 uv_blocked = true;
                 continue;
             }
+            Err(Error::Ctap(CtapError::UVInvalid)) => {
+                let attempts_left = channel
+                    .ctap2_client_pin(&Ctap2ClientPinRequest::new_get_uv_retries(), timeout)
+                    .await
+                    .map(|x| x.uv_retries)
+                    .ok() // It's optional, so soft-error here
+                    .flatten();
+                pin_provider.notify_uv_failed(attempts_left).await;
+                if let Some(attempts) = attempts_left {
+                    // The spec says: "If the platform receives CTAP2ERRUV_BLOCKED **or** uvRetries <= 0"
+                    // So, this check MAY prevent one additional fingerprint scan for the user,
+                    // that is going to fail with UvBlocked.
+                    if attempts == 0 {
+                        warn!("UV failed too many times and is now blocked. Trying to fall back to PIN.");
+                        uv_blocked = true;
+                        continue;
+                    }
+                }
+                return Err(Error::Ctap(CtapError::UVInvalid));
+            }
             Err(x) => {
                 return Err(x);
             }
@@ -458,6 +499,7 @@ pub(crate) async fn obtain_pin<C>(
     info: &Ctap2GetInfoResponse,
     pin_proto: Ctap2PinUvAuthProtocol,
     pin_provider: &Box<dyn PinProvider>,
+    reason: PinRequestReason,
     timeout: Duration,
 ) -> Result<Vec<u8>, Error>
 where
@@ -479,7 +521,7 @@ where
         .map(|x| x.pin_retries)
         .ok() // It's optional, so soft-error here
         .flatten();
-    let Some(raw_pin) = pin_provider.provide_pin(attempts_left).await else {
+    let Some(raw_pin) = pin_provider.provide_pin(attempts_left, reason).await else {
         info!("User cancelled operation: no PIN provided");
         return Err(Error::Ctap(CtapError::PINRequired));
     };

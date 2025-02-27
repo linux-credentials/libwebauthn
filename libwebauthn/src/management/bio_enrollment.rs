@@ -4,7 +4,8 @@ use crate::{
     proto::ctap2::{
         Ctap2, Ctap2AuthTokenPermissionRole, Ctap2BioEnrollmentFingerprintKind,
         Ctap2BioEnrollmentModality, Ctap2BioEnrollmentRequest, Ctap2BioEnrollmentTemplateId,
-        Ctap2GetInfoResponse, Ctap2LastEnrollmentSampleStatus, Ctap2UserVerifiableRequest,
+        Ctap2ClientPinRequest, Ctap2GetInfoResponse, Ctap2LastEnrollmentSampleStatus,
+        Ctap2UserVerifiableRequest,
     },
     transport::{
         error::{CtapError, Error, PlatformError},
@@ -127,7 +128,9 @@ where
             handle_errors!(
                 self,
                 self.ctap2_bio_enrollment(&req, timeout).await,
-                uv_auth_used
+                uv_auth_used,
+                pin_provider,
+                timeout
             )
         };
         Ok(resp?.template_infos.unwrap_or_default())
@@ -155,7 +158,9 @@ where
             handle_errors!(
                 self,
                 self.ctap2_bio_enrollment(&req, timeout).await,
-                uv_auth_used
+                uv_auth_used,
+                pin_provider,
+                timeout
             )
         }?;
 
@@ -187,7 +192,9 @@ where
             handle_errors!(
                 self,
                 self.ctap2_bio_enrollment(&req, timeout).await,
-                uv_auth_used
+                uv_auth_used,
+                pin_provider,
+                timeout
             )
         }?;
         // "If there is an exiting enrollment with passed in templateInfo, delete that enrollment and return CTAP2_OK."
@@ -217,7 +224,9 @@ where
             handle_errors!(
                 self,
                 self.ctap2_bio_enrollment(&req, timeout).await,
-                uv_auth_used
+                uv_auth_used,
+                pin_provider,
+                timeout
             )
         }?;
 
@@ -251,7 +260,9 @@ where
             handle_errors!(
                 self,
                 self.ctap2_bio_enrollment(&req, timeout).await,
-                uv_auth_used
+                uv_auth_used,
+                pin_provider,
+                timeout
             )
         }?;
 
@@ -281,7 +292,9 @@ where
             handle_errors!(
                 self,
                 self.ctap2_bio_enrollment(&req, timeout).await,
-                uv_auth_used
+                uv_auth_used,
+                pin_provider,
+                timeout
             )
         }?;
 
