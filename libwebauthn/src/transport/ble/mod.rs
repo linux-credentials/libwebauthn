@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-pub mod bluez;
+pub mod btleplug;
 pub mod channel;
 pub mod device;
 pub mod framing;
