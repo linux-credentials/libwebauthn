@@ -10,7 +10,7 @@ use libwebauthn::ops::webauthn::{
     GetAssertionRequest, GetAssertionRequestExtensions, MakeCredentialRequest,
     MakeCredentialsRequestExtensions, UserVerificationRequirement,
 };
-use libwebauthn::pin::{PinProvider, StdinPromptPinProvider};
+use libwebauthn::pin::{UvProvider, StdinPromptPinProvider};
 use libwebauthn::proto::ctap2::{
     Ctap2CredentialType, Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialRpEntity,
     Ctap2PublicKeyCredentialUserEntity,
@@ -38,7 +38,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
     let user_id: [u8; 32] = thread_rng().gen();
     let challenge: [u8; 32] = thread_rng().gen();
 
-    let pin_provider: Box<dyn PinProvider> = Box::new(StdinPromptPinProvider::new());
+    let pin_provider: Box<dyn UvProvider> = Box::new(StdinPromptPinProvider::new());
 
     let extensions = MakeCredentialsRequestExtensions {
         cred_protect: Some(CredentialProtectionPolicy::Required),

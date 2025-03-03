@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use tracing_subscriber::{self, EnvFilter};
 
-use libwebauthn::pin::{PinManagement, PinProvider, StdinPromptPinProvider};
+use libwebauthn::pin::{PinManagement, UvProvider, StdinPromptPinProvider};
 use libwebauthn::transport::hid::list_devices;
 use libwebauthn::transport::Device;
 use libwebauthn::webauthn::Error as WebAuthnError;
@@ -25,7 +25,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
 
     let devices = list_devices().await.unwrap();
     println!("Devices found: {:?}", devices);
-    let pin_provider: Box<dyn PinProvider> = Box::new(StdinPromptPinProvider::new());
+    let pin_provider: Box<dyn UvProvider> = Box::new(StdinPromptPinProvider::new());
 
     for mut device in devices {
         println!("Selected HID authenticator: {}", &device);

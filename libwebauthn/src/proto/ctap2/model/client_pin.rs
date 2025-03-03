@@ -137,7 +137,7 @@ impl Ctap2ClientPinRequest {
 
     pub fn new_get_uv_retries() -> Self {
         Self {
-            // GetUvRetires never needed the protocol sent. GetPINRetires did for CTAP 2.0
+            // GetUvRetries never needed the protocol sent. GetPINRetries did for CTAP 2.0
             protocol: None,
             command: Ctap2PinUvAuthProtocolCommand::GetUvRetries,
             key_agreement: None,
