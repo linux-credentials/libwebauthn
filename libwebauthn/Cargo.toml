@@ -34,7 +34,6 @@ serde_bytes = "0.11.5"
 num-traits = "0.2"
 num-derive = "0.4.1"
 byteorder = "1.3.4"
-blurz = "0.4.0"
 num_enum = "0.7.1"
 x509-parser = "0.16.0"
 time = "0.3.35"
@@ -62,6 +61,8 @@ tokio-tungstenite = { version = "0.20.1", features = [
 tokio-stream = "0.1.4"
 snow = { version = "0.10.0-alpha.1", features = ["use-p256"] }
 ctap-types = { version = "0.3.2" }
+btleplug = "0.11.7"
+
 
 [dev-dependencies]
 tracing-subscriber = { version = "0.3.3", features = ["env-filter"] }

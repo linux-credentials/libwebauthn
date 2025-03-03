@@ -12,11 +12,12 @@ use serde_indexed::SerializeIndexed;
 use tokio::sync::mpsc;
 use tokio::time::sleep;
 use tracing::{debug, error, trace};
+use uuid::Uuid;
 
 use super::known_devices::CableKnownDeviceInfoStore;
 use super::tunnel::{self, KNOWN_TUNNEL_DOMAINS};
 use super::{channel::CableChannel, Cable};
-use crate::transport::ble::bluez::{self, FidoDevice};
+use crate::transport::ble::btleplug::{self, FidoDevice};
 use crate::transport::cable::crypto::{derive, trial_decrypt_advert, KeyPurpose};
 use crate::transport::cable::digit_encode;
 use crate::transport::error::Error;
@@ -184,17 +185,19 @@ impl CableQrCodeDevice<'_> {
     }
 
     async fn await_advertisement(&self) -> Result<(FidoDevice, DecryptedAdvert), Error> {
-        bluez::manager::start_discovery(&vec![
-            CABLE_UUID_FIDO.to_owned(),
-            CABLE_UUID_GOOGLE.to_owned(),
+        btleplug::manager::start_discovery(&[
+            Uuid::parse_str(CABLE_UUID_FIDO).unwrap(),
+            Uuid::parse_str(CABLE_UUID_GOOGLE).unwrap(),
         ])
         .await
         .or(Err(Error::Transport(TransportError::TransportUnavailable)))?;
 
         loop {
-            let devices_service_data = bluez::manager::devices_by_service(CABLE_UUID_FIDO)
-                .await
-                .or(Err(Error::Transport(TransportError::TransportUnavailable)))?;
+            let devices_service_data = btleplug::manager::list_devices_with_service_data(
+                Uuid::parse_str(CABLE_UUID_FIDO).unwrap(),
+            )
+            .await
+            .or(Err(Error::Transport(TransportError::TransportUnavailable)))?;
             debug!({ ?devices_service_data }, "Found devices with service data");
 
             let device = devices_service_data

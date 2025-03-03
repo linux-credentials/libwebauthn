@@ -1,6 +1,8 @@
 use std::fmt;
 
+use ::btleplug::api::Peripheral;
 use async_trait::async_trait;
+use hex::ToHex;
 use tokio::sync::mpsc;
 use tracing::{info, instrument};
 
@@ -8,15 +10,15 @@ use crate::transport::device::Device;
 use crate::transport::error::{Error, TransportError};
 use crate::UxUpdate;
 
-use super::bluez::manager::SupportedRevisions;
-use super::bluez::{supported_fido_revisions, FidoDevice as BlueZFidoDevice};
+use super::btleplug::manager::SupportedRevisions;
+use super::btleplug::{supported_fido_revisions, FidoDevice as BtleplugFidoDevice};
 
 use super::channel::BleChannel;
-use super::{bluez, Ble};
+use super::{btleplug, Ble};
 
 #[instrument]
 pub async fn list_devices() -> Result<Vec<BleDevice>, Error> {
-    let devices: Vec<_> = bluez::list_devices()
+    let devices: Vec<_> = btleplug::list_fido_devices()
         .await
         .or(Err(Error::Transport(TransportError::TransportUnavailable)))?
         .iter()
@@ -28,36 +30,39 @@ pub async fn list_devices() -> Result<Vec<BleDevice>, Error> {
 
 #[derive(Debug, Clone)]
 pub struct BleDevice {
-    pub bluez_device: BlueZFidoDevice,
+    pub btleplug_device: BtleplugFidoDevice,
     pub revisions: Option<SupportedRevisions>,
 }
 
 impl BleDevice {
     pub fn alias(&self) -> String {
-        self.bluez_device.alias.clone()
+        match &self.btleplug_device.properties.local_name {
+            Some(local_name) => local_name.clone(),
+            None => self.btleplug_device.properties.address.encode_hex(),
+        }
     }
 
-    pub fn is_connected(&self) -> bool {
-        self.bluez_device.is_connected
-    }
-
-    pub fn is_paired(&self) -> bool {
-        self.bluez_device.is_paired
+    pub async fn is_connected(&self) -> bool {
+        self.btleplug_device
+            .peripheral
+            .is_connected()
+            .await
+            .unwrap_or(false)
     }
 }
 
-impl From<&BlueZFidoDevice> for BleDevice {
-    fn from(bluez_device: &BlueZFidoDevice) -> Self {
+impl From<&BtleplugFidoDevice> for BleDevice {
+    fn from(btleplug_device: &BtleplugFidoDevice) -> Self {
         Self {
-            bluez_device: bluez_device.clone(),
+            btleplug_device: btleplug_device.clone(),
             revisions: None,
         }
     }
 }
 
-impl Into<BlueZFidoDevice> for &BleDevice {
-    fn into(self) -> BlueZFidoDevice {
-        self.bluez_device.clone()
+impl Into<BtleplugFidoDevice> for &BleDevice {
+    fn into(self) -> BtleplugFidoDevice {
+        self.btleplug_device.clone()
     }
 }
 
@@ -87,7 +92,7 @@ impl BleDevice {
     async fn supported_revisions(&mut self) -> Result<SupportedRevisions, Error> {
         let revisions = match self.revisions {
             None => {
-                let revisions = supported_fido_revisions(&self.bluez_device)
+                let revisions = supported_fido_revisions(&self.btleplug_device.peripheral)
                     .await
                     .or(Err(Error::Transport(TransportError::NegotiationFailed)))?;
                 self.revisions = Some(revisions);
