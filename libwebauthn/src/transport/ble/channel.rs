@@ -6,20 +6,20 @@ use crate::fido::{FidoProtocol, FidoRevision};
 use crate::proto::ctap1::apdu::{ApduRequest, ApduResponse};
 use crate::proto::ctap2::cbor::{CborRequest, CborResponse};
 use crate::proto::CtapError;
-use crate::transport::ble::bluez;
+use crate::transport::ble::btleplug;
 use crate::transport::channel::{
     Channel, ChannelStatus, Ctap2AuthTokenPermission, Ctap2AuthTokenStore,
 };
 use crate::transport::device::SupportedProtocols;
 use crate::transport::error::{Error, TransportError};
 
-use super::bluez::manager::SupportedRevisions;
-use super::bluez::Connection;
+use super::btleplug::manager::SupportedRevisions;
+use super::btleplug::Connection;
 use super::framing::{BleCommand, BleFrame};
 use super::BleDevice;
 
 use async_trait::async_trait;
-use tracing::{debug, instrument, trace, warn, Level};
+use tracing::{debug, instrument, trace, Level};
 
 #[derive(Debug)]
 pub struct BleChannel<'a> {
@@ -38,7 +38,7 @@ impl<'a> BleChannel<'a> {
         let revision = revisions
             .select_protocol(FidoProtocol::U2F)
             .ok_or(Error::Transport(TransportError::NegotiationFailed))?;
-        let connection = bluez::connect(&device.bluez_device, &revision)
+        let connection = btleplug::connect(&device.btleplug_device.peripheral, &revision)
             .await
             .or(Err(Error::Transport(TransportError::ConnectionFailed)))?;
         let channel = BleChannel {
@@ -48,19 +48,12 @@ impl<'a> BleChannel<'a> {
             revision,
             auth_token: None,
         };
-        bluez::notify_start(&channel.connection)
+        channel
+            .connection
+            .subscribe()
             .await
             .or(Err(Error::Transport(TransportError::TransportUnavailable)))?;
         Ok(channel)
-    }
-}
-
-impl<'a> Drop for BleChannel<'a> {
-    #[instrument(skip_all, fields(dev = %self.device))]
-    fn drop(&mut self) {
-        if let Err(err) = bluez::notify_stop(&self.connection) {
-            warn!(%err, "Failed to unsubscribe from channel notifications");
-        }
     }
 }
 
@@ -86,21 +79,24 @@ impl<'a> Channel for BleChannel<'a> {
     }
 
     #[instrument(level = Level::DEBUG, skip_all)]
-    async fn apdu_send(&self, request: &ApduRequest, timeout: Duration) -> Result<(), Error> {
+    async fn apdu_send(&self, request: &ApduRequest, _timeout: Duration) -> Result<(), Error> {
         debug!({rev = ?self.revision}, "Sending APDU request");
         trace!(?request);
 
         let request_apdu_packet = request.raw_long().or(Err(TransportError::InvalidFraming))?;
         let request_frame = BleFrame::new(BleCommand::Msg, &request_apdu_packet);
-        bluez::frame_send(&self.connection, &request_frame, timeout)
+        self.connection
+            .frame_send(&request_frame)
             .await
             .or(Err(Error::Transport(TransportError::ConnectionFailed)))?;
         Ok(())
     }
 
     #[instrument(level = Level::DEBUG, skip_all)]
-    async fn apdu_recv(&self, timeout: Duration) -> Result<ApduResponse, Error> {
-        let response_frame = bluez::frame_recv(&self.connection, timeout)
+    async fn apdu_recv(&self, _timeout: Duration) -> Result<ApduResponse, Error> {
+        let response_frame = self
+            .connection
+            .frame_recv()
             .await
             .or(Err(Error::Transport(TransportError::ConnectionFailed)))?;
         match response_frame.cmd {
@@ -123,22 +119,25 @@ impl<'a> Channel for BleChannel<'a> {
     async fn cbor_send(
         &mut self,
         request: &CborRequest,
-        timeout: std::time::Duration,
+        _timeout: std::time::Duration,
     ) -> Result<(), Error> {
         debug!("Sending CBOR request");
         trace!(?request);
 
         let cbor_request = request.raw_long().or(Err(TransportError::InvalidFraming))?;
         let request_frame = BleFrame::new(BleCommand::Msg, &cbor_request);
-        bluez::frame_send(&self.connection, &request_frame, timeout)
+        self.connection
+            .frame_send(&request_frame)
             .await
             .or(Err(Error::Transport(TransportError::ConnectionFailed)))?;
         Ok(())
     }
 
     #[instrument(level = Level::DEBUG, skip_all)]
-    async fn cbor_recv(&mut self, timeout: std::time::Duration) -> Result<CborResponse, Error> {
-        let response_frame = bluez::frame_recv(&self.connection, timeout)
+    async fn cbor_recv(&mut self, _timeout: std::time::Duration) -> Result<CborResponse, Error> {
+        let response_frame = self
+            .connection
+            .frame_recv()
             .await
             .or(Err(Error::Transport(TransportError::ConnectionFailed)))?;
         match response_frame.cmd {

@@ -3,7 +3,7 @@ use std::fmt::Display;
 use crate::fido::FidoRevision;
 use async_trait::async_trait;
 
-use crate::transport::ble::bluez::manager::SupportedRevisions;
+use crate::transport::ble::btleplug::manager::SupportedRevisions;
 use crate::transport::error::Error;
 
 use super::{Channel, Transport};
