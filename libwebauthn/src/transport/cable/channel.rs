@@ -11,9 +11,9 @@ use crate::proto::{
     ctap2::cbor::{CborRequest, CborResponse},
 };
 use crate::transport::error::{Error, TransportError};
+use crate::transport::AuthTokenData;
 use crate::transport::{
-    channel::ChannelStatus, device::SupportedProtocols, Channel, Ctap2AuthTokenPermission,
-    Ctap2AuthTokenStore,
+    channel::ChannelStatus, device::SupportedProtocols, Channel, Ctap2AuthTokenStore,
 };
 
 use super::known_devices::CableKnownDevice;
@@ -90,14 +90,9 @@ impl<'d> Channel for CableChannel<'d> {
 }
 
 impl<'d> Ctap2AuthTokenStore for CableChannel<'d> {
-    fn store_uv_auth_token(
-        &mut self,
-        _permission: Ctap2AuthTokenPermission,
-        _pin_uv_auth_token: &[u8],
-    ) {
-    }
+    fn store_auth_data(&mut self, _auth_token_data: AuthTokenData) {}
 
-    fn get_uv_auth_token(&self, _requested_permission: &Ctap2AuthTokenPermission) -> Option<&[u8]> {
+    fn get_auth_data(&self) -> Option<&AuthTokenData> {
         None
     }
 

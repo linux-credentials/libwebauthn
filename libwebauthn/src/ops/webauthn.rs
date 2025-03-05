@@ -1,15 +1,18 @@
-use std::time::Duration;
+use std::{collections::BTreeMap, time::Duration};
 
 use ctap_types::ctap2::credential_management::CredentialProtectionPolicy;
 use serde::{Deserialize, Serialize};
+use serde_cbor::Value;
 use sha2::{Digest, Sha256};
-use tracing::{debug, instrument, trace};
+use tracing::{debug, error, instrument, trace};
 
 use crate::{
+    fido::AuthenticatorData,
+    pin::PinUvAuthProtocol,
     proto::{
         ctap1::{Ctap1RegisteredKey, Ctap1Version},
         ctap2::{
-            Ctap2COSEAlgorithmIdentifier, Ctap2CredentialType, Ctap2GetAssertionResponse,
+            Ctap2AttestationStatement, Ctap2COSEAlgorithmIdentifier, Ctap2CredentialType,
             Ctap2MakeCredentialResponse, Ctap2PublicKeyCredentialDescriptor,
             Ctap2PublicKeyCredentialRpEntity, Ctap2PublicKeyCredentialUserEntity,
         },
@@ -145,55 +148,100 @@ pub struct GetAssertionRequest {
     pub timeout: Duration,
 }
 
-#[derive(Debug, Default, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GetAssertionRequestExtensions {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cred_blob: Option<bool>,
-    // Thanks, FIDO-spec for this consistent naming scheme...
-    // #[serde(rename = "hmac-secret", skip_serializing_if = "Option::is_none")]
-    // TODO: Do this properly with the salts
-    // pub hmac_secret: Option<Vec<u8>>,
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct HMACGetSecretInput {
+    pub salt1: [u8; 32],
+    pub salt2: Option<[u8; 32]>,
 }
 
-impl GetAssertionRequestExtensions {
-    pub fn skip_serializing(&self) -> bool {
-        self.cred_blob.is_none() /* && self.hmac_secret.is_none() */
+#[derive(Debug, Default, Clone)]
+pub struct GetAssertionRequestExtensions {
+    pub cred_blob: Option<bool>,
+    pub hmac_secret: Option<HMACGetSecretInput>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct HMACGetSecretOutput {
+    pub output1: [u8; 32],
+    pub output2: Option<[u8; 32]>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(transparent)]
+pub struct Ctap2HMACGetSecretOutput {
+    // We get this from the device, but have to decrypt it, and
+    // potentially split it into 2 arrays
+    #[serde(with = "serde_bytes")]
+    pub(crate) encrypted_output: Vec<u8>,
+}
+
+impl Ctap2HMACGetSecretOutput {
+    pub(crate) fn decrypt_output(
+        self,
+        shared_secret: &[u8],
+        uv_proto: &Box<dyn PinUvAuthProtocol>,
+    ) -> Option<HMACGetSecretOutput> {
+        let output = match uv_proto.decrypt(shared_secret, &self.encrypted_output) {
+            Ok(o) => o,
+            Err(e) => {
+                error!("Failed to decrypt HMAC Secret output with the shared secret: {e:?}. Skipping HMAC extension");
+                return None;
+            }
+        };
+        let mut res = HMACGetSecretOutput::default();
+        if output.len() == 32 {
+            res.output1.copy_from_slice(&output);
+        } else if output.len() == 64 {
+            let (o1, o2) = output.split_at(32);
+            res.output1.copy_from_slice(&o1);
+            res.output2 = Some(o2.try_into().unwrap());
+        } else {
+            error!("Failed to split HMAC Secret outputs. Unexpected output length: {}. Skipping HMAC extension", output.len());
+            return None;
+        }
+
+        Some(res)
     }
 }
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Default, Clone)]
 pub struct GetAssertionResponseExtensions {
     // Stored credBlob
-    #[serde(default, skip_serializing_if = "Option::is_none", with = "serde_bytes")]
     pub cred_blob: Option<Vec<u8>>,
 
     // Thanks, FIDO-spec for this consistent naming scheme...
-    #[serde(
-        rename = "hmac-secret",
-        default,
-        skip_serializing_if = "Option::is_none",
-        with = "serde_bytes"
-    )]
-    pub hmac_secret: Option<Vec<u8>>,
+    pub hmac_secret: Option<HMACGetSecretOutput>,
 }
 
 #[derive(Debug, Clone)]
 pub struct GetAssertionResponse {
-    pub assertions: Vec<Ctap2GetAssertionResponse>,
+    pub assertions: Vec<Assertion>,
 }
 
-impl From<&[Ctap2GetAssertionResponse]> for GetAssertionResponse {
-    fn from(assertions: &[Ctap2GetAssertionResponse]) -> Self {
+#[derive(Debug, Clone)]
+pub struct Assertion {
+    pub credential_id: Option<Ctap2PublicKeyCredentialDescriptor>,
+    pub authenticator_data: AuthenticatorData<GetAssertionResponseExtensions>,
+    pub signature: Vec<u8>,
+    pub user: Option<Ctap2PublicKeyCredentialUserEntity>,
+    pub credentials_count: Option<u32>,
+    pub user_selected: Option<bool>,
+    pub large_blob_key: Option<Vec<u8>>,
+    pub unsigned_extension_outputs: Option<BTreeMap<Value, Value>>,
+    pub enterprise_attestation: Option<bool>,
+    pub attestation_statement: Option<Ctap2AttestationStatement>,
+}
+
+impl From<&[Assertion]> for GetAssertionResponse {
+    fn from(assertions: &[Assertion]) -> Self {
         Self {
             assertions: assertions.to_owned(),
         }
     }
 }
 
-impl From<Ctap2GetAssertionResponse> for GetAssertionResponse {
-    fn from(assertion: Ctap2GetAssertionResponse) -> Self {
+impl From<Assertion> for GetAssertionResponse {
+    fn from(assertion: Assertion) -> Self {
         Self {
             assertions: vec![assertion],
         }
