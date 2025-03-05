@@ -1,10 +1,11 @@
 use crate::{
     ops::webauthn::UserVerificationRequirement,
-    pin::{PinProvider, PinUvAuthProtocol},
+    pin::{PinUvAuthProtocol, UvProvider},
     proto::ctap2::{
         Ctap2, Ctap2AuthTokenPermissionRole, Ctap2BioEnrollmentFingerprintKind,
         Ctap2BioEnrollmentModality, Ctap2BioEnrollmentRequest, Ctap2BioEnrollmentTemplateId,
-        Ctap2GetInfoResponse, Ctap2LastEnrollmentSampleStatus, Ctap2UserVerifiableRequest,
+        Ctap2ClientPinRequest, Ctap2GetInfoResponse, Ctap2LastEnrollmentSampleStatus,
+        Ctap2UserVerifiableRequest,
     },
     transport::{
         error::{CtapError, Error, PlatformError},
@@ -31,38 +32,38 @@ pub trait BioEnrollment {
     ) -> Result<Ctap2BioEnrollmentFingerprintSensorInfo, Error>;
     async fn get_bio_enrollments(
         &mut self,
-        pin_provider: &mut Box<dyn PinProvider>,
+        pin_provider: &mut Box<dyn UvProvider>,
         timeout: Duration,
     ) -> Result<Vec<Ctap2BioEnrollmentTemplateId>, Error>;
     async fn remove_bio_enrollment(
         &mut self,
         template_id: &[u8],
-        pin_provider: &mut Box<dyn PinProvider>,
+        pin_provider: &mut Box<dyn UvProvider>,
         timeout: Duration,
     ) -> Result<(), Error>;
     async fn rename_bio_enrollment(
         &mut self,
         template_id: &[u8],
         template_friendly_name: &str,
-        pin_provider: &mut Box<dyn PinProvider>,
+        pin_provider: &mut Box<dyn UvProvider>,
         timeout: Duration,
     ) -> Result<(), Error>;
     async fn start_new_bio_enrollment(
         &mut self,
-        pin_provider: &mut Box<dyn PinProvider>,
+        pin_provider: &mut Box<dyn UvProvider>,
         enrollment_timeout: Option<Duration>,
         timeout: Duration,
     ) -> Result<(Vec<u8>, Ctap2LastEnrollmentSampleStatus, u64), Error>;
     async fn capture_next_bio_enrollment_sample(
         &mut self,
         template_id: &[u8],
-        pin_provider: &mut Box<dyn PinProvider>,
+        pin_provider: &mut Box<dyn UvProvider>,
         enrollment_timeout: Option<Duration>,
         timeout: Duration,
     ) -> Result<(Ctap2LastEnrollmentSampleStatus, u64), Error>;
     async fn cancel_current_bio_enrollment(
         &mut self,
-        pin_provider: &mut Box<dyn PinProvider>,
+        pin_provider: &mut Box<dyn UvProvider>,
         timeout: Duration,
     ) -> Result<(), Error>;
 }
@@ -108,7 +109,7 @@ where
 
     async fn get_bio_enrollments(
         &mut self,
-        pin_provider: &mut Box<dyn PinProvider>,
+        pin_provider: &mut Box<dyn UvProvider>,
         timeout: Duration,
     ) -> Result<Vec<Ctap2BioEnrollmentTemplateId>, Error> {
         let mut req = Ctap2BioEnrollmentRequest::new_enumerate_enrollments();
@@ -127,7 +128,9 @@ where
             handle_errors!(
                 self,
                 self.ctap2_bio_enrollment(&req, timeout).await,
-                uv_auth_used
+                uv_auth_used,
+                pin_provider,
+                timeout
             )
         };
         Ok(resp?.template_infos.unwrap_or_default())
@@ -136,7 +139,7 @@ where
     async fn remove_bio_enrollment(
         &mut self,
         template_id: &[u8],
-        pin_provider: &mut Box<dyn PinProvider>,
+        pin_provider: &mut Box<dyn UvProvider>,
         timeout: Duration,
     ) -> Result<(), Error> {
         let mut req = Ctap2BioEnrollmentRequest::new_remove_enrollment(template_id);
@@ -155,7 +158,9 @@ where
             handle_errors!(
                 self,
                 self.ctap2_bio_enrollment(&req, timeout).await,
-                uv_auth_used
+                uv_auth_used,
+                pin_provider,
+                timeout
             )
         }?;
 
@@ -168,7 +173,7 @@ where
         &mut self,
         template_id: &[u8],
         template_friendly_name: &str,
-        pin_provider: &mut Box<dyn PinProvider>,
+        pin_provider: &mut Box<dyn UvProvider>,
         timeout: Duration,
     ) -> Result<(), Error> {
         let mut req =
@@ -187,7 +192,9 @@ where
             handle_errors!(
                 self,
                 self.ctap2_bio_enrollment(&req, timeout).await,
-                uv_auth_used
+                uv_auth_used,
+                pin_provider,
+                timeout
             )
         }?;
         // "If there is an exiting enrollment with passed in templateInfo, delete that enrollment and return CTAP2_OK."
@@ -197,7 +204,7 @@ where
 
     async fn start_new_bio_enrollment(
         &mut self,
-        pin_provider: &mut Box<dyn PinProvider>,
+        pin_provider: &mut Box<dyn UvProvider>,
         enrollment_timeout: Option<Duration>,
         timeout: Duration,
     ) -> Result<(Vec<u8>, Ctap2LastEnrollmentSampleStatus, u64), Error> {
@@ -217,7 +224,9 @@ where
             handle_errors!(
                 self,
                 self.ctap2_bio_enrollment(&req, timeout).await,
-                uv_auth_used
+                uv_auth_used,
+                pin_provider,
+                timeout
             )
         }?;
 
@@ -230,7 +239,7 @@ where
     async fn capture_next_bio_enrollment_sample(
         &mut self,
         template_id: &[u8],
-        pin_provider: &mut Box<dyn PinProvider>,
+        pin_provider: &mut Box<dyn UvProvider>,
         enrollment_timeout: Option<Duration>,
         timeout: Duration,
     ) -> Result<(Ctap2LastEnrollmentSampleStatus, u64), Error> {
@@ -251,7 +260,9 @@ where
             handle_errors!(
                 self,
                 self.ctap2_bio_enrollment(&req, timeout).await,
-                uv_auth_used
+                uv_auth_used,
+                pin_provider,
+                timeout
             )
         }?;
 
@@ -262,7 +273,7 @@ where
 
     async fn cancel_current_bio_enrollment(
         &mut self,
-        pin_provider: &mut Box<dyn PinProvider>,
+        pin_provider: &mut Box<dyn UvProvider>,
         timeout: Duration,
     ) -> Result<(), Error> {
         let mut req = Ctap2BioEnrollmentRequest::new_cancel_current_enrollment();
@@ -281,7 +292,9 @@ where
             handle_errors!(
                 self,
                 self.ctap2_bio_enrollment(&req, timeout).await,
-                uv_auth_used
+                uv_auth_used,
+                pin_provider,
+                timeout
             )
         }?;
 

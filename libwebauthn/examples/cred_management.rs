@@ -1,5 +1,5 @@
 use libwebauthn::management::CredentialManagement;
-use libwebauthn::pin::{PinProvider, StdinPromptPinProvider};
+use libwebauthn::pin::{UvProvider, StdinPromptPinProvider};
 use libwebauthn::proto::ctap2::{
     Ctap2, Ctap2CredentialData, Ctap2PublicKeyCredentialRpEntity, Ctap2RPData,
 };
@@ -54,7 +54,7 @@ fn format_credential(cred: &Ctap2CredentialData) -> String {
 
 async fn enumerate_rps<T: CredentialManagement>(
     channel: &mut T,
-    pin_provider: &mut Box<dyn PinProvider>,
+    pin_provider: &mut Box<dyn UvProvider>,
 ) -> Result<Vec<Ctap2RPData>, WebAuthnError> {
     let (rp, total_rps) = handle_retries!(channel.enumerate_rps_begin(pin_provider, TIMEOUT));
     let mut rps = vec![rp];
@@ -68,7 +68,7 @@ async fn enumerate_rps<T: CredentialManagement>(
 
 async fn enumerate_credentials_for_rp<T: CredentialManagement>(
     channel: &mut T,
-    pin_provider: &mut Box<dyn PinProvider>,
+    pin_provider: &mut Box<dyn UvProvider>,
     rp_id_hash: &[u8],
 ) -> Result<Vec<Ctap2CredentialData>, WebAuthnError> {
     let (credential, num_of_creds) =
@@ -124,7 +124,7 @@ pub async fn main() -> Result<(), WebAuthnError> {
 
     let devices = list_devices().await.unwrap();
     println!("Devices found: {:?}", devices);
-    let mut pin_provider: Box<dyn PinProvider> = Box::new(StdinPromptPinProvider::new());
+    let mut pin_provider: Box<dyn UvProvider> = Box::new(StdinPromptPinProvider::new());
 
     for mut device in devices {
         println!("Selected HID authenticator: {}", &device);

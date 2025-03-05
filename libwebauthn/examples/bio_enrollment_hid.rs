@@ -6,7 +6,7 @@ use text_io::read;
 use tracing_subscriber::{self, EnvFilter};
 
 use libwebauthn::management::BioEnrollment;
-use libwebauthn::pin::{PinProvider, StdinPromptPinProvider};
+use libwebauthn::pin::{UvProvider, StdinPromptPinProvider};
 use libwebauthn::proto::ctap2::{Ctap2, Ctap2GetInfoResponse, Ctap2LastEnrollmentSampleStatus};
 use libwebauthn::transport::hid::list_devices;
 use libwebauthn::transport::Device;
@@ -103,7 +103,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
 
     let devices = list_devices().await.unwrap();
     println!("Devices found: {:?}", devices);
-    let mut pin_provider: Box<dyn PinProvider> = Box::new(StdinPromptPinProvider::new());
+    let mut pin_provider: Box<dyn UvProvider> = Box::new(StdinPromptPinProvider::new());
 
     for mut device in devices {
         println!("Selected HID authenticator: {}", &device);

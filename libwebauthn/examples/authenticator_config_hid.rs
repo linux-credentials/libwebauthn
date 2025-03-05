@@ -3,7 +3,7 @@ use std::fmt::Display;
 use std::time::Duration;
 
 use libwebauthn::management::AuthenticatorConfig;
-use libwebauthn::pin::{PinProvider, StdinPromptPinProvider};
+use libwebauthn::pin::{UvProvider, StdinPromptPinProvider};
 use libwebauthn::proto::ctap2::{Ctap2, Ctap2GetInfoResponse};
 use libwebauthn::transport::hid::list_devices;
 use libwebauthn::transport::Device;
@@ -78,7 +78,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
 
     let devices = list_devices().await.unwrap();
     println!("Devices found: {:?}", devices);
-    let pin_provider: Box<dyn PinProvider> = Box::new(StdinPromptPinProvider::new());
+    let pin_provider: Box<dyn UvProvider> = Box::new(StdinPromptPinProvider::new());
 
     for mut device in devices {
         println!("Selected HID authenticator: {}", &device);

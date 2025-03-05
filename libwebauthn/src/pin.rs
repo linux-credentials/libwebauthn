@@ -46,9 +46,23 @@ impl Default for PinUvAuthToken {
     }
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum PinRequestReason {
+    RelyingPartyRequest,
+    AuthenticatorPolicy,
+    FallbackFromUV,
+    // Passkey
+}
+
 #[async_trait]
-pub trait PinProvider: Send + Sync {
-    async fn provide_pin(&self, attempts_left: Option<u32>) -> Option<String>;
+pub trait UvProvider: Send + Sync {
+    async fn provide_pin(
+        &self,
+        attempts_left: Option<u32>,
+        reason: PinRequestReason,
+    ) -> Option<String>;
+    /// This is for displaying attempts_left only. No direct feedback from the app expected/required.
+    async fn prompt_uv_retry(&self, attempts_left: Option<u32>);
 }
 
 #[derive(Debug, Clone)]
@@ -65,8 +79,12 @@ impl StaticPinProvider {
 }
 
 #[async_trait]
-impl PinProvider for StaticPinProvider {
-    async fn provide_pin(&self, attempts_left: Option<u32>) -> Option<String> {
+impl UvProvider for StaticPinProvider {
+    async fn provide_pin(
+        &self,
+        attempts_left: Option<u32>,
+        _reason: PinRequestReason,
+    ) -> Option<String> {
         if attempts_left.map_or(false, |no| no <= 1) {
             warn!(
                 ?attempts_left,
@@ -77,6 +95,12 @@ impl PinProvider for StaticPinProvider {
 
         info!({ pin = %self.pin, ?attempts_left }, "Providing static PIN");
         Some(self.pin.clone())
+    }
+
+    async fn prompt_uv_retry(&self, attempts_left: Option<u32>) {
+        if let Some(attempts) = attempts_left {
+            warn!("{attempts} UV attempts left.");
+        }
     }
 }
 
@@ -89,24 +113,43 @@ impl StdinPromptPinProvider {
 }
 
 #[async_trait]
-impl PinProvider for StdinPromptPinProvider {
-    async fn provide_pin(&self, attempts_left: Option<u32>) -> Option<String> {
+impl UvProvider for StdinPromptPinProvider {
+    async fn provide_pin(
+        &self,
+        attempts_left: Option<u32>,
+        reason: PinRequestReason,
+    ) -> Option<String> {
         use std::io::{self, Write};
         use text_io::read;
+
+        match reason {
+            PinRequestReason::RelyingPartyRequest => println!("RP requires a PIN."),
+            PinRequestReason::AuthenticatorPolicy => println!("Authenticator requires a PIN."),
+            PinRequestReason::FallbackFromUV => {
+                println!("Builtin UV failed. Falling back to PINs.")
+            }
+        }
 
         if let Some(attempts_left) = attempts_left {
             println!("PIN: {} attempts left.", attempts_left);
         }
         print!("PIN: Please enter the PIN for your authenticator: ");
         io::stdout().flush().unwrap();
-        let pin_raw = read!("{}\n");
+        let pin_raw: String = read!("{}\n");
 
-        if &pin_raw == "" {
+        if pin_raw.is_empty() {
             println!("PIN: No PIN provided, cancelling operation.");
             return None;
         }
 
         return Some(pin_raw);
+    }
+
+    async fn prompt_uv_retry(&self, attempts_left: Option<u32>) {
+        println!("Please provide biometrics.");
+        if let Some(attempts) = attempts_left {
+            println!("{attempts} attempts left.");
+        }
     }
 }
 
@@ -433,7 +476,7 @@ pub fn hkdf_sha256(salt: Option<&[u8]>, ikm: &[u8], info: &[u8]) -> Vec<u8> {
 pub trait PinManagement {
     async fn change_pin(
         &mut self,
-        pin_provider: &Box<dyn PinProvider>,
+        pin_provider: &Box<dyn UvProvider>,
         new_pin: String,
         timeout: Duration,
     ) -> Result<(), Error>;
@@ -446,7 +489,7 @@ where
 {
     async fn change_pin(
         &mut self,
-        pin_provider: &Box<dyn PinProvider>,
+        pin_provider: &Box<dyn UvProvider>,
         new_pin: String,
         timeout: Duration,
     ) -> Result<(), Error> {
@@ -473,6 +516,7 @@ where
                     &get_info_response,
                     uv_proto.version(),
                     pin_provider,
+                    PinRequestReason::AuthenticatorPolicy,
                     timeout,
                 )
                 .await?,
