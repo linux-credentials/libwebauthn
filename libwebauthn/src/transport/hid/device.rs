@@ -1,9 +1,8 @@
-use std::fmt;
-use std::time::Duration;
-
 use async_trait::async_trait;
 use hidapi::DeviceInfo;
 use hidapi::HidApi;
+use std::fmt;
+use tokio::sync::mpsc;
 #[allow(unused_imports)]
 use tracing::{debug, info, instrument};
 
@@ -13,9 +12,9 @@ use solo::SoloVirtualKey;
 use super::channel::HidChannel;
 use super::Hid;
 
-use crate::transport::device::SupportedProtocols;
 use crate::transport::error::{Error, TransportError};
-use crate::transport::{Channel, Device};
+use crate::transport::Device;
+use crate::StateUpdate;
 
 #[derive(Debug)]
 pub struct HidDevice {
@@ -69,7 +68,6 @@ pub async fn list_devices() -> Result<Vec<HidDevice>, Error> {
 pub async fn list_devices() -> Result<Vec<HidDevice>, Error> {
     let devices: Vec<_> = get_hidapi()?
         .device_list()
-        .into_iter()
         .filter(|device| device.usage_page() == 0xF1D0)
         .filter(|device| device.usage() == 0x0001)
         .map(|device| device.into())
@@ -87,25 +85,20 @@ impl HidDevice {
             backend: HidBackendDevice::VirtualDevice(solo),
         }
     }
-
-    #[instrument(skip_all, fields(dev = %self))]
-    pub async fn wink(&mut self, timeout: Duration) -> Result<bool, Error> {
-        let mut channel = self.channel().await?;
-        channel.wink(timeout).await
-    }
 }
 
 #[async_trait]
 impl<'d> Device<'d, Hid, HidChannel<'d>> for HidDevice {
-    async fn channel(&'d mut self) -> Result<HidChannel<'d>, Error> {
-        let channel = HidChannel::new(self).await?;
-        Ok(channel)
+    async fn channel(&'d mut self) -> Result<(HidChannel<'d>, mpsc::Receiver<StateUpdate>), Error> {
+        let (send, recv) = mpsc::channel(1);
+        let channel = HidChannel::new(self, send).await?;
+        Ok((channel, recv))
     }
 
-    async fn supported_protocols(&mut self) -> Result<SupportedProtocols, Error> {
-        let channel = self.channel().await?;
-        channel.supported_protocols().await
-    }
+    // async fn supported_protocols(&mut self) -> Result<SupportedProtocols, Error> {
+    //     let channel = self.channel().await?;
+    //     channel.supported_protocols().await
+    // }
 }
 
 #[cfg(test)]
@@ -119,7 +112,7 @@ mod tests {
         use crate::transport::Device;
 
         let mut device = HidDevice::new_virtual();
-        let channel = device.channel().await.unwrap();
+        let (channel, _) = device.channel().await.unwrap();
 
         let protocols = channel.supported_protocols().await.unwrap();
 

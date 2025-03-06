@@ -1,14 +1,18 @@
 use std::convert::TryInto;
 use std::error::Error;
+use std::io::{self, Write};
 use std::time::Duration;
 
+use libwebauthn::StateUpdate;
 use rand::{thread_rng, Rng};
+use text_io::read;
+use tokio::sync::mpsc::Receiver;
 use tracing_subscriber::{self, EnvFilter};
 
 use libwebauthn::ops::webauthn::{
     GetAssertionRequest, MakeCredentialRequest, UserVerificationRequirement,
 };
-use libwebauthn::pin::{UvProvider, StdinPromptPinProvider};
+use libwebauthn::pin::PinRequestReason;
 use libwebauthn::proto::ctap2::{
     Ctap2CredentialType, Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialRpEntity,
     Ctap2PublicKeyCredentialUserEntity,
@@ -26,6 +30,49 @@ fn setup_logging() {
         .init();
 }
 
+async fn handle_updates(mut state_recv: Receiver<StateUpdate>) {
+    while let Some(update) = state_recv.recv().await {
+        match update {
+            StateUpdate::PresenceRequired => println!("Please touch your device!"),
+            StateUpdate::UvRetry { attempts_left } => {
+                print!("UV failed.");
+                if let Some(attempts_left) = attempts_left {
+                    print!(" You have {attempts_left} attempts left.");
+                }
+            }
+            StateUpdate::PinRequired {
+                reply_to,
+                reason,
+                attempts_left,
+            } => {
+                let mut attempts_str = String::new();
+                if let Some(attempts) = attempts_left {
+                    attempts_str = format!(". You have {attempts} attempts left!");
+                };
+
+                match reason {
+                    PinRequestReason::RelyingPartyRequest => println!("RP required a PIN."),
+                    PinRequestReason::AuthenticatorPolicy => {
+                        println!("Your device requires a PIN.")
+                    }
+                    PinRequestReason::FallbackFromUV => {
+                        println!("UV failed too often and is blocked. Falling back to PIN.")
+                    }
+                }
+                print!("PIN: Please enter the PIN for your authenticator{attempts_str}: ");
+                io::stdout().flush().unwrap();
+                let pin_raw: String = read!("{}\n");
+
+                if pin_raw.is_empty() {
+                    println!("PIN: No PIN provided, cancelling operation.");
+                } else {
+                    let _ = reply_to.send(pin_raw);
+                }
+            }
+        }
+    }
+}
+
 #[tokio::main]
 pub async fn main() -> Result<(), Box<dyn Error>> {
     setup_logging();
@@ -36,13 +83,10 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
     let user_id: [u8; 32] = thread_rng().gen();
     let challenge: [u8; 32] = thread_rng().gen();
 
-    let pin_provider: Box<dyn UvProvider> = Box::new(StdinPromptPinProvider::new());
-
     for mut device in devices {
         println!("Selected HID authenticator: {}", &device);
-        device.wink(TIMEOUT).await?;
-
-        let mut channel = device.channel().await?;
+        let (mut channel, state_recv) = device.channel().await?;
+        channel.wink(TIMEOUT).await?;
 
         // Make Credentials ceremony
         let make_credentials_request = MakeCredentialRequest {
@@ -58,9 +102,11 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             timeout: TIMEOUT,
         };
 
+        tokio::spawn(handle_updates(state_recv));
+
         let response = loop {
             match channel
-                .webauthn_make_credential(&make_credentials_request, &pin_provider)
+                .webauthn_make_credential(&make_credentials_request)
                 .await
             {
                 Ok(response) => break Ok(response),
@@ -89,10 +135,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         };
 
         let response = loop {
-            match channel
-                .webauthn_get_assertion(&get_assertion, &pin_provider)
-                .await
-            {
+            match channel.webauthn_get_assertion(&get_assertion).await {
                 Ok(response) => break Ok(response),
                 Err(WebAuthnError::Ctap(ctap_error)) => {
                     if ctap_error.is_retryable_user_error() {

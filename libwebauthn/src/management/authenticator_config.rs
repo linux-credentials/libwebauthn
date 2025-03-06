@@ -5,11 +5,12 @@ use crate::webauthn::handle_errors;
 use crate::webauthn::{user_verification, UsedPinUvAuthToken};
 use crate::{
     ops::webauthn::UserVerificationRequirement,
-    pin::{PinUvAuthProtocol, UvProvider},
+    pin::PinUvAuthProtocol,
     proto::ctap2::{
         Ctap2, Ctap2AuthTokenPermissionRole, Ctap2AuthenticatorConfigCommand,
         Ctap2AuthenticatorConfigRequest, Ctap2GetInfoResponse, Ctap2UserVerifiableRequest,
     },
+    StateUpdate,
 };
 use async_trait::async_trait;
 use serde_bytes::ByteBuf;
@@ -19,36 +20,21 @@ use tracing::info;
 
 #[async_trait]
 pub trait AuthenticatorConfig {
-    async fn toggle_always_uv(
-        &mut self,
-        pin_provider: &Box<dyn UvProvider>,
-        timeout: Duration,
-    ) -> Result<(), Error>;
+    async fn toggle_always_uv(&mut self, timeout: Duration) -> Result<(), Error>;
 
-    async fn enable_enterprise_attestation(
-        &mut self,
-        pin_provider: &Box<dyn UvProvider>,
-        timeout: Duration,
-    ) -> Result<(), Error>;
+    async fn enable_enterprise_attestation(&mut self, timeout: Duration) -> Result<(), Error>;
 
     async fn set_min_pin_length(
         &mut self,
         new_pin_length: u64,
-        pin_provider: &Box<dyn UvProvider>,
         timeout: Duration,
     ) -> Result<(), Error>;
 
-    async fn force_change_pin(
-        &mut self,
-        force: bool,
-        pin_provider: &Box<dyn UvProvider>,
-        timeout: Duration,
-    ) -> Result<(), Error>;
+    async fn force_change_pin(&mut self, force: bool, timeout: Duration) -> Result<(), Error>;
 
     async fn set_min_pin_length_rpids(
         &mut self,
         rpids: Vec<String>,
-        pin_provider: &Box<dyn UvProvider>,
         timeout: Duration,
     ) -> Result<(), Error>;
 }
@@ -58,11 +44,7 @@ impl<C> AuthenticatorConfig for C
 where
     C: Channel,
 {
-    async fn toggle_always_uv(
-        &mut self,
-        pin_provider: &Box<dyn UvProvider>,
-        timeout: Duration,
-    ) -> Result<(), Error> {
+    async fn toggle_always_uv(&mut self, timeout: Duration) -> Result<(), Error> {
         let mut req = Ctap2AuthenticatorConfigRequest::new_toggle_always_uv();
 
         loop {
@@ -70,7 +52,6 @@ where
                 self,
                 UserVerificationRequirement::Required,
                 &mut req,
-                pin_provider,
                 timeout,
             )
             .await?;
@@ -79,17 +60,12 @@ where
                 self,
                 self.ctap2_authenticator_config(&req, timeout).await,
                 uv_auth_used,
-                pin_provider,
                 timeout
             )
         }
     }
 
-    async fn enable_enterprise_attestation(
-        &mut self,
-        pin_provider: &Box<dyn UvProvider>,
-        timeout: Duration,
-    ) -> Result<(), Error> {
+    async fn enable_enterprise_attestation(&mut self, timeout: Duration) -> Result<(), Error> {
         let mut req = Ctap2AuthenticatorConfigRequest::new_enable_enterprise_attestation();
 
         loop {
@@ -97,7 +73,6 @@ where
                 self,
                 UserVerificationRequirement::Required,
                 &mut req,
-                pin_provider,
                 timeout,
             )
             .await?;
@@ -106,7 +81,6 @@ where
                 self,
                 self.ctap2_authenticator_config(&req, timeout).await,
                 uv_auth_used,
-                pin_provider,
                 timeout
             )
         }
@@ -115,7 +89,6 @@ where
     async fn set_min_pin_length(
         &mut self,
         new_pin_length: u64,
-        pin_provider: &Box<dyn UvProvider>,
         timeout: Duration,
     ) -> Result<(), Error> {
         let mut req = Ctap2AuthenticatorConfigRequest::new_set_min_pin_length(new_pin_length);
@@ -125,7 +98,6 @@ where
                 self,
                 UserVerificationRequirement::Required,
                 &mut req,
-                pin_provider,
                 timeout,
             )
             .await?;
@@ -134,18 +106,12 @@ where
                 self,
                 self.ctap2_authenticator_config(&req, timeout).await,
                 uv_auth_used,
-                pin_provider,
                 timeout
             )
         }
     }
 
-    async fn force_change_pin(
-        &mut self,
-        force: bool,
-        pin_provider: &Box<dyn UvProvider>,
-        timeout: Duration,
-    ) -> Result<(), Error> {
+    async fn force_change_pin(&mut self, force: bool, timeout: Duration) -> Result<(), Error> {
         let mut req = Ctap2AuthenticatorConfigRequest::new_force_change_pin(force);
 
         loop {
@@ -153,7 +119,6 @@ where
                 self,
                 UserVerificationRequirement::Required,
                 &mut req,
-                pin_provider,
                 timeout,
             )
             .await?;
@@ -162,7 +127,6 @@ where
                 self,
                 self.ctap2_authenticator_config(&req, timeout).await,
                 uv_auth_used,
-                pin_provider,
                 timeout
             )
         }
@@ -171,7 +135,6 @@ where
     async fn set_min_pin_length_rpids(
         &mut self,
         rpids: Vec<String>,
-        pin_provider: &Box<dyn UvProvider>,
         timeout: Duration,
     ) -> Result<(), Error> {
         let mut req = Ctap2AuthenticatorConfigRequest::new_set_min_pin_length_rpids(rpids);
@@ -180,7 +143,6 @@ where
                 self,
                 UserVerificationRequirement::Required,
                 &mut req,
-                pin_provider,
                 timeout,
             )
             .await?;
@@ -189,7 +151,6 @@ where
                 self,
                 self.ctap2_authenticator_config(&req, timeout).await,
                 uv_auth_used,
-                pin_provider,
                 timeout
             )
         }

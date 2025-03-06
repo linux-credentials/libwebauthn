@@ -9,8 +9,9 @@ use rand::RngCore;
 use serde::Serialize;
 use serde_bytes::ByteArray;
 use serde_indexed::SerializeIndexed;
+use tokio::sync::mpsc;
 use tokio::time::sleep;
-use tracing::{debug, error, instrument, trace};
+use tracing::{debug, error, trace};
 
 use super::known_devices::CableKnownDeviceInfoStore;
 use super::tunnel::{self, KNOWN_TUNNEL_DOMAINS};
@@ -18,10 +19,10 @@ use super::{channel::CableChannel, Cable};
 use crate::transport::ble::bluez::{self, FidoDevice};
 use crate::transport::cable::crypto::{derive, trial_decrypt_advert, KeyPurpose};
 use crate::transport::cable::digit_encode;
-use crate::transport::device::SupportedProtocols;
 use crate::transport::error::Error;
 use crate::transport::Device;
 use crate::webauthn::TransportError;
+use crate::StateUpdate;
 
 const CABLE_UUID_FIDO: &str = "0000fff9-0000-1000-8000-00805f9b34fb";
 const CABLE_UUID_GOOGLE: &str = "0000fde2-0000-1000-8000-00805f9b34fb";
@@ -240,7 +241,9 @@ impl Display for CableQrCodeDevice<'_> {
 
 #[async_trait]
 impl<'d> Device<'d, Cable, CableChannel<'d>> for CableQrCodeDevice<'_> {
-    async fn channel(&'d mut self) -> Result<CableChannel<'d>, Error> {
+    async fn channel(
+        &'d mut self,
+    ) -> Result<(CableChannel<'d>, mpsc::Receiver<StateUpdate>), Error> {
         let (_device, advert) = self.await_advertisement().await?;
 
         let Some(tunnel_domain) =
@@ -276,10 +279,10 @@ impl<'d> Device<'d, Cable, CableChannel<'d>> for CableQrCodeDevice<'_> {
         .await;
     }
 
-    #[instrument(skip_all)]
-    async fn supported_protocols(&mut self) -> Result<SupportedProtocols, Error> {
-        Ok(SupportedProtocols::fido2_only())
-    }
+    // #[instrument(skip_all)]
+    // async fn supported_protocols(&mut self) -> Result<SupportedProtocols, Error> {
+    //     Ok(SupportedProtocols::fido2_only())
+    // }
 }
 
 // TODO: unit tests

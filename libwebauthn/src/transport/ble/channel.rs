@@ -10,6 +10,7 @@ use crate::transport::ble::bluez;
 use crate::transport::channel::{AuthTokenData, Channel, ChannelStatus, Ctap2AuthTokenStore};
 use crate::transport::device::SupportedProtocols;
 use crate::transport::error::{Error, TransportError};
+use crate::StateUpdate;
 
 use super::bluez::manager::SupportedRevisions;
 use super::bluez::Connection;
@@ -17,6 +18,7 @@ use super::framing::{BleCommand, BleFrame};
 use super::BleDevice;
 
 use async_trait::async_trait;
+use tokio::sync::mpsc;
 use tracing::{debug, instrument, trace, warn, Level};
 
 #[derive(Debug)]
@@ -26,12 +28,14 @@ pub struct BleChannel<'a> {
     connection: Connection,
     revision: FidoRevision,
     auth_token_data: Option<AuthTokenData>,
+    tx: mpsc::Sender<StateUpdate>,
 }
 
 impl<'a> BleChannel<'a> {
     pub async fn new(
         device: &'a BleDevice,
         revisions: &SupportedRevisions,
+        tx: mpsc::Sender<StateUpdate>,
     ) -> Result<BleChannel<'a>, Error> {
         let revision = revisions
             .select_protocol(FidoProtocol::U2F)
@@ -45,6 +49,7 @@ impl<'a> BleChannel<'a> {
             connection,
             revision,
             auth_token_data: None,
+            tx,
         };
         bluez::notify_start(&channel.connection)
             .await
@@ -153,6 +158,10 @@ impl<'a> Channel for BleChannel<'a> {
         debug!("Received CBOR response");
         trace!(?cbor_response);
         Ok(cbor_response)
+    }
+
+    fn get_state_sender(&self) -> &mpsc::Sender<StateUpdate> {
+        &self.tx
     }
 }
 

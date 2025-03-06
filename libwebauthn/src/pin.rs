@@ -14,7 +14,7 @@ use p256::{
 };
 use rand::{rngs::OsRng, thread_rng, Rng};
 use sha2::{Digest, Sha256};
-use tracing::{error, info, instrument, warn};
+use tracing::{error, instrument, warn};
 use x509_parser::nom::AsBytes;
 
 use crate::{
@@ -30,20 +30,11 @@ type Aes256CbcEncryptor = cbc::Encryptor<aes::Aes256>;
 type Aes256CbcDecryptor = cbc::Decryptor<aes::Aes256>;
 type HmacSha256 = hmac::Hmac<Sha256>;
 
+#[derive(Default, Debug)]
 pub struct PinUvAuthToken {
     pub rpid: Option<String>,
     pub user_verified: bool,
     pub user_present: bool,
-}
-
-impl Default for PinUvAuthToken {
-    fn default() -> Self {
-        Self {
-            rpid: None,
-            user_verified: false,
-            user_present: false,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -52,105 +43,6 @@ pub enum PinRequestReason {
     AuthenticatorPolicy,
     FallbackFromUV,
     // Passkey
-}
-
-#[async_trait]
-pub trait UvProvider: Send + Sync {
-    async fn provide_pin(
-        &self,
-        attempts_left: Option<u32>,
-        reason: PinRequestReason,
-    ) -> Option<String>;
-    /// This is for displaying attempts_left only. No direct feedback from the app expected/required.
-    async fn prompt_uv_retry(&self, attempts_left: Option<u32>);
-}
-
-#[derive(Debug, Clone)]
-pub struct StaticPinProvider {
-    pin: String,
-}
-
-impl StaticPinProvider {
-    pub fn new(pin: &str) -> Self {
-        Self {
-            pin: pin.to_owned(),
-        }
-    }
-}
-
-#[async_trait]
-impl UvProvider for StaticPinProvider {
-    async fn provide_pin(
-        &self,
-        attempts_left: Option<u32>,
-        _reason: PinRequestReason,
-    ) -> Option<String> {
-        if attempts_left.map_or(false, |no| no <= 1) {
-            warn!(
-                ?attempts_left,
-                "Refusing to provide static PIN, insufficient number of attempts left"
-            );
-            return None;
-        }
-
-        info!({ pin = %self.pin, ?attempts_left }, "Providing static PIN");
-        Some(self.pin.clone())
-    }
-
-    async fn prompt_uv_retry(&self, attempts_left: Option<u32>) {
-        if let Some(attempts) = attempts_left {
-            warn!("{attempts} UV attempts left.");
-        }
-    }
-}
-
-pub struct StdinPromptPinProvider {}
-
-impl StdinPromptPinProvider {
-    pub fn new() -> Self {
-        Self {}
-    }
-}
-
-#[async_trait]
-impl UvProvider for StdinPromptPinProvider {
-    async fn provide_pin(
-        &self,
-        attempts_left: Option<u32>,
-        reason: PinRequestReason,
-    ) -> Option<String> {
-        use std::io::{self, Write};
-        use text_io::read;
-
-        match reason {
-            PinRequestReason::RelyingPartyRequest => println!("RP requires a PIN."),
-            PinRequestReason::AuthenticatorPolicy => println!("Authenticator requires a PIN."),
-            PinRequestReason::FallbackFromUV => {
-                println!("Builtin UV failed. Falling back to PINs.")
-            }
-        }
-
-        if let Some(attempts_left) = attempts_left {
-            println!("PIN: {} attempts left.", attempts_left);
-        }
-        print!("PIN: Please enter the PIN for your authenticator: ");
-        io::stdout().flush().unwrap();
-        let pin_raw: String = read!("{}\n");
-
-        if pin_raw.is_empty() {
-            println!("PIN: No PIN provided, cancelling operation.");
-            return None;
-        }
-
-        return Some(pin_raw);
-    }
-
-    async fn prompt_uv_retry(&self, attempts_left: Option<u32>) {
-        println!("Please provide biometrics.");
-        if let Some(attempts) = attempts_left {
-            println!("{attempts} attempts left.");
-        }
-    }
 }
 
 pub trait PinUvAuthProtocol: Send + Sync {
@@ -474,12 +366,7 @@ pub fn hkdf_sha256(salt: Option<&[u8]>, ikm: &[u8], info: &[u8]) -> Vec<u8> {
 
 #[async_trait]
 pub trait PinManagement {
-    async fn change_pin(
-        &mut self,
-        pin_provider: &Box<dyn UvProvider>,
-        new_pin: String,
-        timeout: Duration,
-    ) -> Result<(), Error>;
+    async fn change_pin(&mut self, new_pin: String, timeout: Duration) -> Result<(), Error>;
 }
 
 #[async_trait]
@@ -487,12 +374,7 @@ impl<C> PinManagement for C
 where
     C: Channel,
 {
-    async fn change_pin(
-        &mut self,
-        pin_provider: &Box<dyn UvProvider>,
-        new_pin: String,
-        timeout: Duration,
-    ) -> Result<(), Error> {
+    async fn change_pin(&mut self, new_pin: String, timeout: Duration) -> Result<(), Error> {
         let get_info_response = self.ctap2_get_info().await?;
 
         // If the minPINLength member of the authenticatorGetInfo response is absent, then let platformMinPINLengthInCodePoints be 4.
@@ -515,7 +397,6 @@ where
                     self,
                     &get_info_response,
                     uv_proto.version(),
-                    pin_provider,
                     PinRequestReason::AuthenticatorPolicy,
                     timeout,
                 )

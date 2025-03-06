@@ -1,9 +1,13 @@
 use std::error::Error;
 use std::time::Duration;
 
+use libwebauthn::{
+    pin::{PinManagement, PinRequestReason},
+    StateUpdate,
+};
+use tokio::sync::mpsc::Receiver;
 use tracing_subscriber::{self, EnvFilter};
 
-use libwebauthn::pin::{PinManagement, UvProvider, StdinPromptPinProvider};
 use libwebauthn::transport::hid::list_devices;
 use libwebauthn::transport::Device;
 use libwebauthn::webauthn::Error as WebAuthnError;
@@ -19,19 +23,60 @@ fn setup_logging() {
         .init();
 }
 
+async fn handle_updates(mut state_recv: Receiver<StateUpdate>) {
+    while let Some(update) = state_recv.recv().await {
+        match update {
+            StateUpdate::PresenceRequired => println!("Please touch your device!"),
+            StateUpdate::UvRetry { attempts_left } => {
+                print!("UV failed.");
+                if let Some(attempts_left) = attempts_left {
+                    print!(" You have {attempts_left} attempts left.");
+                }
+            }
+            StateUpdate::PinRequired {
+                reply_to,
+                reason,
+                attempts_left,
+            } => {
+                let mut attempts_str = String::new();
+                if let Some(attempts) = attempts_left {
+                    attempts_str = format!(". You have {attempts} attempts left!");
+                };
+
+                match reason {
+                    PinRequestReason::RelyingPartyRequest => println!("RP required a PIN."),
+                    PinRequestReason::AuthenticatorPolicy => {
+                        println!("Your device requires a PIN.")
+                    }
+                    PinRequestReason::FallbackFromUV => {
+                        println!("UV failed too often and is blocked. Falling back to PIN.")
+                    }
+                }
+                print!("PIN: Please enter the PIN for your authenticator{attempts_str}: ");
+                io::stdout().flush().unwrap();
+                let pin_raw: String = read!("{}\n");
+
+                if pin_raw.is_empty() {
+                    println!("PIN: No PIN provided, cancelling operation.");
+                } else {
+                    let _ = reply_to.send(pin_raw);
+                }
+            }
+        }
+    }
+}
+
 #[tokio::main]
 pub async fn main() -> Result<(), Box<dyn Error>> {
     setup_logging();
 
     let devices = list_devices().await.unwrap();
     println!("Devices found: {:?}", devices);
-    let pin_provider: Box<dyn UvProvider> = Box::new(StdinPromptPinProvider::new());
 
     for mut device in devices {
         println!("Selected HID authenticator: {}", &device);
-        device.wink(TIMEOUT).await?;
-
-        let mut channel = device.channel().await?;
+        let (mut channel, state_recv) = device.channel().await?;
+        channel.wink(TIMEOUT).await?;
 
         print!("PIN: Please enter the _new_ PIN: ");
         io::stdout().flush().unwrap();
@@ -42,11 +87,10 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             return Ok(());
         }
 
+        tokio::spawn(handle_updates(state_recv));
+
         let response = loop {
-            match channel
-                .change_pin(&pin_provider, new_pin.clone(), TIMEOUT)
-                .await
-            {
+            match channel.change_pin(new_pin.clone(), TIMEOUT).await {
                 Ok(response) => break Ok(response),
                 Err(WebAuthnError::Ctap(ctap_error)) => {
                     if ctap_error.is_retryable_user_error() {
@@ -59,7 +103,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             };
         }
         .unwrap();
-        println!("WebAuthn MakeCredential response: {:?}", response);
+        println!("WebAuthn response: {:?}", response);
     }
 
     Ok(())

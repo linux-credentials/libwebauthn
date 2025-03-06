@@ -1,10 +1,11 @@
 use std::fmt::{Debug, Display};
 
 use crate::transport::error::Error;
-use crate::transport::{device::SupportedProtocols, Device};
+use crate::transport::Device;
+use crate::StateUpdate;
 
 use async_trait::async_trait;
-use tracing::instrument;
+use tokio::sync::mpsc;
 
 use super::channel::CableChannel;
 use super::Cable;
@@ -18,20 +19,12 @@ pub trait CableKnownDeviceInfoStore: Debug + Send {
 }
 
 /// A no-op known-device store for ephemeral-only implementations.
-#[derive(Debug, Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct EphemeralDeviceInfoStore {
     pub last_device_info: Option<CableKnownDeviceInfo>,
 }
 
 unsafe impl Send for EphemeralDeviceInfoStore {}
-
-impl Default for EphemeralDeviceInfoStore {
-    fn default() -> Self {
-        Self {
-            last_device_info: None,
-        }
-    }
-}
 
 #[async_trait]
 impl CableKnownDeviceInfoStore for EphemeralDeviceInfoStore {
@@ -79,14 +72,14 @@ unsafe impl<'d> Sync for CableKnownDevice<'d> {}
 
 #[async_trait]
 impl<'d> Device<'d, Cable, CableChannel<'d>> for CableKnownDevice<'d> {
-    async fn channel(&'d mut self) -> Result<CableChannel, Error> {
+    async fn channel(&'d mut self) -> Result<(CableChannel, mpsc::Receiver<StateUpdate>), Error> {
         todo!()
     }
 
-    #[instrument(skip_all)]
-    async fn supported_protocols(&mut self) -> Result<SupportedProtocols, Error> {
-        todo!()
-    }
+    // #[instrument(skip_all)]
+    // async fn supported_protocols(&mut self) -> Result<SupportedProtocols, Error> {
+    //     todo!()
+    // }
 }
 
 #[cfg(test)]

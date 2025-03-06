@@ -1,12 +1,14 @@
+use libwebauthn::StateUpdate;
 use std::error::Error;
 use std::fmt::Display;
 use std::io::{self, Write};
 use std::time::Duration;
 use text_io::read;
+use tokio::sync::mpsc::Receiver;
 use tracing_subscriber::{self, EnvFilter};
 
 use libwebauthn::management::BioEnrollment;
-use libwebauthn::pin::{UvProvider, StdinPromptPinProvider};
+use libwebauthn::pin::PinRequestReason;
 use libwebauthn::proto::ctap2::{Ctap2, Ctap2GetInfoResponse, Ctap2LastEnrollmentSampleStatus};
 use libwebauthn::transport::hid::list_devices;
 use libwebauthn::transport::Device;
@@ -19,6 +21,49 @@ fn setup_logging() {
         .with_env_filter(EnvFilter::from_default_env())
         .without_time()
         .init();
+}
+
+async fn handle_updates(mut state_recv: Receiver<StateUpdate>) {
+    while let Some(update) = state_recv.recv().await {
+        match update {
+            StateUpdate::PresenceRequired => println!("Please touch your device!"),
+            StateUpdate::UvRetry { attempts_left } => {
+                print!("UV failed.");
+                if let Some(attempts_left) = attempts_left {
+                    print!(" You have {attempts_left} attempts left.");
+                }
+            }
+            StateUpdate::PinRequired {
+                reply_to,
+                reason,
+                attempts_left,
+            } => {
+                let mut attempts_str = String::new();
+                if let Some(attempts) = attempts_left {
+                    attempts_str = format!(". You have {attempts} attempts left!");
+                };
+
+                match reason {
+                    PinRequestReason::RelyingPartyRequest => println!("RP required a PIN."),
+                    PinRequestReason::AuthenticatorPolicy => {
+                        println!("Your device requires a PIN.")
+                    }
+                    PinRequestReason::FallbackFromUV => {
+                        println!("UV failed too often and is blocked. Falling back to PIN.")
+                    }
+                }
+                print!("PIN: Please enter the PIN for your authenticator{attempts_str}: ");
+                io::stdout().flush().unwrap();
+                let pin_raw: String = read!("{}\n");
+
+                if pin_raw.is_empty() {
+                    println!("PIN: No PIN provided, cancelling operation.");
+                } else {
+                    let _ = reply_to.send(pin_raw);
+                }
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -103,13 +148,14 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
 
     let devices = list_devices().await.unwrap();
     println!("Devices found: {:?}", devices);
-    let mut pin_provider: Box<dyn UvProvider> = Box::new(StdinPromptPinProvider::new());
 
     for mut device in devices {
         println!("Selected HID authenticator: {}", &device);
-        device.wink(TIMEOUT).await?;
+        let (mut channel, state_recv) = device.channel().await?;
+        channel.wink(TIMEOUT).await?;
 
-        let mut channel = device.channel().await?;
+        tokio::spawn(handle_updates(state_recv));
+
         let info = channel.ctap2_get_info().await?;
         let options = get_supported_options(&info);
 
@@ -131,15 +177,12 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
                     .await
                     .map(|x| format!("{x:?}")),
                 Operation::EnumerateEnrollments => channel
-                    .get_bio_enrollments(&mut pin_provider, TIMEOUT)
+                    .get_bio_enrollments(TIMEOUT)
                     .await
                     .map(|x| format!("{x:?}")),
                 Operation::RemoveEnrollment => {
                     let enrollments = loop {
-                        match channel
-                            .get_bio_enrollments(&mut pin_provider, TIMEOUT)
-                            .await
-                        {
+                        match channel.get_bio_enrollments(TIMEOUT).await {
                             Ok(r) => break r,
                             Err(WebAuthnError::Ctap(ctap_error)) => {
                                 if ctap_error.is_retryable_user_error() {
@@ -159,7 +202,6 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
                     channel
                         .remove_bio_enrollment(
                             &enrollments[idx].template_id.as_ref().unwrap(),
-                            &mut pin_provider,
                             TIMEOUT,
                         )
                         .await
@@ -167,10 +209,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
                 }
                 Operation::RenameEnrollment => {
                     let enrollments = loop {
-                        match channel
-                            .get_bio_enrollments(&mut pin_provider, TIMEOUT)
-                            .await
-                        {
+                        match channel.get_bio_enrollments(TIMEOUT).await {
                             Ok(r) => break r,
                             Err(WebAuthnError::Ctap(ctap_error)) => {
                                 if ctap_error.is_retryable_user_error() {
@@ -194,36 +233,28 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
                         .rename_bio_enrollment(
                             &enrollments[idx].template_id.as_ref().unwrap(),
                             &new_name,
-                            &mut pin_provider,
                             TIMEOUT,
                         )
                         .await
                         .map(|x| format!("{x:?}"))
                 }
                 Operation::AddNewEnrollment => {
-                    let (template_id, mut sample_status, mut remaining_samples) = match channel
-                        .start_new_bio_enrollment(&mut pin_provider, None, TIMEOUT)
-                        .await
-                    {
-                        Ok(r) => r,
-                        Err(WebAuthnError::Ctap(ctap_error)) => {
-                            if ctap_error.is_retryable_user_error() {
-                                println!("Oops, try again! Error: {}", ctap_error);
-                                continue;
+                    let (template_id, mut sample_status, mut remaining_samples) =
+                        match channel.start_new_bio_enrollment(None, TIMEOUT).await {
+                            Ok(r) => r,
+                            Err(WebAuthnError::Ctap(ctap_error)) => {
+                                if ctap_error.is_retryable_user_error() {
+                                    println!("Oops, try again! Error: {}", ctap_error);
+                                    continue;
+                                }
+                                break Err(WebAuthnError::Ctap(ctap_error));
                             }
-                            break Err(WebAuthnError::Ctap(ctap_error));
-                        }
-                        Err(err) => break Err(err),
-                    };
+                            Err(err) => break Err(err),
+                        };
                     while remaining_samples > 0 {
                         print_status_update(sample_status, remaining_samples);
                         (sample_status, remaining_samples) = match channel
-                            .capture_next_bio_enrollment_sample(
-                                &template_id,
-                                &mut pin_provider,
-                                None,
-                                TIMEOUT,
-                            )
+                            .capture_next_bio_enrollment_sample(&template_id, None, TIMEOUT)
                             .await
                         {
                             Ok(r) => r,

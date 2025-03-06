@@ -200,7 +200,7 @@ pub trait Ctap2UserVerifiableRequest {
     fn handle_legacy_preview(&mut self, info: &Ctap2GetInfoResponse);
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ctap2UserVerificationOperation {
     GetPinUvAuthTokenUsingUvWithPermissions,
     GetPinUvAuthTokenUsingPinWithPermissions,

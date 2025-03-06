@@ -1,6 +1,6 @@
 use crate::{
     ops::webauthn::UserVerificationRequirement,
-    pin::{UvProvider, PinUvAuthProtocol},
+    pin::PinUvAuthProtocol,
     proto::ctap2::{
         Ctap2, Ctap2AuthTokenPermissionRole, Ctap2ClientPinRequest, Ctap2CredentialData,
         Ctap2CredentialManagementMetadata, Ctap2CredentialManagementRequest, Ctap2GetInfoResponse,
@@ -13,6 +13,7 @@ use crate::{
     },
     unwrap_field,
     webauthn::{handle_errors, user_verification, UsedPinUvAuthToken},
+    StateUpdate,
 };
 use async_trait::async_trait;
 use serde_bytes::ByteBuf;
@@ -24,41 +25,29 @@ use tracing::info;
 pub trait CredentialManagement {
     async fn get_credential_metadata(
         &mut self,
-        pin_provider: &mut Box<dyn UvProvider>,
         timeout: Duration,
     ) -> Result<Ctap2CredentialManagementMetadata, Error>;
-    async fn enumerate_rps_begin(
-        &mut self,
-        pin_provider: &mut Box<dyn UvProvider>,
-        timeout: Duration,
-    ) -> Result<(Ctap2RPData, u64), Error>;
-    async fn enumerate_rps_next_rp(
-        &mut self,
-        pin_provider: &mut Box<dyn UvProvider>,
-        timeout: Duration,
-    ) -> Result<Ctap2RPData, Error>;
+    async fn enumerate_rps_begin(&mut self, timeout: Duration)
+        -> Result<(Ctap2RPData, u64), Error>;
+    async fn enumerate_rps_next_rp(&mut self, timeout: Duration) -> Result<Ctap2RPData, Error>;
     async fn enumerate_credentials_begin(
         &mut self,
-        pin_provider: &mut Box<dyn UvProvider>,
         rpid_hash: &[u8],
         timeout: Duration,
     ) -> Result<(Ctap2CredentialData, u64), Error>;
     async fn enumerate_credentials_next(
         &mut self,
-        pin_provider: &mut Box<dyn UvProvider>,
         timeout: Duration,
     ) -> Result<Ctap2CredentialData, Error>;
     async fn delete_credential(
         &mut self,
         credential_id: &Ctap2PublicKeyCredentialDescriptor,
-        pin_provider: &mut Box<dyn UvProvider>,
         timeout: Duration,
     ) -> Result<(), Error>;
     async fn update_user_info(
         &mut self,
         credential_id: &Ctap2PublicKeyCredentialDescriptor,
         user: &Ctap2PublicKeyCredentialUserEntity,
-        pin_provider: &mut Box<dyn UvProvider>,
         timeout: Duration,
     ) -> Result<(), Error>;
 }
@@ -70,7 +59,6 @@ where
 {
     async fn get_credential_metadata(
         &mut self,
-        pin_provider: &mut Box<dyn UvProvider>,
         timeout: Duration,
     ) -> Result<Ctap2CredentialManagementMetadata, Error> {
         let mut req = Ctap2CredentialManagementRequest::new_get_credential_metadata();
@@ -79,7 +67,6 @@ where
                 self,
                 UserVerificationRequirement::Preferred,
                 &mut req,
-                pin_provider,
                 timeout,
             )
             .await?;
@@ -89,7 +76,6 @@ where
                 self,
                 self.ctap2_credential_management(&req, timeout).await,
                 uv_auth_used,
-                pin_provider,
                 timeout
             )
         }?;
@@ -102,7 +88,6 @@ where
 
     async fn enumerate_rps_begin(
         &mut self,
-        pin_provider: &mut Box<dyn UvProvider>,
         timeout: Duration,
     ) -> Result<(Ctap2RPData, u64), Error> {
         let mut req = Ctap2CredentialManagementRequest::new_enumerate_rps_begin();
@@ -111,7 +96,6 @@ where
                 self,
                 UserVerificationRequirement::Preferred,
                 &mut req,
-                pin_provider,
                 timeout,
             )
             .await?;
@@ -121,7 +105,6 @@ where
                 self,
                 self.ctap2_credential_management(&req, timeout).await,
                 uv_auth_used,
-                pin_provider,
                 timeout
             )
         }?;
@@ -134,18 +117,13 @@ where
         ))
     }
 
-    async fn enumerate_rps_next_rp(
-        &mut self,
-        pin_provider: &mut Box<dyn UvProvider>,
-        timeout: Duration,
-    ) -> Result<Ctap2RPData, Error> {
+    async fn enumerate_rps_next_rp(&mut self, timeout: Duration) -> Result<Ctap2RPData, Error> {
         let mut req = Ctap2CredentialManagementRequest::new_enumerate_rps_next_rp();
         let resp = loop {
             let uv_auth_used = user_verification(
                 self,
                 UserVerificationRequirement::Preferred,
                 &mut req,
-                pin_provider,
                 timeout,
             )
             .await?;
@@ -155,7 +133,6 @@ where
                 self,
                 self.ctap2_credential_management(&req, timeout).await,
                 uv_auth_used,
-                pin_provider,
                 timeout
             )
         }?;
@@ -167,7 +144,6 @@ where
 
     async fn enumerate_credentials_begin(
         &mut self,
-        pin_provider: &mut Box<dyn UvProvider>,
         rpid_hash: &[u8],
         timeout: Duration,
     ) -> Result<(Ctap2CredentialData, u64), Error> {
@@ -177,7 +153,6 @@ where
                 self,
                 UserVerificationRequirement::Preferred,
                 &mut req,
-                pin_provider,
                 timeout,
             )
             .await?;
@@ -187,7 +162,6 @@ where
                 self,
                 self.ctap2_credential_management(&req, timeout).await,
                 uv_auth_used,
-                pin_provider,
                 timeout
             )
         }?;
@@ -204,7 +178,6 @@ where
 
     async fn enumerate_credentials_next(
         &mut self,
-        pin_provider: &mut Box<dyn UvProvider>,
         timeout: Duration,
     ) -> Result<Ctap2CredentialData, Error> {
         let mut req = Ctap2CredentialManagementRequest::new_enumerate_credentials_next();
@@ -213,7 +186,6 @@ where
                 self,
                 UserVerificationRequirement::Preferred,
                 &mut req,
-                pin_provider,
                 timeout,
             )
             .await?;
@@ -223,7 +195,6 @@ where
                 self,
                 self.ctap2_credential_management(&req, timeout).await,
                 uv_auth_used,
-                pin_provider,
                 timeout
             )
         }?;
@@ -240,7 +211,6 @@ where
     async fn delete_credential(
         &mut self,
         credential_id: &Ctap2PublicKeyCredentialDescriptor,
-        pin_provider: &mut Box<dyn UvProvider>,
         timeout: Duration,
     ) -> Result<(), Error> {
         let mut req = Ctap2CredentialManagementRequest::new_delete_credential(credential_id);
@@ -249,7 +219,6 @@ where
                 self,
                 UserVerificationRequirement::Preferred,
                 &mut req,
-                pin_provider,
                 timeout,
             )
             .await?;
@@ -259,7 +228,6 @@ where
                 self,
                 self.ctap2_credential_management(&req, timeout).await,
                 uv_auth_used,
-                pin_provider,
                 timeout
             )
         }?;
@@ -270,7 +238,6 @@ where
         &mut self,
         credential_id: &Ctap2PublicKeyCredentialDescriptor,
         user: &Ctap2PublicKeyCredentialUserEntity,
-        pin_provider: &mut Box<dyn UvProvider>,
         timeout: Duration,
     ) -> Result<(), Error> {
         let mut req =
@@ -280,7 +247,6 @@ where
                 self,
                 UserVerificationRequirement::Preferred,
                 &mut req,
-                pin_provider,
                 timeout,
             )
             .await?;
@@ -295,7 +261,6 @@ where
                 self,
                 self.ctap2_credential_management(&req, timeout).await,
                 uv_auth_used,
-                pin_provider,
                 timeout
             )
         }?;

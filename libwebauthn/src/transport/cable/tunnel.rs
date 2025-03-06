@@ -20,6 +20,7 @@ use crate::proto::ctap2::cbor::{CborRequest, CborResponse};
 use crate::proto::ctap2::{Ctap2CommandCode, Ctap2GetInfoResponse};
 use crate::transport::error::Error;
 use crate::webauthn::TransportError;
+use crate::StateUpdate;
 
 pub(crate) const KNOWN_TUNNEL_DOMAINS: &[&str] = &["cable.ua5v.com", "cable.auth.com"];
 const SHA_INPUT: &[u8] = b"caBLEv2 tunnel server domain";
@@ -133,7 +134,7 @@ pub async fn connect<'d>(
     tunnel_id: &str,
     psk: &[u8; 32],
     private_key: &NonZeroScalar,
-) -> Result<CableChannel<'d>, Error> {
+) -> Result<(CableChannel<'d>, mpsc::Receiver<StateUpdate>), Error> {
     let connect_url = format!(
         "wss://{}/cable/connect/{}/{}",
         tunnel_domain, routing_id, tunnel_id
@@ -171,12 +172,17 @@ pub async fn connect<'d>(
 
     let (cbor_sender, cbor_receiver, handle_connection) = task_connection(ws_stream, noise_state)?;
 
-    Ok(CableChannel {
-        device: CableChannelDevice::QrCode(device),
-        handle_connection,
-        cbor_sender,
-        cbor_receiver,
-    })
+    let (send, recv) = mpsc::channel(1);
+    Ok((
+        CableChannel {
+            device: CableChannelDevice::QrCode(device),
+            handle_connection,
+            cbor_sender,
+            cbor_receiver,
+            tx: send,
+        },
+        recv,
+    ))
 }
 
 async fn do_handshake(

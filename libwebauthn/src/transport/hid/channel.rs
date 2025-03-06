@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use byteorder::{BigEndian, ReadBytesExt};
 use hidapi::HidDevice as HidApiDevice;
 use rand::{thread_rng, Rng};
+use tokio::sync::mpsc;
 use tokio::time::sleep;
 use tracing::{debug, instrument, trace, warn, Level};
 
@@ -23,6 +24,7 @@ use crate::transport::error::{Error, TransportError};
 use crate::transport::hid::framing::{
     HidCommand, HidMessage, HidMessageParser, HidMessageParserState,
 };
+use crate::StateUpdate;
 
 use super::device::get_hidapi;
 use super::device::HidBackendDevice;
@@ -51,10 +53,14 @@ pub struct HidChannel<'d> {
     open_device: OpenHidDevice,
     init: InitResponse,
     auth_token_data: Option<AuthTokenData>,
+    tx: mpsc::Sender<StateUpdate>,
 }
 
 impl<'d> HidChannel<'d> {
-    pub async fn new(device: &'d HidDevice) -> Result<HidChannel<'d>, Error> {
+    pub async fn new(
+        device: &'d HidDevice,
+        tx: mpsc::Sender<StateUpdate>,
+    ) -> Result<HidChannel<'d>, Error> {
         let mut channel = Self {
             status: ChannelStatus::Ready,
             device,
@@ -68,13 +74,14 @@ impl<'d> HidChannel<'d> {
             },
             init: InitResponse::default(),
             auth_token_data: None,
+            tx,
         };
         channel.init = channel.init(INIT_TIMEOUT).await?;
         Ok(channel)
     }
 
     #[instrument(skip_all)]
-    pub async fn wink(&mut self, _timeout: Duration) -> Result<bool, Error> {
+    pub async fn wink(&mut self, timeout: Duration) -> Result<bool, Error> {
         if !self.init.caps.contains(Caps::WINK) {
             warn!(?self.init.caps, "WINK capability is not supported");
             return Ok(false);
@@ -84,6 +91,7 @@ impl<'d> HidChannel<'d> {
             .await?;
 
         sleep(WINK_MIN_WAIT).await;
+        let _ = self.hid_recv(timeout).await?;
         Ok(true)
     }
 
@@ -424,6 +432,10 @@ impl Channel for HidChannel<'_> {
         );
         trace!(?cbor_response);
         Ok(cbor_response)
+    }
+
+    fn get_state_sender(&self) -> &mpsc::Sender<StateUpdate> {
+        &self.tx
     }
 }
 

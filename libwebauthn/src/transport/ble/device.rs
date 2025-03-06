@@ -1,10 +1,12 @@
 use std::fmt;
 
 use async_trait::async_trait;
+use tokio::sync::mpsc;
 use tracing::{info, instrument};
 
-use crate::transport::device::{Device, SupportedProtocols};
+use crate::transport::device::Device;
 use crate::transport::error::{Error, TransportError};
+use crate::StateUpdate;
 
 use super::bluez::manager::SupportedRevisions;
 use super::bluez::{supported_fido_revisions, FidoDevice as BlueZFidoDevice};
@@ -67,17 +69,18 @@ impl fmt::Display for BleDevice {
 
 #[async_trait]
 impl<'d> Device<'d, Ble, BleChannel<'d>> for BleDevice {
-    async fn channel(&'d mut self) -> Result<BleChannel<'d>, Error> {
+    async fn channel(&'d mut self) -> Result<(BleChannel<'d>, mpsc::Receiver<StateUpdate>), Error> {
         let revisions = self.supported_revisions().await?;
-        let channel = BleChannel::new(self, &revisions).await?;
-        Ok(channel)
+        let (send, recv) = mpsc::channel(1);
+        let channel = BleChannel::new(self, &revisions, send).await?;
+        Ok((channel, recv))
     }
 
-    #[instrument(skip_all)]
-    async fn supported_protocols(&mut self) -> Result<SupportedProtocols, Error> {
-        let revisions = self.supported_revisions().await?;
-        Ok(revisions.into())
-    }
+    // #[instrument(skip_all)]
+    // async fn supported_protocols(&mut self) -> Result<SupportedProtocols, Error> {
+    //     let revisions = self.supported_revisions().await?;
+    //     Ok(revisions.into())
+    // }
 }
 
 impl BleDevice {

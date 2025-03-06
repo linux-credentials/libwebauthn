@@ -15,6 +15,7 @@ use crate::transport::AuthTokenData;
 use crate::transport::{
     channel::ChannelStatus, device::SupportedProtocols, Channel, Ctap2AuthTokenStore,
 };
+use crate::StateUpdate;
 
 use super::known_devices::CableKnownDevice;
 use super::qr_code_device::CableQrCodeDevice;
@@ -39,6 +40,7 @@ pub struct CableChannel<'d> {
     pub(crate) handle_connection: task::JoinHandle<()>,
     pub(crate) cbor_sender: mpsc::Sender<CborRequest>,
     pub(crate) cbor_receiver: mpsc::Receiver<CborResponse>,
+    pub(crate) tx: mpsc::Sender<StateUpdate>,
 }
 
 impl Display for CableChannel<'_> {
@@ -86,6 +88,10 @@ impl<'d> Channel for CableChannel<'d> {
             .recv()
             .await
             .ok_or(Error::Transport(TransportError::TransportUnavailable))
+    }
+
+    fn get_state_sender(&self) -> &mpsc::Sender<StateUpdate> {
+        &self.tx
     }
 }
 

@@ -1,7 +1,8 @@
 use std::fmt::Display;
 
-use crate::fido::FidoRevision;
+use crate::{fido::FidoRevision, StateUpdate};
 use async_trait::async_trait;
+use tokio::sync::mpsc;
 
 use crate::transport::ble::bluez::manager::SupportedRevisions;
 use crate::transport::error::Error;
@@ -14,8 +15,8 @@ where
     T: Transport,
     C: Channel + 'd,
 {
-    async fn channel(&'d mut self) -> Result<C, Error>;
-    async fn supported_protocols(&mut self) -> Result<SupportedProtocols, Error>;
+    async fn channel(&'d mut self) -> Result<(C, mpsc::Receiver<StateUpdate>), Error>;
+    // async fn supported_protocols(&mut self) -> Result<SupportedProtocols, Error>;
 }
 
 #[derive(Debug, Copy, Clone, Default)]

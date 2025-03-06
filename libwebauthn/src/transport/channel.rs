@@ -1,15 +1,20 @@
 use std::fmt::{Debug, Display};
 use std::time::Duration;
 
-use crate::proto::ctap2::{Ctap2AuthTokenPermissionRole, Ctap2PinUvAuthProtocol};
+use crate::proto::ctap2::{
+    Ctap2AuthTokenPermissionRole, Ctap2PinUvAuthProtocol, Ctap2UserVerificationOperation,
+};
 use crate::proto::{
     ctap1::apdu::{ApduRequest, ApduResponse},
     ctap2::cbor::{CborRequest, CborResponse},
 };
 use crate::transport::error::Error;
+use crate::StateUpdate;
 
 use async_trait::async_trait;
 use cosey::PublicKey;
+use tokio::sync::mpsc;
+use tracing::{debug, error};
 
 use super::device::SupportedProtocols;
 
@@ -22,6 +27,17 @@ pub enum ChannelStatus {
 
 #[async_trait]
 pub trait Channel: Send + Sync + Display + Ctap2AuthTokenStore {
+    fn get_state_sender(&self) -> &mpsc::Sender<StateUpdate>;
+    async fn send_state_update(&mut self, state: StateUpdate) {
+        debug!("Sending state update: {state:?}");
+        match self.get_state_sender().send(state).await {
+            Ok(_) => (), // Success
+            Err(_) => {
+                error!("Failed to send state update. Application must have hung up. Closing.");
+                self.close().await;
+            }
+        };
+    }
     async fn supported_protocols(&self) -> Result<SupportedProtocols, Error>;
     async fn status(&self) -> ChannelStatus;
     async fn close(&mut self);
@@ -71,6 +87,7 @@ pub struct AuthTokenData {
     pub pin_uv_auth_token: Vec<u8>,
     pub protocol_version: Ctap2PinUvAuthProtocol,
     pub key_agreement: PublicKey,
+    pub uv_operation: Ctap2UserVerificationOperation,
 }
 
 #[async_trait]
@@ -85,5 +102,13 @@ pub trait Ctap2AuthTokenStore {
             }
         }
         None
+    }
+    fn used_pin_for_auth(&self) -> bool {
+        if let Some(stored_data) = self.get_auth_data() {
+            return stored_data.uv_operation
+                == Ctap2UserVerificationOperation::GetPinUvAuthTokenUsingPinWithPermissions
+                || stored_data.uv_operation == Ctap2UserVerificationOperation::GetPinToken;
+        }
+        false
     }
 }
