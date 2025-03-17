@@ -13,7 +13,7 @@ use crate::{
     },
     unwrap_field,
     webauthn::{handle_errors, user_verification, UsedPinUvAuthToken},
-    StateUpdate,
+    UxUpdate,
 };
 use async_trait::async_trait;
 use serde_bytes::ByteBuf;

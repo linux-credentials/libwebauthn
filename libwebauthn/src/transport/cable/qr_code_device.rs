@@ -22,7 +22,7 @@ use crate::transport::cable::digit_encode;
 use crate::transport::error::Error;
 use crate::transport::Device;
 use crate::webauthn::TransportError;
-use crate::StateUpdate;
+use crate::UxUpdate;
 
 const CABLE_UUID_FIDO: &str = "0000fff9-0000-1000-8000-00805f9b34fb";
 const CABLE_UUID_GOOGLE: &str = "0000fde2-0000-1000-8000-00805f9b34fb";
@@ -241,9 +241,7 @@ impl Display for CableQrCodeDevice<'_> {
 
 #[async_trait]
 impl<'d> Device<'d, Cable, CableChannel<'d>> for CableQrCodeDevice<'_> {
-    async fn channel(
-        &'d mut self,
-    ) -> Result<(CableChannel<'d>, mpsc::Receiver<StateUpdate>), Error> {
+    async fn channel(&'d mut self) -> Result<(CableChannel<'d>, mpsc::Receiver<UxUpdate>), Error> {
         let (_device, advert) = self.await_advertisement().await?;
 
         let Some(tunnel_domain) =

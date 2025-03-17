@@ -22,7 +22,7 @@ use crate::proto::ctap2::{
 };
 pub use crate::transport::error::{CtapError, Error, PlatformError, TransportError};
 use crate::transport::{AuthTokenData, Channel, Ctap2AuthTokenPermission};
-use crate::StateUpdate;
+use crate::{PinRequiredUpdate, UxUpdate};
 
 macro_rules! handle_errors {
     ($channel: expr, $resp: expr, $uv_auth_used: expr, $timeout: expr) => {
@@ -42,7 +42,7 @@ macro_rules! handle_errors {
                     .ok() // It's optional, so soft-error here
                     .flatten();
                 $channel
-                    .send_state_update(StateUpdate::UvRetry { attempts_left })
+                    .send_state_update(UxUpdate::UvRetry { attempts_left })
                     .await;
                 break Err(Error::Ctap(CtapError::UVInvalid));
             }
@@ -130,7 +130,7 @@ where
             // We've already sent out this update, in case we used builtin UV
             // but if we used PIN, we need to touch the device now.
             if self.used_pin_for_auth() {
-                self.send_state_update(StateUpdate::PresenceRequired).await;
+                self.send_state_update(UxUpdate::PresenceRequired).await;
             }
             handle_errors!(
                 self,
@@ -147,7 +147,7 @@ where
     ) -> Result<MakeCredentialResponse, Error> {
         let register_request: RegisterRequest = op.try_downgrade()?;
 
-        self.send_state_update(StateUpdate::PresenceRequired).await;
+        self.send_state_update(UxUpdate::PresenceRequired).await;
         self.ctap1_register(&register_request)
             .await?
             .try_upgrade(op)
@@ -179,7 +179,7 @@ where
             // We've already sent out this update, in case we used builtin UV
             // but if we used PIN, we need to touch the device now.
             if self.used_pin_for_auth() {
-                self.send_state_update(StateUpdate::PresenceRequired).await;
+                self.send_state_update(UxUpdate::PresenceRequired).await;
             }
             if let Some(auth_data) = self.get_auth_data() {
                 if let Some(e) = ctap2_request.extensions.as_mut() {
@@ -212,7 +212,7 @@ where
         let sign_requests: Vec<SignRequest> = op.try_downgrade()?;
 
         for sign_request in sign_requests {
-            self.send_state_update(StateUpdate::PresenceRequired).await;
+            self.send_state_update(UxUpdate::PresenceRequired).await;
             match self.ctap1_sign(&sign_request).await {
                 Ok(response) => {
                     debug!("Found successful candidate in allowList");
@@ -407,9 +407,7 @@ where
                 )
             }
             Ctap2UserVerificationOperation::GetPinUvAuthTokenUsingUvWithPermissions => {
-                channel
-                    .send_state_update(StateUpdate::PresenceRequired)
-                    .await;
+                channel.send_state_update(UxUpdate::PresenceRequired).await;
                 Ctap2ClientPinRequest::new_get_uv_token_with_perm(
                     uv_proto.version(),
                     public_key.clone(),
@@ -437,7 +435,7 @@ where
                     .ok() // It's optional, so soft-error here
                     .flatten();
                 channel
-                    .send_state_update(StateUpdate::UvRetry { attempts_left })
+                    .send_state_update(UxUpdate::UvRetry { attempts_left })
                     .await;
                 if let Some(attempts) = attempts_left {
                     // The spec says: "If the platform receives CTAP2ERRUV_BLOCKED **or** uvRetries <= 0"
@@ -537,11 +535,11 @@ where
 
     let (tx, rx) = tokio::sync::oneshot::channel();
     channel
-        .send_state_update(StateUpdate::PinRequired {
+        .send_state_update(UxUpdate::PinRequired(PinRequiredUpdate {
             reply_to: tx,
             reason,
             attempts_left,
-        })
+        }))
         .await;
     let pin = match rx.await {
         Ok(pin) => pin,

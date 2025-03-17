@@ -24,7 +24,7 @@ use crate::transport::error::{Error, TransportError};
 use crate::transport::hid::framing::{
     HidCommand, HidMessage, HidMessageParser, HidMessageParserState,
 };
-use crate::StateUpdate;
+use crate::UxUpdate;
 
 use super::device::get_hidapi;
 use super::device::HidBackendDevice;
@@ -53,13 +53,13 @@ pub struct HidChannel<'d> {
     open_device: OpenHidDevice,
     init: InitResponse,
     auth_token_data: Option<AuthTokenData>,
-    tx: mpsc::Sender<StateUpdate>,
+    tx: mpsc::Sender<UxUpdate>,
 }
 
 impl<'d> HidChannel<'d> {
     pub async fn new(
         device: &'d HidDevice,
-        tx: mpsc::Sender<StateUpdate>,
+        tx: mpsc::Sender<UxUpdate>,
     ) -> Result<HidChannel<'d>, Error> {
         let mut channel = Self {
             status: ChannelStatus::Ready,
@@ -89,9 +89,12 @@ impl<'d> HidChannel<'d> {
 
         self.hid_send(&HidMessage::new(self.init.cid, HidCommand::Wink, &[]))
             .await?;
+        // Solokey does not seem to return an answer for wink and hangs here.
+        if cfg!(not(feature = "virtual-hid-device")) {
+            let _ = self.hid_recv(timeout).await?;
+        }
 
         sleep(WINK_MIN_WAIT).await;
-        let _ = self.hid_recv(timeout).await?;
         Ok(true)
     }
 
@@ -434,7 +437,7 @@ impl Channel for HidChannel<'_> {
         Ok(cbor_response)
     }
 
-    fn get_state_sender(&self) -> &mpsc::Sender<StateUpdate> {
+    fn get_state_sender(&self) -> &mpsc::Sender<UxUpdate> {
         &self.tx
     }
 }

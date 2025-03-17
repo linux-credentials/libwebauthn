@@ -2,7 +2,7 @@ use std::fmt::{Debug, Display};
 
 use crate::transport::error::Error;
 use crate::transport::Device;
-use crate::StateUpdate;
+use crate::UxUpdate;
 
 use async_trait::async_trait;
 use tokio::sync::mpsc;
@@ -72,7 +72,7 @@ unsafe impl<'d> Sync for CableKnownDevice<'d> {}
 
 #[async_trait]
 impl<'d> Device<'d, Cable, CableChannel<'d>> for CableKnownDevice<'d> {
-    async fn channel(&'d mut self) -> Result<(CableChannel, mpsc::Receiver<StateUpdate>), Error> {
+    async fn channel(&'d mut self) -> Result<(CableChannel, mpsc::Receiver<UxUpdate>), Error> {
         todo!()
     }
 

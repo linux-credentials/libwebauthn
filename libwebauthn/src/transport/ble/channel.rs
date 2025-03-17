@@ -10,7 +10,7 @@ use crate::transport::ble::bluez;
 use crate::transport::channel::{AuthTokenData, Channel, ChannelStatus, Ctap2AuthTokenStore};
 use crate::transport::device::SupportedProtocols;
 use crate::transport::error::{Error, TransportError};
-use crate::StateUpdate;
+use crate::UxUpdate;
 
 use super::bluez::manager::SupportedRevisions;
 use super::bluez::Connection;
@@ -28,14 +28,14 @@ pub struct BleChannel<'a> {
     connection: Connection,
     revision: FidoRevision,
     auth_token_data: Option<AuthTokenData>,
-    tx: mpsc::Sender<StateUpdate>,
+    tx: mpsc::Sender<UxUpdate>,
 }
 
 impl<'a> BleChannel<'a> {
     pub async fn new(
         device: &'a BleDevice,
         revisions: &SupportedRevisions,
-        tx: mpsc::Sender<StateUpdate>,
+        tx: mpsc::Sender<UxUpdate>,
     ) -> Result<BleChannel<'a>, Error> {
         let revision = revisions
             .select_protocol(FidoProtocol::U2F)
@@ -160,7 +160,7 @@ impl<'a> Channel for BleChannel<'a> {
         Ok(cbor_response)
     }
 
-    fn get_state_sender(&self) -> &mpsc::Sender<StateUpdate> {
+    fn get_state_sender(&self) -> &mpsc::Sender<UxUpdate> {
         &self.tx
     }
 }

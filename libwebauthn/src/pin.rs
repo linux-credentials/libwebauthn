@@ -39,8 +39,11 @@ pub struct PinUvAuthToken {
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum PinRequestReason {
+    /// The RP required a PIN
     RelyingPartyRequest,
+    /// The device is configured to require a PIN
     AuthenticatorPolicy,
+    /// Buitin UV failed and is temporarily blocked, and we have to enter a valid PIN to unblock it
     FallbackFromUV,
     // Passkey
 }

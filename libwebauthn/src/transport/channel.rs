@@ -9,7 +9,7 @@ use crate::proto::{
     ctap2::cbor::{CborRequest, CborResponse},
 };
 use crate::transport::error::Error;
-use crate::StateUpdate;
+use crate::UxUpdate;
 
 use async_trait::async_trait;
 use cosey::PublicKey;
@@ -27,8 +27,8 @@ pub enum ChannelStatus {
 
 #[async_trait]
 pub trait Channel: Send + Sync + Display + Ctap2AuthTokenStore {
-    fn get_state_sender(&self) -> &mpsc::Sender<StateUpdate>;
-    async fn send_state_update(&mut self, state: StateUpdate) {
+    fn get_state_sender(&self) -> &mpsc::Sender<UxUpdate>;
+    async fn send_state_update(&mut self, state: UxUpdate) {
         debug!("Sending state update: {state:?}");
         match self.get_state_sender().send(state).await {
             Ok(_) => (), // Success

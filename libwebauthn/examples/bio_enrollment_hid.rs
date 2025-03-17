@@ -1,4 +1,4 @@
-use libwebauthn::StateUpdate;
+use libwebauthn::UxUpdate;
 use std::error::Error;
 use std::fmt::Display;
 use std::io::{self, Write};
@@ -23,27 +23,23 @@ fn setup_logging() {
         .init();
 }
 
-async fn handle_updates(mut state_recv: Receiver<StateUpdate>) {
+async fn handle_updates(mut state_recv: Receiver<UxUpdate>) {
     while let Some(update) = state_recv.recv().await {
         match update {
-            StateUpdate::PresenceRequired => println!("Please touch your device!"),
-            StateUpdate::UvRetry { attempts_left } => {
+            UxUpdate::PresenceRequired => println!("Please touch your device!"),
+            UxUpdate::UvRetry { attempts_left } => {
                 print!("UV failed.");
                 if let Some(attempts_left) = attempts_left {
                     print!(" You have {attempts_left} attempts left.");
                 }
             }
-            StateUpdate::PinRequired {
-                reply_to,
-                reason,
-                attempts_left,
-            } => {
+            UxUpdate::PinRequired(update) => {
                 let mut attempts_str = String::new();
-                if let Some(attempts) = attempts_left {
+                if let Some(attempts) = update.attempts_left {
                     attempts_str = format!(". You have {attempts} attempts left!");
                 };
 
-                match reason {
+                match update.reason {
                     PinRequestReason::RelyingPartyRequest => println!("RP required a PIN."),
                     PinRequestReason::AuthenticatorPolicy => {
                         println!("Your device requires a PIN.")
@@ -58,8 +54,9 @@ async fn handle_updates(mut state_recv: Receiver<StateUpdate>) {
 
                 if pin_raw.is_empty() {
                     println!("PIN: No PIN provided, cancelling operation.");
+                    update.cancel();
                 } else {
-                    let _ = reply_to.send(pin_raw);
+                    let _ = update.send_pin(&pin_raw);
                 }
             }
         }

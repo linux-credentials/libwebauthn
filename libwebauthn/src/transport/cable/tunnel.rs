@@ -20,7 +20,7 @@ use crate::proto::ctap2::cbor::{CborRequest, CborResponse};
 use crate::proto::ctap2::{Ctap2CommandCode, Ctap2GetInfoResponse};
 use crate::transport::error::Error;
 use crate::webauthn::TransportError;
-use crate::StateUpdate;
+use crate::UxUpdate;
 
 pub(crate) const KNOWN_TUNNEL_DOMAINS: &[&str] = &["cable.ua5v.com", "cable.auth.com"];
 const SHA_INPUT: &[u8] = b"caBLEv2 tunnel server domain";
@@ -134,7 +134,7 @@ pub async fn connect<'d>(
     tunnel_id: &str,
     psk: &[u8; 32],
     private_key: &NonZeroScalar,
-) -> Result<(CableChannel<'d>, mpsc::Receiver<StateUpdate>), Error> {
+) -> Result<(CableChannel<'d>, mpsc::Receiver<UxUpdate>), Error> {
     let connect_url = format!(
         "wss://{}/cable/connect/{}/{}",
         tunnel_domain, routing_id, tunnel_id

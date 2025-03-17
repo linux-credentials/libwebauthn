@@ -1,7 +1,7 @@
 use std::error::Error;
 use std::time::Duration;
 
-use libwebauthn::StateUpdate;
+use libwebauthn::UxUpdate;
 use tokio::sync::mpsc::Receiver;
 use tracing_subscriber::{self, EnvFilter};
 
@@ -20,10 +20,10 @@ fn setup_logging() {
         .init();
 }
 
-async fn handle_updates(mut state_recv: Receiver<StateUpdate>) {
+async fn handle_updates(mut state_recv: Receiver<UxUpdate>) {
     while let Some(update) = state_recv.recv().await {
         match update {
-            StateUpdate::PresenceRequired => println!("Please touch your device!"),
+            UxUpdate::PresenceRequired => println!("Please touch your device!"),
             _ => { /* U2F doesn't use other state updates */ }
         }
     }

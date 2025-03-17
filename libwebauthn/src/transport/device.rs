@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use crate::{fido::FidoRevision, StateUpdate};
+use crate::{fido::FidoRevision, UxUpdate};
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 
@@ -15,7 +15,7 @@ where
     T: Transport,
     C: Channel + 'd,
 {
-    async fn channel(&'d mut self) -> Result<(C, mpsc::Receiver<StateUpdate>), Error>;
+    async fn channel(&'d mut self) -> Result<(C, mpsc::Receiver<UxUpdate>), Error>;
     // async fn supported_protocols(&mut self) -> Result<SupportedProtocols, Error>;
 }
 
