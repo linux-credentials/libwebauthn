@@ -122,7 +122,7 @@ where
         op: &MakeCredentialRequest,
     ) -> Result<MakeCredentialResponse, Error> {
         let mut ctap2_request: Ctap2MakeCredentialRequest = op.into();
-        loop {
+        let response = loop {
             let uv_auth_used =
                 user_verification(self, op.user_verification, &mut ctap2_request, op.timeout)
                     .await?;
@@ -138,7 +138,9 @@ where
                 uv_auth_used,
                 op.timeout
             )
-        }
+        }?;
+        let make_cred = response.into_make_credential_output(self.get_auth_data());
+        Ok(make_cred)
     }
 
     async fn _webauthn_make_credential_u2f(
