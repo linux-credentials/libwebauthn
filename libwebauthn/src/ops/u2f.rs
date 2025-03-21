@@ -9,7 +9,9 @@ use x509_parser::nom::AsBytes;
 
 use super::webauthn::MakeCredentialRequest;
 use crate::fido::{AttestedCredentialData, AuthenticatorData, AuthenticatorDataFlags};
-use crate::ops::webauthn::{GetAssertionResponse, MakeCredentialResponse};
+use crate::ops::webauthn::{
+    GetAssertionRequest, GetAssertionResponse, MakeCredentialResponse, UserVerificationRequirement,
+};
 use crate::proto::ctap1::{Ctap1RegisterRequest, Ctap1SignRequest};
 use crate::proto::ctap1::{Ctap1RegisterResponse, Ctap1SignResponse};
 use crate::proto::ctap2::{
@@ -148,7 +150,7 @@ impl UpgradableResponse<MakeCredentialResponse, MakeCredentialRequest> for Regis
             large_blob_key: None,
             unsigned_extension_output: None,
         };
-        Ok(resp.into_make_credential_output(None))
+        Ok(resp.into_make_credential_output(request, None))
     }
 }
 
@@ -197,7 +199,28 @@ impl UpgradableResponse<GetAssertionResponse, SignRequest> for SignResponse {
             enterprise_attestation: None,
             attestation_statement: None,
         };
-        let upgraded_response = [response.into_assertion_output(None)].as_slice().into();
+
+        // This isn't great, but we have no access to the original request, and need to construct
+        // something like that here. In reality, we only need `extensions: None` currently.
+        let orig_request = GetAssertionRequest {
+            relying_party_id: String::new(), // We don't have access to that info here, but we don't need it either
+            hash: request.app_id_hash.clone(),
+            allow: vec![Ctap2PublicKeyCredentialDescriptor {
+                r#type: Ctap2PublicKeyCredentialType::PublicKey,
+                id: request.key_handle.clone().into(),
+                transports: None,
+            }],
+            extensions: None,
+            user_verification: if request.require_user_presence {
+                UserVerificationRequirement::Required
+            } else {
+                UserVerificationRequirement::Preferred
+            },
+            timeout: request.timeout.clone(),
+        };
+        let upgraded_response = [response.into_assertion_output(&orig_request, None)]
+            .as_slice()
+            .into();
 
         trace!(?upgraded_response);
         Ok(upgraded_response)

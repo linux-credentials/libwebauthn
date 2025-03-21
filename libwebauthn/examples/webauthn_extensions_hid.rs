@@ -11,7 +11,8 @@ use tokio::sync::mpsc::Receiver;
 use tracing_subscriber::{self, EnvFilter};
 
 use libwebauthn::ops::webauthn::{
-    GetAssertionRequest, GetAssertionRequestExtensions, HMACGetSecretInput, MakeCredentialRequest,
+    GetAssertionHmacOrPrfInput, GetAssertionRequest, GetAssertionRequestExtensions,
+    HMACGetSecretInput, MakeCredentialHmacOrPrfInput, MakeCredentialRequest,
     MakeCredentialsRequestExtensions, UserVerificationRequirement,
 };
 use libwebauthn::pin::PinRequestReason;
@@ -87,7 +88,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         cred_blob: Some(r"My own little blob".into()),
         large_blob_key: None,
         min_pin_length: Some(true),
-        hmac_secret: Some(true),
+        hmac_or_prf: MakeCredentialHmacOrPrfInput::HmacGetSecret,
     };
 
     for mut device in devices {
@@ -143,7 +144,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             user_verification: UserVerificationRequirement::Discouraged,
             extensions: Some(GetAssertionRequestExtensions {
                 cred_blob: Some(true),
-                hmac_secret: Some(HMACGetSecretInput {
+                hmac_or_prf: GetAssertionHmacOrPrfInput::HmacGetSecret(HMACGetSecretInput {
                     salt1: [1; 32],
                     salt2: None,
                 }),

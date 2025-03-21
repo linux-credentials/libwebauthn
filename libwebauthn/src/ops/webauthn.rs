@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, time::Duration};
+use std::{
+    collections::{BTreeMap, HashMap},
+    time::Duration,
+};
 
 use ctap_types::ctap2::credential_management::CredentialProtectionPolicy;
 use serde::Deserialize;
@@ -77,12 +80,46 @@ pub struct MakeCredentialRequest {
 }
 
 #[derive(Debug, Default, Clone)]
+pub struct PRFValue {
+    pub first: [u8; 32],
+    pub second: Option<[u8; 32]>,
+}
+
+#[derive(Debug, Default, Clone)]
+pub enum MakeCredentialHmacOrPrfInput {
+    #[default]
+    None,
+    HmacGetSecret,
+    Prf,
+    // The spec tells us that in theory, we could hand in
+    // an `eval` here, IF the CTAP2 would get an additional
+    // extension to handle that. There is no such CTAP-extension
+    // right now, so we don't expose it for now, as it would just
+    // be ignored anyways.
+    // https://w3c.github.io/webauthn/#prf
+    // "If eval is present and a future extension to [FIDO-CTAP] permits evaluation of the PRF at creation time, configure hmac-secret inputs accordingly: .."
+    // Prf {
+    //     eval: Option<PRFValue>,
+    // },
+}
+
+#[derive(Debug, Default, Clone)]
+pub enum MakeCredentialHmacOrPrfOutput {
+    #[default]
+    None,
+    HmacGetSecret(bool),
+    Prf {
+        enabled: bool,
+    },
+}
+
+#[derive(Debug, Default, Clone)]
 pub struct MakeCredentialsRequestExtensions {
     pub cred_protect: Option<CredentialProtectionPolicy>,
     pub cred_blob: Option<Vec<u8>>,
     pub large_blob_key: Option<bool>,
     pub min_pin_length: Option<bool>,
-    pub hmac_secret: Option<bool>,
+    pub hmac_or_prf: MakeCredentialHmacOrPrfInput,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -92,8 +129,7 @@ pub struct MakeCredentialsResponseExtensions {
     pub cred_blob: Option<bool>,
     /// Current min PIN lenght
     pub min_pin_length: Option<u32>,
-    // Thanks, FIDO-spec for this consistent naming scheme...
-    pub hmac_secret: Option<bool>,
+    pub hmac_or_prf: MakeCredentialHmacOrPrfOutput,
 }
 
 impl MakeCredentialRequest {
@@ -124,6 +160,30 @@ pub struct GetAssertionRequest {
     pub timeout: Duration,
 }
 
+#[derive(Debug, Default, Clone)]
+pub enum GetAssertionHmacOrPrfInput {
+    #[default]
+    None,
+    HmacGetSecret(HMACGetSecretInput),
+    Prf {
+        eval: Option<PRFValue>,
+        eval_by_credential: HashMap<String, PRFValue>,
+    },
+}
+
+#[derive(Debug, Default, Clone)]
+pub enum GetAssertionHmacOrPrfOutput {
+    #[default]
+    None,
+    HmacGetSecret(HMACGetSecretOutput),
+    Prf {
+        enabled: bool,
+        // The spec tells us this should be a Vec<PRFValue>, but doesn't
+        // explain how it could hold more than 1 value
+        result: PRFValue,
+    },
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct HMACGetSecretInput {
     pub salt1: [u8; 32],
@@ -133,7 +193,7 @@ pub struct HMACGetSecretInput {
 #[derive(Debug, Default, Clone)]
 pub struct GetAssertionRequestExtensions {
     pub cred_blob: Option<bool>,
-    pub hmac_secret: Option<HMACGetSecretInput>,
+    pub hmac_or_prf: GetAssertionHmacOrPrfInput,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -184,9 +244,7 @@ impl Ctap2HMACGetSecretOutput {
 pub struct GetAssertionResponseExtensions {
     // Stored credBlob
     pub cred_blob: Option<Vec<u8>>,
-
-    // Thanks, FIDO-spec for this consistent naming scheme...
-    pub hmac_secret: Option<HMACGetSecretOutput>,
+    pub hmac_or_prf: GetAssertionHmacOrPrfOutput,
 }
 
 #[derive(Debug, Clone)]
