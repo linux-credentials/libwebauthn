@@ -1,11 +1,13 @@
 use crate::{
     fido::AuthenticatorData,
     ops::webauthn::{
-        Assertion, Ctap2HMACGetSecretOutput, GetAssertionRequest, GetAssertionRequestExtensions,
-        GetAssertionResponseExtensions, HMACGetSecretInput,
+        Assertion, Ctap2HMACGetSecretOutput, GetAssertionHmacOrPrfInput,
+        GetAssertionHmacOrPrfOutput, GetAssertionRequest, GetAssertionRequestExtensions,
+        GetAssertionResponseExtensions, HMACGetSecretInput, PRFValue,
     },
     pin::PinUvAuthProtocol,
     transport::AuthTokenData,
+    webauthn::{Error, PlatformError},
 };
 
 use super::{
@@ -18,7 +20,8 @@ use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 use serde_cbor::Value;
 use serde_indexed::{DeserializeIndexed, SerializeIndexed};
-use std::collections::BTreeMap;
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, HashMap};
 use tracing::error;
 
 #[derive(Debug, Clone, Copy, Serialize, Default)]
@@ -167,7 +170,7 @@ pub struct Ctap2GetAssertionRequestExtensions {
     pub hmac_secret: Option<CalculatedHMACGetSecretInput>,
     // From which we calculate hmac_secret
     #[serde(skip)]
-    pub hmac_salts: Option<HMACGetSecretInput>,
+    pub hmac_or_prf: GetAssertionHmacOrPrfInput,
 }
 
 impl From<GetAssertionRequestExtensions> for Ctap2GetAssertionRequestExtensions {
@@ -175,7 +178,7 @@ impl From<GetAssertionRequestExtensions> for Ctap2GetAssertionRequestExtensions 
         Ctap2GetAssertionRequestExtensions {
             cred_blob: other.cred_blob,
             hmac_secret: None, // Get's calculated later
-            hmac_salts: other.hmac_secret,
+            hmac_or_prf: other.hmac_or_prf,
         }
     }
 }
@@ -185,14 +188,32 @@ impl Ctap2GetAssertionRequestExtensions {
         self.cred_blob.is_none() && self.hmac_secret.is_none()
     }
 
-    pub fn calculate_hmac(&mut self, auth_data: &AuthTokenData) {
-        let input = if let Some(hmac_input) = &self.hmac_salts {
-            hmac_input
-        } else {
-            return;
+    pub fn calculate_hmac(
+        &mut self,
+        allow_list: &[Ctap2PublicKeyCredentialDescriptor],
+        auth_data: &AuthTokenData,
+    ) -> Result<(), Error> {
+        let input = match &self.hmac_or_prf {
+            GetAssertionHmacOrPrfInput::None => None,
+            GetAssertionHmacOrPrfInput::HmacGetSecret(hmacget_secret_input) => {
+                Some(hmacget_secret_input.clone())
+            }
+            GetAssertionHmacOrPrfInput::Prf {
+                eval,
+                eval_by_credential,
+            } => Self::prf_to_hmac_input(eval, eval_by_credential, allow_list)?,
         };
-        let uv_proto = auth_data.protocol_version.create_protocol_object();
 
+        let input = match input {
+            None => {
+                // We haven't been provided with any usable HMAC input
+                return Ok(());
+            }
+            Some(i) => i,
+        };
+
+        // CTAP2 HMAC extension calculation
+        let uv_proto = auth_data.protocol_version.create_protocol_object();
         let public_key = auth_data.key_agreement.clone();
         // saltEnc(0x02): Encryption of the one or two salts (called salt1 (32 bytes) and salt2 (32 bytes)) using the shared secret as follows:
         //     One salt case: encrypt(shared secret, salt1)
@@ -205,7 +226,14 @@ impl Ctap2GetAssertionRequestExtensions {
             ByteBuf::from(res)
         } else {
             error!("Failed to encrypt HMAC salts with shared secret! Skipping HMAC");
-            return;
+            // TODO: This is a bit of a weird one. Normally, we would just skip HMACs that
+            //       fail for whatever reason, so a Result<> was not necessary.
+            //       But with the PRF-extension, the spec tells us explicitly to return
+            //       certain DOMErrors, which are handled above by `return Err(..)`.
+            //       In this stage, I think it's still ok to soft-error out. The result will
+            //       lack the HMAC-results, and the repackaging from CTAP2 to webauthn can then
+            //       error out accordingly.
+            return Ok(());
         };
 
         let salt_auth = ByteBuf::from(uv_proto.authenticate(&auth_data.shared_secret, &salt_enc));
@@ -215,7 +243,78 @@ impl Ctap2GetAssertionRequestExtensions {
             salt_enc,
             salt_auth,
             pin_auth_proto: Some(auth_data.protocol_version as u32),
-        })
+        });
+        Ok(())
+    }
+
+    fn prf_to_hmac_input(
+        eval: &Option<PRFValue>,
+        eval_by_credential: &HashMap<String, PRFValue>,
+        allow_list: &[Ctap2PublicKeyCredentialDescriptor],
+    ) -> Result<Option<HMACGetSecretInput>, Error> {
+        // https://w3c.github.io/webauthn/#prf
+        //
+        // 1. If evalByCredential is not empty but allowCredentials is empty, return a DOMException whose name is “NotSupportedError”.
+        if !eval_by_credential.is_empty() && allow_list.is_empty() {
+            return Err(Error::Platform(PlatformError::NotSupported));
+        }
+
+        // 4.0 Let ev be null, and try to find any applicable PRF input(s):
+        let mut ev = None;
+        for (enc_cred_id, prf_value) in eval_by_credential {
+            // 2. If any key in evalByCredential is the empty string, or is not a valid base64url encoding, or does not equal the id of some element of allowCredentials after performing base64url decoding, then return a DOMException whose name is “SyntaxError”.
+            if enc_cred_id.is_empty() {
+                return Err(Error::Platform(PlatformError::SyntaxError));
+            }
+            let cred_id = base64_url::decode(enc_cred_id)
+                .map_err(|_| Error::Platform(PlatformError::SyntaxError))?;
+
+            // 4.1 If evalByCredential is present and contains an entry whose key is the base64url encoding of the credential ID that will be returned, let ev be the value of that entry.
+            let found_cred_id = allow_list.iter().find(|x| x.id == cred_id);
+            if found_cred_id.is_some() {
+                ev = Some(prf_value);
+                break;
+            }
+        }
+
+        //  4.2 If ev is null and eval is present, then let ev be the value of eval.
+        if ev.is_none() {
+            ev = eval.as_ref();
+        }
+
+        // 5. If ev is not null:
+        if let Some(ev) = ev {
+            // SHA-256(UTF8Encode("WebAuthn PRF") || 0x00 || ev.first).
+            let mut prefix = String::from("WebAuthn PRF").into_bytes();
+            prefix.push(0x00);
+
+            let mut input = HMACGetSecretInput::default();
+            // 5.1 Let salt1 be the value of SHA-256(UTF8Encode("WebAuthn PRF") || 0x00 || ev.first).
+            let mut salt1_input = prefix.clone();
+            salt1_input.extend(ev.first);
+
+            let mut hasher = Sha256::default();
+            hasher.update(salt1_input);
+            let salt1_hash = hasher.finalize().to_vec();
+            input.salt1.copy_from_slice(&salt1_hash[..32]);
+
+            // 5.2 If ev.second is present, let salt2 be the value of SHA-256(UTF8Encode("WebAuthn PRF") || 0x00 || ev.second).
+            if let Some(second) = ev.second {
+                let mut salt2_input = prefix.clone();
+                salt2_input.extend(second);
+                let mut hasher = Sha256::default();
+                hasher.update(salt2_input);
+                let salt2_hash = hasher.finalize().to_vec();
+                let mut salt2 = [0u8; 32];
+                salt2.copy_from_slice(&salt2_hash[..32]);
+                input.salt2 = Some(salt2);
+            };
+
+            Ok(Some(input))
+        } else {
+            // We don't have a usable PRF, so we don't do any HMAC
+            Ok(None)
+        }
     }
 }
 
@@ -269,7 +368,7 @@ impl Ctap2UserVerifiableRequest for Ctap2GetAssertionRequest {
     fn ensure_uv_set(&mut self) {
         self.options = Some(Ctap2GetAssertionOptions {
             require_user_verification: true,
-            ..self.options.unwrap_or(Ctap2GetAssertionOptions::default())
+            ..self.options.unwrap_or_default()
         });
     }
 
@@ -288,7 +387,7 @@ impl Ctap2UserVerifiableRequest for Ctap2GetAssertionRequest {
     }
 
     fn permissions(&self) -> Ctap2AuthTokenPermissionRole {
-        return Ctap2AuthTokenPermissionRole::GET_ASSERTION;
+        Ctap2AuthTokenPermissionRole::GET_ASSERTION
     }
 
     fn permissions_rpid(&self) -> Option<&str> {
@@ -305,7 +404,11 @@ impl Ctap2UserVerifiableRequest for Ctap2GetAssertionRequest {
 }
 
 impl Ctap2GetAssertionResponse {
-    pub fn into_assertion_output(self, auth_data: Option<&AuthTokenData>) -> Assertion {
+    pub fn into_assertion_output(
+        self,
+        request: &GetAssertionRequest,
+        auth_data: Option<&AuthTokenData>,
+    ) -> Assertion {
         let authenticator_data = AuthenticatorData::<GetAssertionResponseExtensions> {
             rp_id_hash: self.authenticator_data.rp_id_hash,
             flags: self.authenticator_data.flags,
@@ -314,7 +417,7 @@ impl Ctap2GetAssertionResponse {
             extensions: self
                 .authenticator_data
                 .extensions
-                .map(|x| x.into_output(auth_data)),
+                .map(|x| x.into_output(request, auth_data)),
         };
         Assertion {
             credential_id: self.credential_id,
@@ -350,18 +453,44 @@ pub struct Ctap2GetAssertionResponseExtensions {
 impl Ctap2GetAssertionResponseExtensions {
     pub(crate) fn into_output(
         self,
+        request: &GetAssertionRequest,
         auth_data: Option<&AuthTokenData>,
     ) -> GetAssertionResponseExtensions {
-        GetAssertionResponseExtensions {
-            cred_blob: self.cred_blob,
-            hmac_secret: self.hmac_secret.and_then(|x| {
+        let hmac_or_prf = if let Some(orig_ext) = &request.extensions {
+            // Decrypt the raw HMAC extension
+            let decrypted_hmac = self.hmac_secret.and_then(|x| {
                 if let Some(auth_data) = auth_data {
                     let uv_proto = auth_data.protocol_version.create_protocol_object();
                     x.decrypt_output(&auth_data.shared_secret, &uv_proto)
                 } else {
                     None
                 }
-            }),
+            });
+            if let Some(decrypted) = decrypted_hmac {
+                // Repackaging it into output
+                match &orig_ext.hmac_or_prf {
+                    GetAssertionHmacOrPrfInput::None => GetAssertionHmacOrPrfOutput::None,
+                    GetAssertionHmacOrPrfInput::HmacGetSecret(..) => {
+                        GetAssertionHmacOrPrfOutput::HmacGetSecret(decrypted)
+                    }
+                    GetAssertionHmacOrPrfInput::Prf { .. } => GetAssertionHmacOrPrfOutput::Prf {
+                        enabled: true,
+                        result: PRFValue {
+                            first: decrypted.output1,
+                            second: decrypted.output2,
+                        },
+                    },
+                }
+            } else {
+                GetAssertionHmacOrPrfOutput::None
+            }
+        } else {
+            GetAssertionHmacOrPrfOutput::None
+        };
+
+        GetAssertionResponseExtensions {
+            cred_blob: self.cred_blob,
+            hmac_or_prf,
         }
     }
 }

@@ -6,7 +6,8 @@ use super::{
 use crate::{
     fido::AuthenticatorData,
     ops::webauthn::{
-        MakeCredentialRequest, MakeCredentialResponse, MakeCredentialsRequestExtensions,
+        MakeCredentialHmacOrPrfInput, MakeCredentialHmacOrPrfOutput, MakeCredentialRequest,
+        MakeCredentialResponse, MakeCredentialsRequestExtensions,
         MakeCredentialsResponseExtensions,
     },
     pin::PinUvAuthProtocol,
@@ -152,9 +153,15 @@ impl Ctap2MakeCredentialsRequestExtensions {
 
 impl From<MakeCredentialsRequestExtensions> for Ctap2MakeCredentialsRequestExtensions {
     fn from(other: MakeCredentialsRequestExtensions) -> Self {
+        let hmac_secret = match other.hmac_or_prf {
+            MakeCredentialHmacOrPrfInput::None => None,
+            MakeCredentialHmacOrPrfInput::HmacGetSecret | MakeCredentialHmacOrPrfInput::Prf => {
+                Some(true)
+            }
+        };
         Ctap2MakeCredentialsRequestExtensions {
             cred_blob: other.cred_blob,
-            hmac_secret: other.hmac_secret,
+            hmac_secret,
             cred_protect: other.cred_protect,
             large_blob_key: other.large_blob_key,
             min_pin_length: other.min_pin_length,
@@ -182,6 +189,7 @@ pub struct Ctap2MakeCredentialResponse {
 impl Ctap2MakeCredentialResponse {
     pub fn into_make_credential_output(
         self,
+        request: &MakeCredentialRequest,
         auth_data: Option<&AuthTokenData>,
     ) -> MakeCredentialResponse {
         let authenticator_data = AuthenticatorData::<MakeCredentialsResponseExtensions> {
@@ -192,7 +200,7 @@ impl Ctap2MakeCredentialResponse {
             extensions: self
                 .authenticator_data
                 .extensions
-                .map(|x| x.into_output(auth_data)),
+                .map(|x| x.into_output(request, auth_data)),
         };
         MakeCredentialResponse {
             format: self.format,
@@ -272,13 +280,29 @@ pub struct Ctap2MakeCredentialsResponseExtensions {
 impl Ctap2MakeCredentialsResponseExtensions {
     pub fn into_output(
         self,
+        request: &MakeCredentialRequest,
         _auth_data: Option<&AuthTokenData>,
     ) -> MakeCredentialsResponseExtensions {
+        let hmac_or_prf = if let Some(incoming_ext) = &request.extensions {
+            match &incoming_ext.hmac_or_prf {
+                MakeCredentialHmacOrPrfInput::None => MakeCredentialHmacOrPrfOutput::None,
+                MakeCredentialHmacOrPrfInput::HmacGetSecret => {
+                    MakeCredentialHmacOrPrfOutput::HmacGetSecret(
+                        self.hmac_secret.unwrap_or_default(),
+                    )
+                }
+                MakeCredentialHmacOrPrfInput::Prf => MakeCredentialHmacOrPrfOutput::Prf {
+                    enabled: self.hmac_secret.unwrap_or_default(),
+                },
+            }
+        } else {
+            MakeCredentialHmacOrPrfOutput::None
+        };
         MakeCredentialsResponseExtensions {
             cred_protect: self.cred_protect,
             cred_blob: self.cred_blob,
             min_pin_length: self.min_pin_length,
-            hmac_secret: self.hmac_secret,
+            hmac_or_prf,
         }
     }
 }
