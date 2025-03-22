@@ -48,7 +48,9 @@ impl Connection {
         }
 
         let mut cursor = IOCursor::new(max_fragment_length);
-        let max_fragment_size = cursor.read_u16::<BigEndian>().unwrap() as usize;
+        let max_fragment_size = cursor
+            .read_u16::<BigEndian>()
+            .map_err(|_| Error::OperationFailed)? as usize;
         Ok(max_fragment_size)
     }
 
