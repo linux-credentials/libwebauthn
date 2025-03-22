@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use tokio::sync::mpsc;
-use tokio::task;
+use tokio::{task, time};
 use tracing::error;
 
 use crate::proto::{
@@ -76,18 +76,23 @@ impl<'d> Channel for CableChannel<'d> {
         Err(Error::Transport(TransportError::TransportUnavailable))
     }
 
-    async fn cbor_send(&mut self, request: &CborRequest, _timeout: Duration) -> Result<(), Error> {
-        self.cbor_sender
-            .send(request.clone())
-            .await
-            .or(Err(Error::Transport(TransportError::TransportUnavailable)))
+    async fn cbor_send(&mut self, request: &CborRequest, timeout: Duration) -> Result<(), Error> {
+        match time::timeout(timeout, self.cbor_sender.send(request.clone())).await {
+            Ok(Ok(_)) => Ok(()),
+            Ok(Err(error)) => {
+                error!(%error, "CBOR request send failure");
+                Err(Error::Transport(TransportError::TransportUnavailable))
+            }
+            Err(_) => Err(Error::Transport(TransportError::Timeout)),
+        }
     }
 
-    async fn cbor_recv(&mut self, _timeout: Duration) -> Result<CborResponse, Error> {
-        self.cbor_receiver
-            .recv()
-            .await
-            .ok_or(Error::Transport(TransportError::TransportUnavailable))
+    async fn cbor_recv(&mut self, timeout: Duration) -> Result<CborResponse, Error> {
+        match time::timeout(timeout, self.cbor_receiver.recv()).await {
+            Ok(Some(response)) => Ok(response),
+            Ok(None) => Err(Error::Transport(TransportError::TransportUnavailable)),
+            Err(_) => Err(Error::Transport(TransportError::Timeout)),
+        }
     }
 
     fn get_state_sender(&self) -> &mpsc::Sender<UxUpdate> {
