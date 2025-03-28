@@ -7,6 +7,8 @@ pub enum PlatformError {
     PinNotSupported,
     NoUvAvailable,
     InvalidDeviceResponse,
+    NotSupported,
+    SyntaxError,
 }
 
 impl std::error::Error for PlatformError {}

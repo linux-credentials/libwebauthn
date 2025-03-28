@@ -122,7 +122,7 @@ where
         op: &MakeCredentialRequest,
     ) -> Result<MakeCredentialResponse, Error> {
         let mut ctap2_request: Ctap2MakeCredentialRequest = op.into();
-        loop {
+        let response = loop {
             let uv_auth_used =
                 user_verification(self, op.user_verification, &mut ctap2_request, op.timeout)
                     .await?;
@@ -138,7 +138,9 @@ where
                 uv_auth_used,
                 op.timeout
             )
-        }
+        }?;
+        let make_cred = response.into_make_credential_output(op, self.get_auth_data());
+        Ok(make_cred)
     }
 
     async fn _webauthn_make_credential_u2f(
@@ -183,7 +185,7 @@ where
             }
             if let Some(auth_data) = self.get_auth_data() {
                 if let Some(e) = ctap2_request.extensions.as_mut() {
-                    e.calculate_hmac(auth_data)
+                    e.calculate_hmac(&op.allow, auth_data)?;
                 }
             }
 
@@ -195,12 +197,12 @@ where
             )
         }?;
         let count = response.credentials_count.unwrap_or(1);
-        let mut assertions = vec![response.into_assertion_output(self.get_auth_data())];
+        let mut assertions = vec![response.into_assertion_output(op, self.get_auth_data())];
         for i in 1..count {
             debug!({ i }, "Fetching additional credential");
             // GetNextAssertion doesn't use PinUVAuthToken, so we don't need to check uv_auth_used here
             let response = self.ctap2_get_next_assertion(op.timeout).await?;
-            assertions.push(response.into_assertion_output(self.get_auth_data()));
+            assertions.push(response.into_assertion_output(op, self.get_auth_data()));
         }
         Ok(assertions.as_slice().into())
     }
