@@ -1,7 +1,8 @@
 use super::{
     Ctap2AttestationStatement, Ctap2AuthTokenPermissionRole, Ctap2CredentialType,
-    Ctap2GetInfoResponse, Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialRpEntity,
-    Ctap2PublicKeyCredentialUserEntity, Ctap2UserVerifiableRequest,
+    Ctap2GetInfoResponse, Ctap2PinUvAuthProtocol, Ctap2PublicKeyCredentialDescriptor,
+    Ctap2PublicKeyCredentialRpEntity, Ctap2PublicKeyCredentialUserEntity,
+    Ctap2UserVerifiableRequest,
 };
 use crate::{
     fido::AuthenticatorData,
@@ -20,7 +21,7 @@ use serde_cbor::Value;
 use serde_indexed::{DeserializeIndexed, SerializeIndexed};
 use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Default, Clone, Copy, Serialize)]
 pub struct Ctap2MakeCredentialOptions {
     #[serde(rename = "rk")]
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -29,15 +30,6 @@ pub struct Ctap2MakeCredentialOptions {
     #[serde(rename = "uv")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deprecated_require_user_verification: Option<bool>,
-}
-
-impl Default for Ctap2MakeCredentialOptions {
-    fn default() -> Self {
-        Self {
-            require_resident_key: None,
-            deprecated_require_user_verification: None,
-        }
-    }
 }
 
 impl Ctap2MakeCredentialOptions {
@@ -88,6 +80,25 @@ pub struct Ctap2MakeCredentialRequest {
 }
 
 impl Ctap2MakeCredentialRequest {
+    /// Function that forces a touch
+    /// https://fidoalliance.org/specs/fido-v2.1-ps-20210615/fido-client-to-authenticator-protocol-v2.1-ps-20210615.html#sctn-makeCred-authnr-alg
+    /// 1. If authenticator supports either pinUvAuthToken or clientPin features and the platform sends a zero length pinUvAuthParam:
+    ///  1. Request evidence of user interaction in an authenticator-specific way (e.g., flash the LED light).
+    pub(crate) fn dummy() -> Self {
+        Self {
+            hash: ByteBuf::from(vec![0; 32]),
+            relying_party: Ctap2PublicKeyCredentialRpEntity::dummy(),
+            user: Ctap2PublicKeyCredentialUserEntity::dummy(),
+            algorithms: vec![Ctap2CredentialType::default()],
+            exclude: None,
+            extensions: None,
+            options: None,
+            pin_auth_param: Some(ByteBuf::from(Vec::new())),
+            pin_auth_proto: Some(Ctap2PinUvAuthProtocol::One as u32),
+            enterprise_attestation: None,
+        }
+    }
+
     pub fn skip_serializing_options(options: &Option<Ctap2MakeCredentialOptions>) -> bool {
         options.map_or(true, |options| options.skip_serializing())
     }

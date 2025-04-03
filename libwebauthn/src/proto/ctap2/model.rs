@@ -28,8 +28,8 @@ pub use make_credential::{
 };
 mod get_assertion;
 pub use get_assertion::{
-    Ctap2AttestationStatement, Ctap2GetAssertionRequest, Ctap2GetAssertionResponse,
-    FidoU2fAttestationStmt,
+    Ctap2AttestationStatement, Ctap2GetAssertionOptions, Ctap2GetAssertionRequest,
+    Ctap2GetAssertionResponse, FidoU2fAttestationStmt,
 };
 mod credential_management;
 pub use credential_management::{
@@ -61,7 +61,6 @@ pub struct Ctap2PublicKeyCredentialRpEntity {
 }
 
 impl Ctap2PublicKeyCredentialRpEntity {
-    #[cfg(test)]
     pub fn dummy() -> Self {
         Self {
             id: String::from(".dummy"),
@@ -93,7 +92,6 @@ pub struct Ctap2PublicKeyCredentialUserEntity {
 }
 
 impl Ctap2PublicKeyCredentialUserEntity {
-    #[cfg(test)]
     pub fn dummy() -> Self {
         Self {
             id: ByteBuf::from([1]),
