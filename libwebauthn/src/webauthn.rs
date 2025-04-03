@@ -15,6 +15,7 @@ use crate::pin::{
     pin_hash, PinRequestReason, PinUvAuthProtocol, PinUvAuthProtocolOne, PinUvAuthProtocolTwo,
 };
 use crate::proto::ctap1::Ctap1;
+use crate::proto::ctap2::preflight::ctap2_preflight;
 use crate::proto::ctap2::{
     Ctap2, Ctap2ClientPinRequest, Ctap2GetAssertionRequest, Ctap2GetInfoResponse,
     Ctap2MakeCredentialRequest, Ctap2PinUvAuthProtocol, Ctap2UserVerifiableRequest,
@@ -122,6 +123,11 @@ where
         op: &MakeCredentialRequest,
     ) -> Result<MakeCredentialResponse, Error> {
         let mut ctap2_request: Ctap2MakeCredentialRequest = op.into();
+        if let Some(exclude_list) = &op.exclude {
+            let filtered_exclude_list =
+                ctap2_preflight(self, exclude_list, &op.hash, &op.relying_party.id).await;
+            ctap2_request.exclude = Some(filtered_exclude_list);
+        }
         let response = loop {
             let uv_auth_used =
                 user_verification(self, op.user_verification, &mut ctap2_request, op.timeout)
@@ -173,6 +179,21 @@ where
         op: &GetAssertionRequest,
     ) -> Result<GetAssertionResponse, Error> {
         let mut ctap2_request: Ctap2GetAssertionRequest = op.into();
+        let filtered_allow_list =
+            ctap2_preflight(self, &op.allow, &op.hash, &op.relying_party_id).await;
+        if filtered_allow_list.is_empty() && !op.allow.is_empty() {
+            // We filtered out everything in preflight, meaning none of the allowed
+            // credentials are present on this device. So we error out here
+            // But the spec requires some form of user interaction, so we run a
+            // dummy request, ignore the result and error out.
+            warn!("Preflight removed all credentials from the allow-list. Sending dummy request and erroring out.");
+            let dummy_request = Ctap2MakeCredentialRequest::dummy();
+            self.send_state_update(UxUpdate::PresenceRequired).await;
+            let _ = self.ctap2_make_credential(&dummy_request, op.timeout).await;
+            return Err(Error::Ctap(CtapError::NoCredentials));
+        }
+
+        ctap2_request.allow = filtered_allow_list;
         let response = loop {
             let uv_auth_used =
                 user_verification(self, op.user_verification, &mut ctap2_request, op.timeout)
