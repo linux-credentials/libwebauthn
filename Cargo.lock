@@ -1322,6 +1322,57 @@ dependencies = [
 ]
 
 [[package]]
+name = "libwebauthn"
+version = "0.1.2"
+dependencies = [
+ "aes",
+ "async-trait",
+ "base64-url",
+ "bitflags 2.6.0",
+ "btleplug",
+ "byteorder",
+ "cbc",
+ "cosey",
+ "ctap-types",
+ "curve25519-dalek",
+ "dbus",
+ "futures 0.3.31",
+ "heapless",
+ "hex",
+ "hidapi",
+ "hkdf",
+ "hmac",
+ "maplit",
+ "mockall",
+ "num-derive",
+ "num-traits",
+ "num_enum",
+ "p256",
+ "qrcode",
+ "rand",
+ "serde",
+ "serde-indexed",
+ "serde_bytes",
+ "serde_cbor",
+ "serde_derive",
+ "serde_repr",
+ "sha2",
+ "snow",
+ "solo",
+ "text_io",
+ "time",
+ "tokio",
+ "tokio-stream",
+ "tokio-tungstenite",
+ "tracing",
+ "tracing-futures",
+ "tracing-subscriber",
+ "tungstenite",
+ "uuid",
+ "x509-parser",
+]
+
+[[package]]
 name = "litemap"
 version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3026,57 +3077,6 @@ dependencies = [
  "rusticata-macros",
  "thiserror 1.0.69",
  "time",
-]
-
-[[package]]
-name = "xdg-credentials-portal"
-version = "0.1.1"
-dependencies = [
- "aes",
- "async-trait",
- "base64-url",
- "bitflags 2.6.0",
- "btleplug",
- "byteorder",
- "cbc",
- "cosey",
- "ctap-types",
- "curve25519-dalek",
- "dbus",
- "futures 0.3.31",
- "heapless",
- "hex",
- "hidapi",
- "hkdf",
- "hmac",
- "maplit",
- "mockall",
- "num-derive",
- "num-traits",
- "num_enum",
- "p256",
- "qrcode",
- "rand",
- "serde",
- "serde-indexed",
- "serde_bytes",
- "serde_cbor",
- "serde_derive",
- "serde_repr",
- "sha2",
- "snow",
- "solo",
- "text_io",
- "time",
- "tokio",
- "tokio-stream",
- "tokio-tungstenite",
- "tracing",
- "tracing-futures",
- "tracing-subscriber",
- "tungstenite",
- "uuid",
- "x509-parser",
 ]
 
 [[package]]

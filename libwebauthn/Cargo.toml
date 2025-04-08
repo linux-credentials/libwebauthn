@@ -1,8 +1,12 @@
 [package]
-name = "xdg-credentials-portal"
-version = "0.1.1"
+name = "libwebauthn"
+description = "FIDO2 (WebAuthn) and FIDO U2F platform library for Linux written in Rust "
+version = "0.1.2"
 authors = ["Alfie Fresta <alfie.fresta@gmail.com>"]
 edition = "2021"
+license-file = "../COPYING"
+homepage = "https://github.com/linux-credentials"
+repository = "https://github.com/linux-credentials/libwebauthn"
 
 [lib]
 name = "libwebauthn"
@@ -12,7 +16,6 @@ path = "src/lib.rs"
 default = []
 hid-device-tests = ["virtual-hid-device"]
 virtual-hid-device = ["solo"]
-
 
 [dependencies]
 base64-url = "2.0.0"
