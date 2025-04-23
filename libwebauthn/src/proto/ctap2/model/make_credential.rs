@@ -7,14 +7,16 @@ use super::{
 use crate::{
     fido::AuthenticatorData,
     ops::webauthn::{
-        MakeCredentialHmacOrPrfInput, MakeCredentialHmacOrPrfOutput, MakeCredentialRequest,
-        MakeCredentialResponse, MakeCredentialsRequestExtensions,
+        CredentialProtectionPolicy, MakeCredentialHmacOrPrfInput, MakeCredentialHmacOrPrfOutput,
+        MakeCredentialRequest, MakeCredentialResponse, MakeCredentialsRequestExtensions,
         MakeCredentialsResponseExtensions,
     },
     pin::PinUvAuthProtocol,
+    proto::CtapError,
     transport::AuthTokenData,
+    webauthn::Error,
 };
-use ctap_types::ctap2::credential_management::CredentialProtectionPolicy;
+use ctap_types::ctap2::credential_management::CredentialProtectionPolicy as Ctap2CredentialProtectionPolicy;
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 use serde_cbor::Value;
@@ -110,6 +112,34 @@ impl Ctap2MakeCredentialRequest {
             .as_ref()
             .map_or(true, |extensions| extensions.skip_serializing())
     }
+
+    pub(crate) fn from_webauthn_request(
+        req: &MakeCredentialRequest,
+        info: &Ctap2GetInfoResponse,
+    ) -> Result<Self, Error> {
+        // Checking if extensions can be fulfilled
+        //
+        // CredProtection
+        // https://fidoalliance.org/specs/fido-v2.1-ps-20210615/fido-client-to-authenticator-protocol-v2.1-ps-20210615.html#credProtectFeatureDetection
+        // When enforceCredentialProtectionPolicy is true, and credentialProtectionPolicy's value
+        // is either userVerificationOptionalWithCredentialIDList or userVerificationRequired,
+        // the platform SHOULD NOT create the credential in a way that does not implement the
+        // requested protection policy. (For example, by creating it on an authenticator that
+        // does not support this extension.)
+        if let Some(cred_protection) = req
+            .extensions
+            .as_ref()
+            .and_then(|x| x.cred_protect.as_ref())
+        {
+            if cred_protection.enforce_policy
+                && cred_protection.policy != CredentialProtectionPolicy::UserVerificationOptional
+                && !info.is_uv_protected()
+            {
+                return Err(Error::Ctap(CtapError::UnsupportedExtension));
+            }
+        }
+        Ok(req.into())
+    }
 }
 
 impl From<&MakeCredentialRequest> for Ctap2MakeCredentialRequest {
@@ -140,7 +170,7 @@ impl From<&MakeCredentialRequest> for Ctap2MakeCredentialRequest {
 #[serde(rename_all = "camelCase")]
 pub struct Ctap2MakeCredentialsRequestExtensions {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub cred_protect: Option<CredentialProtectionPolicy>,
+    pub cred_protect: Option<Ctap2CredentialProtectionPolicy>,
     #[serde(skip_serializing_if = "Option::is_none", with = "serde_bytes")]
     pub cred_blob: Option<Vec<u8>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -173,7 +203,7 @@ impl From<MakeCredentialsRequestExtensions> for Ctap2MakeCredentialsRequestExten
         Ctap2MakeCredentialsRequestExtensions {
             cred_blob: other.cred_blob,
             hmac_secret,
-            cred_protect: other.cred_protect,
+            cred_protect: other.cred_protect.map(|x| x.policy.into()),
             large_blob_key: other.large_blob_key,
             min_pin_length: other.min_pin_length,
         }
@@ -268,7 +298,7 @@ impl Ctap2UserVerifiableRequest for Ctap2MakeCredentialRequest {
 #[serde(rename_all = "camelCase")]
 pub struct Ctap2MakeCredentialsResponseExtensions {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cred_protect: Option<CredentialProtectionPolicy>,
+    pub cred_protect: Option<Ctap2CredentialProtectionPolicy>,
     // If storing credBlob was successful
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cred_blob: Option<bool>,
@@ -310,7 +340,7 @@ impl Ctap2MakeCredentialsResponseExtensions {
             MakeCredentialHmacOrPrfOutput::None
         };
         MakeCredentialsResponseExtensions {
-            cred_protect: self.cred_protect,
+            cred_protect: self.cred_protect.map(|x| x.into()),
             cred_blob: self.cred_blob,
             min_pin_length: self.min_pin_length,
             hmac_or_prf,
