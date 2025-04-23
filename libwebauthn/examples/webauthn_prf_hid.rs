@@ -85,12 +85,8 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
     let challenge: [u8; 32] = thread_rng().gen();
 
     let extensions = MakeCredentialsRequestExtensions {
-        cred_protect: None,
-        cred_blob: None,
-        large_blob_key: None,
-        min_pin_length: None,
         hmac_or_prf: MakeCredentialHmacOrPrfInput::Prf,
-        cred_props: None,
+        ..Default::default()
     };
 
     for mut device in devices {
@@ -430,8 +426,8 @@ async fn run_success_test(
         allow: vec![credential.clone()],
         user_verification: UserVerificationRequirement::Discouraged,
         extensions: Some(GetAssertionRequestExtensions {
-            cred_blob: None,
             hmac_or_prf,
+            ..Default::default()
         }),
         timeout: TIMEOUT,
     };
@@ -472,8 +468,8 @@ async fn run_failed_test(
         allow: credential.map(|x| vec![x.clone()]).unwrap_or_default(),
         user_verification: UserVerificationRequirement::Discouraged,
         extensions: Some(GetAssertionRequestExtensions {
-            cred_blob: None,
             hmac_or_prf,
+            ..Default::default()
         }),
         timeout: TIMEOUT,
     };

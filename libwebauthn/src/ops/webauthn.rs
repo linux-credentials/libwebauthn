@@ -159,12 +159,21 @@ impl From<Ctap2CredentialProtectionPolicy> for CredentialProtectionPolicy {
     }
 }
 
+#[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum MakeCredentialLargeBlobExtension {
+    #[default]
+    None,
+    Preferred,
+    Required,
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct MakeCredentialsRequestExtensions {
     pub cred_props: Option<bool>,
     pub cred_protect: Option<CredentialProtectionExtension>,
     pub cred_blob: Option<Vec<u8>>,
-    pub large_blob_key: Option<bool>,
+    pub large_blob: MakeCredentialLargeBlobExtension,
     pub min_pin_length: Option<bool>,
     pub hmac_or_prf: MakeCredentialHmacOrPrfInput,
 }
@@ -240,10 +249,20 @@ pub struct HMACGetSecretInput {
     pub salt2: Option<[u8; 32]>,
 }
 
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub enum GetAssertionLargeBlobExtension {
+    #[default]
+    None,
+    Read,
+    // Not yet supported
+    // Write(Vec<u8>),
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct GetAssertionRequestExtensions {
     pub cred_blob: Option<bool>,
     pub hmac_or_prf: GetAssertionHmacOrPrfInput,
+    pub large_blob: GetAssertionLargeBlobExtension,
 }
 
 #[derive(Clone, Debug, Default)]

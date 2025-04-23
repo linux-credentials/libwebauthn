@@ -154,8 +154,8 @@ async fn run_success_test(
         allow: vec![credential.clone()],
         user_verification: UserVerificationRequirement::Preferred,
         extensions: Some(GetAssertionRequestExtensions {
-            cred_blob: None,
             hmac_or_prf,
+            ..Default::default()
         }),
         timeout: TIMEOUT,
     };

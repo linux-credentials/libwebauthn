@@ -8,8 +8,8 @@ use crate::{
     fido::AuthenticatorData,
     ops::webauthn::{
         CredentialProtectionPolicy, MakeCredentialHmacOrPrfInput, MakeCredentialHmacOrPrfOutput,
-        MakeCredentialRequest, MakeCredentialResponse, MakeCredentialsRequestExtensions,
-        MakeCredentialsResponseExtensions,
+        MakeCredentialLargeBlobExtension, MakeCredentialRequest, MakeCredentialResponse,
+        MakeCredentialsRequestExtensions, MakeCredentialsResponseExtensions,
     },
     pin::PinUvAuthProtocol,
     proto::CtapError,
@@ -116,6 +116,8 @@ impl Ctap2MakeCredentialRequest {
         req: &MakeCredentialRequest,
         info: &Ctap2GetInfoResponse,
     ) -> Result<Self, Error> {
+        // Cloning it, so we can modify it
+        let mut req = req.clone();
         // Checking if extensions can be fulfilled
         //
         // CredProtection
@@ -137,19 +139,38 @@ impl Ctap2MakeCredentialRequest {
                 return Err(Error::Ctap(CtapError::UnsupportedExtension));
             }
         }
-        Ok(req.into())
+
+        // LargeBlob (NOTE: Not to be confused with LargeBlobKey. LargeBlob has "Preferred" as well)
+        // https://developer.mozilla.org/en-US/docs/Web/API/Web_Authentication_API/WebAuthn_extensions#largeblob
+        //
+        // "required": The credential will be created with an authenticator to store blobs. The create() call will fail if this is impossible.
+        if let Some(ext) = req.extensions.as_mut() {
+            if ext.large_blob == MakeCredentialLargeBlobExtension::Required
+                && !info.option_enabled("largeBlobs")
+            {
+                return Err(Error::Ctap(CtapError::UnsupportedExtension));
+            }
+            if !info.option_enabled("largeBlobs")
+                && ext.large_blob == MakeCredentialLargeBlobExtension::Preferred
+            {
+                // If it is preferred and the device does not support it, deactivate it.
+                // Then we can simply activate it later for all but None
+                ext.large_blob = MakeCredentialLargeBlobExtension::None;
+            }
+        }
+        Ok(Ctap2MakeCredentialRequest::from(req))
     }
 }
 
-impl From<&MakeCredentialRequest> for Ctap2MakeCredentialRequest {
-    fn from(op: &MakeCredentialRequest) -> Ctap2MakeCredentialRequest {
+impl From<MakeCredentialRequest> for Ctap2MakeCredentialRequest {
+    fn from(op: MakeCredentialRequest) -> Ctap2MakeCredentialRequest {
         Ctap2MakeCredentialRequest {
-            hash: ByteBuf::from(op.hash.clone()),
-            relying_party: op.relying_party.clone(),
-            user: op.user.clone(),
-            algorithms: op.algorithms.clone(),
-            exclude: op.exclude.clone(),
-            extensions: op.extensions.as_ref().map(|x| x.clone().into()),
+            hash: ByteBuf::from(op.hash),
+            relying_party: op.relying_party,
+            user: op.user,
+            algorithms: op.algorithms,
+            exclude: op.exclude,
+            extensions: op.extensions.map(|x| x.into()),
             options: Some(Ctap2MakeCredentialOptions {
                 require_resident_key: if op.require_resident_key {
                     Some(true)
@@ -203,7 +224,13 @@ impl From<MakeCredentialsRequestExtensions> for Ctap2MakeCredentialsRequestExten
             cred_blob: other.cred_blob,
             hmac_secret,
             cred_protect: other.cred_protect.map(|x| x.policy.into()),
-            large_blob_key: other.large_blob_key,
+            large_blob_key: if other.large_blob == MakeCredentialLargeBlobExtension::None {
+                None
+            } else {
+                // We modified "Preferred" to "None" if the device does not support it,
+                // so we can be sure to request it here for all but "None"
+                Some(true)
+            },
             min_pin_length: other.min_pin_length,
         }
     }

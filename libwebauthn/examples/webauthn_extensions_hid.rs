@@ -12,8 +12,8 @@ use tracing_subscriber::{self, EnvFilter};
 use libwebauthn::ops::webauthn::{
     CredentialProtectionExtension, CredentialProtectionPolicy, GetAssertionHmacOrPrfInput,
     GetAssertionRequest, GetAssertionRequestExtensions, HMACGetSecretInput,
-    MakeCredentialHmacOrPrfInput, MakeCredentialRequest, MakeCredentialsRequestExtensions,
-    UserVerificationRequirement,
+    MakeCredentialHmacOrPrfInput, MakeCredentialLargeBlobExtension, MakeCredentialRequest,
+    MakeCredentialsRequestExtensions, UserVerificationRequirement,
 };
 use libwebauthn::pin::PinRequestReason;
 use libwebauthn::proto::ctap2::{
@@ -89,7 +89,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             enforce_policy: true,
         }),
         cred_blob: Some(r"My own little blob".into()),
-        large_blob_key: None,
+        large_blob: MakeCredentialLargeBlobExtension::None,
         min_pin_length: Some(true),
         hmac_or_prf: MakeCredentialHmacOrPrfInput::HmacGetSecret,
         cred_props: Some(true),
@@ -152,6 +152,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
                     salt1: [1; 32],
                     salt2: None,
                 }),
+                ..Default::default()
             }),
             timeout: TIMEOUT,
         };
