@@ -161,6 +161,7 @@ impl From<Ctap2CredentialProtectionPolicy> for CredentialProtectionPolicy {
 
 #[derive(Debug, Default, Clone)]
 pub struct MakeCredentialsRequestExtensions {
+    pub cred_props: Option<bool>,
     pub cred_protect: Option<CredentialProtectionExtension>,
     pub cred_blob: Option<Vec<u8>>,
     pub large_blob_key: Option<bool>,
@@ -176,6 +177,9 @@ pub struct MakeCredentialsResponseExtensions {
     /// Current min PIN lenght
     pub min_pin_length: Option<u32>,
     pub hmac_or_prf: MakeCredentialHmacOrPrfOutput,
+    // Currently, credProps only returns one value: rk = bool
+    // If these get more in the future, we can use a struct here.
+    pub cred_props_rk: Option<bool>,
 }
 
 impl MakeCredentialRequest {

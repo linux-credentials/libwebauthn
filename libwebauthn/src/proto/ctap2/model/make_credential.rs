@@ -13,7 +13,6 @@ use crate::{
     },
     pin::PinUvAuthProtocol,
     proto::CtapError,
-    transport::AuthTokenData,
     webauthn::Error,
 };
 use ctap_types::ctap2::credential_management::CredentialProtectionPolicy as Ctap2CredentialProtectionPolicy;
@@ -231,7 +230,7 @@ impl Ctap2MakeCredentialResponse {
     pub fn into_make_credential_output(
         self,
         request: &MakeCredentialRequest,
-        auth_data: Option<&AuthTokenData>,
+        info: Option<&Ctap2GetInfoResponse>,
     ) -> MakeCredentialResponse {
         let authenticator_data = AuthenticatorData::<MakeCredentialsResponseExtensions> {
             rp_id_hash: self.authenticator_data.rp_id_hash,
@@ -241,7 +240,7 @@ impl Ctap2MakeCredentialResponse {
             extensions: self
                 .authenticator_data
                 .extensions
-                .map(|x| x.into_output(request, auth_data)),
+                .map(|x| x.into_output(request, info)),
         };
         MakeCredentialResponse {
             format: self.format,
@@ -322,7 +321,7 @@ impl Ctap2MakeCredentialsResponseExtensions {
     pub fn into_output(
         self,
         request: &MakeCredentialRequest,
-        _auth_data: Option<&AuthTokenData>,
+        info: Option<&Ctap2GetInfoResponse>,
     ) -> MakeCredentialsResponseExtensions {
         let hmac_or_prf = if let Some(incoming_ext) = &request.extensions {
             match &incoming_ext.hmac_or_prf {
@@ -339,11 +338,39 @@ impl Ctap2MakeCredentialsResponseExtensions {
         } else {
             MakeCredentialHmacOrPrfOutput::None
         };
+
+        // credProps extension
+        // https://w3c.github.io/webauthn/#sctn-authenticator-credential-properties-extension
+        let cred_props_rk = match &request
+            .extensions
+            .as_ref()
+            .and_then(|x| x.cred_props.as_ref())
+        {
+            None | Some(false) => None, // Not requested, so we don't give an answer
+            Some(true) => {
+                // https://w3c.github.io/webauthn/#dom-credentialpropertiesoutput-rk
+                // Some authenticators create discoverable credentials even when not
+                // requested by the client platform. Because of this, client platforms may be
+                // forced to omit the rk property because they lack the assurance to be able
+                // to set it to false.
+                if info.map(|x| x.supports_fido_2_1()) == Some(true) {
+                    // https://fidoalliance.org/specs/fido-v2.1-ps-20210615/fido-client-to-authenticator-protocol-v2.1-ps-20210615.html#op-makecred-step-rk
+                    // if the "rk" option is false: the authenticator MUST create a non-discoverable credential.
+                    // Note: This step is a change from CTAP2.0 where if the "rk" option is false the authenticator could optionally create a discoverable credential.
+                    Some(request.require_resident_key)
+                } else {
+                    // For CTAP 2.0, we can't say if "rk" is true or not.
+                    None
+                }
+            }
+        };
+
         MakeCredentialsResponseExtensions {
             cred_protect: self.cred_protect.map(|x| x.into()),
             cred_blob: self.cred_blob,
             min_pin_length: self.min_pin_length,
             hmac_or_prf,
+            cred_props_rk,
         }
     }
 }

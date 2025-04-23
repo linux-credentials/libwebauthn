@@ -92,6 +92,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         large_blob_key: None,
         min_pin_length: Some(true),
         hmac_or_prf: MakeCredentialHmacOrPrfInput::HmacGetSecret,
+        cred_props: Some(true),
     };
 
     for mut device in devices {

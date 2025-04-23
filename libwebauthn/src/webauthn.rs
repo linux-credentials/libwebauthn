@@ -147,7 +147,7 @@ where
                 op.timeout
             )
         }?;
-        let make_cred = response.into_make_credential_output(op, self.get_auth_data());
+        let make_cred = response.into_make_credential_output(op, Some(&get_info_response));
         Ok(make_cred)
     }
 
