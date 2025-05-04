@@ -139,8 +139,8 @@ impl From<&Ctap1Transport> for Ctap2Transport {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Ctap2PublicKeyCredentialDescriptor {
-    pub r#type: Ctap2PublicKeyCredentialType,
     pub id: ByteBuf,
+    pub r#type: Ctap2PublicKeyCredentialType,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transports: Option<Vec<Ctap2Transport>>,
@@ -156,11 +156,11 @@ pub enum Ctap2COSEAlgorithmIdentifier {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct Ctap2CredentialType {
-    #[serde(rename = "type")]
-    pub public_key_type: Ctap2PublicKeyCredentialType,
-
     #[serde(rename = "alg")]
     pub algorithm: Ctap2COSEAlgorithmIdentifier,
+
+    #[serde(rename = "type")]
+    pub public_key_type: Ctap2PublicKeyCredentialType,
 }
 
 impl Default for Ctap2CredentialType {
@@ -204,4 +204,41 @@ pub enum Ctap2UserVerificationOperation {
     GetPinUvAuthTokenUsingPinWithPermissions,
     GetPinToken,
     None,
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::proto::ctap2::Ctap2PublicKeyCredentialDescriptor;
+
+    use super::{Ctap2CredentialType, Ctap2COSEAlgorithmIdentifier, Ctap2PublicKeyCredentialType};
+    use serde_bytes::ByteBuf;
+    use serde_cbor;
+    use hex;
+
+    #[test]
+    /// Verify CBOR serialization conforms to CTAP canonical standard, including ordering (see #95) 
+    pub fn credential_type_field_serialization() {
+        let credential_type = Ctap2CredentialType {
+            algorithm: Ctap2COSEAlgorithmIdentifier::ES256,
+            public_key_type: Ctap2PublicKeyCredentialType::PublicKey,
+        };
+        let serialized = serde_cbor::to_vec(&credential_type).unwrap();
+        // Known good, verified by hand with cbor.me playground
+        let expected = hex::decode("a263616c672664747970656a7075626c69632d6b6579").unwrap();
+        assert_eq!(serialized, expected);
+    }
+
+    #[test]
+    /// Verify CBOR serialization conforms to CTAP canonical standard, including ordering (see #95) 
+    pub fn credential_descriptor_serialization() {
+        let credential_descriptor = Ctap2PublicKeyCredentialDescriptor {
+            id: ByteBuf::from(vec![0x42]),
+            r#type: Ctap2PublicKeyCredentialType::PublicKey,
+            transports: None,
+        };
+        let serialized = serde_cbor::to_vec(&credential_descriptor).unwrap();
+        // Known good, verified by hand with cbor.me playground
+        let expected = hex::decode("a2626964414264747970656a7075626c69632d6b6579").unwrap();
+        assert_eq!(serialized, expected);
+    }
 }
