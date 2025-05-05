@@ -125,10 +125,12 @@ where
         let get_info_response = self.ctap2_get_info().await?;
         let mut ctap2_request =
             Ctap2MakeCredentialRequest::from_webauthn_request(op, &get_info_response)?;
-        if let Some(exclude_list) = &op.exclude {
-            let filtered_exclude_list =
-                ctap2_preflight(self, exclude_list, &op.hash, &op.relying_party.id).await;
-            ctap2_request.exclude = Some(filtered_exclude_list);
+        if Self::supports_preflight() {
+            if let Some(exclude_list) = &op.exclude {
+                let filtered_exclude_list =
+                    ctap2_preflight(self, exclude_list, &op.hash, &op.relying_party.id).await;
+                ctap2_request.exclude = Some(filtered_exclude_list);
+            }
         }
         let response = loop {
             let uv_auth_used =
@@ -183,21 +185,24 @@ where
         let get_info_response = self.ctap2_get_info().await?;
         let mut ctap2_request =
             Ctap2GetAssertionRequest::from_webauthn_request(op, &get_info_response)?;
-        let filtered_allow_list =
-            ctap2_preflight(self, &op.allow, &op.hash, &op.relying_party_id).await;
-        if filtered_allow_list.is_empty() && !op.allow.is_empty() {
-            // We filtered out everything in preflight, meaning none of the allowed
-            // credentials are present on this device. So we error out here
-            // But the spec requires some form of user interaction, so we run a
-            // dummy request, ignore the result and error out.
-            warn!("Preflight removed all credentials from the allow-list. Sending dummy request and erroring out.");
-            let dummy_request = Ctap2MakeCredentialRequest::dummy();
-            self.send_state_update(UxUpdate::PresenceRequired).await;
-            let _ = self.ctap2_make_credential(&dummy_request, op.timeout).await;
-            return Err(Error::Ctap(CtapError::NoCredentials));
+
+        if Self::supports_preflight() {
+            let filtered_allow_list =
+                ctap2_preflight(self, &op.allow, &op.hash, &op.relying_party_id).await;
+            if filtered_allow_list.is_empty() && !op.allow.is_empty() {
+                // We filtered out everything in preflight, meaning none of the allowed
+                // credentials are present on this device. So we error out here
+                // But the spec requires some form of user interaction, so we run a
+                // dummy request, ignore the result and error out.
+                warn!("Preflight removed all credentials from the allow-list. Sending dummy request and erroring out.");
+                let dummy_request = Ctap2MakeCredentialRequest::dummy();
+                self.send_state_update(UxUpdate::PresenceRequired).await;
+                let _ = self.ctap2_make_credential(&dummy_request, op.timeout).await;
+                return Err(Error::Ctap(CtapError::NoCredentials));
+            }
+            ctap2_request.allow = filtered_allow_list;
         }
 
-        ctap2_request.allow = filtered_allow_list;
         let response = loop {
             let uv_auth_used =
                 user_verification(self, op.user_verification, &mut ctap2_request, op.timeout)

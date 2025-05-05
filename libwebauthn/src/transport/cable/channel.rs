@@ -104,6 +104,11 @@ impl<'d> Channel for CableChannel<'d> {
     fn get_state_sender(&self) -> &mpsc::Sender<UxUpdate> {
         &self.tx
     }
+
+    fn supports_preflight() -> bool {
+        // Disable pre-flight requests, as hybrid transport authenticators do not support silent requests.
+        false
+    }
 }
 
 impl<'d> Ctap2AuthTokenStore for CableChannel<'d> {

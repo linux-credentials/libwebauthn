@@ -47,6 +47,11 @@ pub trait Channel: Send + Sync + Display + Ctap2AuthTokenStore {
 
     async fn cbor_send(&mut self, request: &CborRequest, timeout: Duration) -> Result<(), Error>;
     async fn cbor_recv(&mut self, timeout: Duration) -> Result<CborResponse, Error>;
+
+    /// Allows channels to disable support for pre-flight requests
+    fn supports_preflight() -> bool {
+        true
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
