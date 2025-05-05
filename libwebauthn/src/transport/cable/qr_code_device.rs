@@ -1,7 +1,9 @@
 use std::fmt::{Debug, Display};
-use std::time::{Duration, SystemTime};
+use std::pin::pin;
+use std::time::SystemTime;
 
 use async_trait::async_trait;
+use futures::StreamExt;
 use p256::elliptic_curve::sec1::ToEncodedPoint;
 use p256::{NonZeroScalar, SecretKey};
 use rand::rngs::OsRng;
@@ -10,8 +12,7 @@ use serde::Serialize;
 use serde_bytes::ByteArray;
 use serde_indexed::SerializeIndexed;
 use tokio::sync::mpsc;
-use tokio::time::sleep;
-use tracing::{debug, error, trace};
+use tracing::{debug, error, trace, warn};
 use uuid::Uuid;
 
 use super::known_devices::CableKnownDeviceInfoStore;
@@ -27,8 +28,6 @@ use crate::UxUpdate;
 
 const CABLE_UUID_FIDO: &str = "0000fff9-0000-1000-8000-00805f9b34fb";
 const CABLE_UUID_GOOGLE: &str = "0000fde2-0000-1000-8000-00805f9b34fb";
-
-const ADVERTISEMENT_WAIT_LOOP_MS: u64 = 2000;
 
 #[derive(Debug, Clone, Copy)]
 pub enum QrCodeOperationHint {
@@ -185,50 +184,48 @@ impl CableQrCodeDevice<'_> {
     }
 
     async fn await_advertisement(&self) -> Result<(FidoDevice, DecryptedAdvert), Error> {
-        btleplug::manager::start_discovery(&[
-            Uuid::parse_str(CABLE_UUID_FIDO).unwrap(),
+        let stream = btleplug::manager::start_discovery_for_service_data(vec![
             Uuid::parse_str(CABLE_UUID_GOOGLE).unwrap(),
+            Uuid::parse_str(CABLE_UUID_FIDO).unwrap(),
         ])
         .await
         .or(Err(Error::Transport(TransportError::TransportUnavailable)))?;
 
-        loop {
-            let devices_service_data = btleplug::manager::list_devices_with_service_data(
-                Uuid::parse_str(CABLE_UUID_FIDO).unwrap(),
-            )
-            .await
-            .or(Err(Error::Transport(TransportError::TransportUnavailable)))?;
-            debug!({ ?devices_service_data }, "Found devices with service data");
+        let mut stream = pin!(stream);
+        while let Some((peripheral, data)) = stream.as_mut().next().await {
+            debug!({ ?peripheral, ?data }, "Found device with service data");
 
-            let device = devices_service_data
-                .into_iter()
-                .map(|(device, data)| {
-                    let eid_key = derive(&self.qr_code.qr_secret, None, KeyPurpose::EIDKey);
-                    trace!(?device, ?data, ?eid_key);
-                    let decrypted = trial_decrypt_advert(&eid_key, &data);
-                    trace!(?decrypted);
-                    (device, decrypted)
-                })
-                .find(|(_, decrypted)| decrypted.is_some())
-                .map(|(device, decrypted)| {
-                    let decrypted = decrypted.unwrap();
-                    let advert = DecryptedAdvert::from(decrypted.as_slice());
-                    (device, advert)
-                });
-
-            if let Some((device, decrypted)) = device {
-                debug!(
-                    ?device,
-                    ?decrypted,
-                    "Successfully decrypted advertisement from device"
+            let Some(device) = btleplug::manager::get_device(peripheral.clone())
+                .await
+                .or(Err(Error::Transport(TransportError::TransportUnavailable)))?
+            else {
+                warn!(
+                    ?peripheral,
+                    "Unable to fetch peripheral properties, ignoring"
                 );
+                continue;
+            };
 
-                return Ok((device, decrypted));
-            }
+            let eid_key: Vec<u8> = derive(&self.qr_code.qr_secret, None, KeyPurpose::EIDKey);
+            trace!(?device, ?data, ?eid_key);
 
-            debug!("No devices found with matching advertisement, waiting for new advertisement");
-            sleep(Duration::from_millis(ADVERTISEMENT_WAIT_LOOP_MS as u64)).await;
+            let Some(decrypted) = trial_decrypt_advert(&eid_key, &data) else {
+                warn!(?device, "Trial decrypt failed, ignoring");
+                continue;
+            };
+            trace!(?decrypted);
+
+            let advert = DecryptedAdvert::from(decrypted.as_slice());
+            debug!(
+                ?device,
+                ?decrypted,
+                "Successfully decrypted advertisement from device"
+            );
+
+            return Ok((device, advert));
         }
+
+        unreachable!()
     }
 }
 

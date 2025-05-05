@@ -8,6 +8,5 @@ pub use connection::Connection;
 pub use device::FidoDevice;
 pub use error::Error;
 pub use manager::{
-    connect, list_devices_with_service_data, list_fido_devices, start_discovery,
-    supported_fido_revisions,
+    connect, list_fido_devices, start_discovery_for_service_data, supported_fido_revisions,
 };
