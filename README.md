@@ -35,7 +35,7 @@ _Looking for the D-Bus API proposal?_ Check out [platform-api][linux-credentials
   - 🟢 GetPinUvAuthTokenUsingUvWithPermissions
 - [Passkey Authentication][passkeys]
   - 🟢 Discoverable credentials (resident keys)
-  - 🟢 Hybrid transport (caBLE v2): QR-initiated transactions ([#52][#52]: iOS only)
+  - 🟢 Hybrid transport (caBLE v2): QR-initiated transactions
   - 🟠 Hybrid transport (caBLE v2): State-assisted transactions ([#31][#31]: planned)
 
 ## Transports
