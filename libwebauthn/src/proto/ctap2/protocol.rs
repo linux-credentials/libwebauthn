@@ -101,11 +101,11 @@ where
     async fn ctap2_make_credential(
         &mut self,
         request: &Ctap2MakeCredentialRequest,
-        _timeout: Duration,
+        timeout: Duration,
     ) -> Result<Ctap2MakeCredentialResponse, Error> {
         trace!(?request);
-        self.cbor_send(&request.into(), TIMEOUT_GET_INFO).await?;
-        let cbor_response = self.cbor_recv(TIMEOUT_GET_INFO).await?;
+        self.cbor_send(&request.into(), timeout).await?;
+        let cbor_response = self.cbor_recv(timeout).await?;
         match cbor_response.status_code {
             CtapError::Ok => (),
             error => return Err(Error::Ctap(error)),
@@ -121,11 +121,11 @@ where
     async fn ctap2_get_assertion(
         &mut self,
         request: &Ctap2GetAssertionRequest,
-        _timeout: Duration,
+        timeout: Duration,
     ) -> Result<Ctap2GetAssertionResponse, Error> {
         trace!(?request);
-        self.cbor_send(&request.into(), TIMEOUT_GET_INFO).await?;
-        let cbor_response = self.cbor_recv(TIMEOUT_GET_INFO).await?;
+        self.cbor_send(&request.into(), timeout).await?;
+        let cbor_response = self.cbor_recv(timeout).await?;
         match cbor_response.status_code {
             CtapError::Ok => (),
             error => return Err(Error::Ctap(error)),
@@ -140,12 +140,12 @@ where
     #[instrument(skip_all)]
     async fn ctap2_get_next_assertion(
         &mut self,
-        _timeout: Duration,
+        timeout: Duration,
     ) -> Result<Ctap2GetAssertionResponse, Error> {
         debug!("CTAP2 GetNextAssertion request");
         let cbor_request = CborRequest::new(Ctap2CommandCode::AuthenticatorGetNextAssertion);
-        self.cbor_send(&cbor_request, TIMEOUT_GET_INFO).await?;
-        let cbor_response = self.cbor_recv(TIMEOUT_GET_INFO).await?;
+        self.cbor_send(&cbor_request, timeout).await?;
+        let cbor_response = self.cbor_recv(timeout).await?;
         let data = unwrap_field!(cbor_response.data);
         let ctap_response = parse_cbor!(Ctap2GetAssertionResponse, &data);
         debug!("CTAP2 GetNextAssertion successful");
@@ -154,13 +154,13 @@ where
     }
 
     #[instrument(skip_all)]
-    async fn ctap2_selection(&mut self, _timeout: Duration) -> Result<(), Error> {
+    async fn ctap2_selection(&mut self, timeout: Duration) -> Result<(), Error> {
         debug!("CTAP2 Authenticator Selection request");
         let cbor_request = CborRequest::new(Ctap2CommandCode::AuthenticatorSelection);
 
         loop {
-            self.cbor_send(&cbor_request, TIMEOUT_GET_INFO).await?;
-            let cbor_response = self.cbor_recv(TIMEOUT_GET_INFO).await?;
+            self.cbor_send(&cbor_request, timeout).await?;
+            let cbor_response = self.cbor_recv(timeout).await?;
             match cbor_response.status_code {
                 CtapError::Ok => {
                     return Ok(());
@@ -177,11 +177,11 @@ where
     async fn ctap2_client_pin(
         &mut self,
         request: &Ctap2ClientPinRequest,
-        _timeou: Duration,
+        timeout: Duration,
     ) -> Result<Ctap2ClientPinResponse, Error> {
         trace!(?request);
-        self.cbor_send(&request.into(), TIMEOUT_GET_INFO).await?;
-        let cbor_response = self.cbor_recv(TIMEOUT_GET_INFO).await?;
+        self.cbor_send(&request.into(), timeout).await?;
+        let cbor_response = self.cbor_recv(timeout).await?;
         match cbor_response.status_code {
             CtapError::Ok => (),
             error => return Err(Error::Ctap(error)),
@@ -203,11 +203,11 @@ where
     async fn ctap2_authenticator_config(
         &mut self,
         request: &Ctap2AuthenticatorConfigRequest,
-        _timeout: Duration,
+        timeout: Duration,
     ) -> Result<(), Error> {
         trace!(?request);
-        self.cbor_send(&request.into(), TIMEOUT_GET_INFO).await?;
-        let cbor_response = self.cbor_recv(TIMEOUT_GET_INFO).await?;
+        self.cbor_send(&request.into(), timeout).await?;
+        let cbor_response = self.cbor_recv(timeout).await?;
         match cbor_response.status_code {
             CtapError::Ok => {
                 return Ok(());
@@ -226,11 +226,11 @@ where
     async fn ctap2_bio_enrollment(
         &mut self,
         request: &Ctap2BioEnrollmentRequest,
-        _timeout: Duration,
+        timeout: Duration,
     ) -> Result<Ctap2BioEnrollmentResponse, Error> {
         trace!(?request);
-        self.cbor_send(&request.into(), TIMEOUT_GET_INFO).await?;
-        let cbor_response = self.cbor_recv(TIMEOUT_GET_INFO).await?;
+        self.cbor_send(&request.into(), timeout).await?;
+        let cbor_response = self.cbor_recv(timeout).await?;
         match cbor_response.status_code {
             CtapError::Ok => (),
             error => return Err(Error::Ctap(error)),
@@ -252,11 +252,11 @@ where
     async fn ctap2_credential_management(
         &mut self,
         request: &Ctap2CredentialManagementRequest,
-        _timeout: Duration,
+        timeout: Duration,
     ) -> Result<Ctap2CredentialManagementResponse, Error> {
         trace!(?request);
-        self.cbor_send(&request.into(), TIMEOUT_GET_INFO).await?;
-        let cbor_response = self.cbor_recv(TIMEOUT_GET_INFO).await?;
+        self.cbor_send(&request.into(), timeout).await?;
+        let cbor_response = self.cbor_recv(timeout).await?;
         match cbor_response.status_code {
             CtapError::Ok => (),
             error => return Err(Error::Ctap(error)),

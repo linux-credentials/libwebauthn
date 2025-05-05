@@ -83,7 +83,10 @@ impl<'d> Channel for CableChannel<'d> {
                 error!(%error, "CBOR request send failure");
                 Err(Error::Transport(TransportError::TransportUnavailable))
             }
-            Err(_) => Err(Error::Transport(TransportError::Timeout)),
+            Err(elapsed) => {
+                error!({ %elapsed, ?timeout }, "CBOR request send timeout");
+                Err(Error::Transport(TransportError::Timeout))
+            }
         }
     }
 
@@ -91,7 +94,10 @@ impl<'d> Channel for CableChannel<'d> {
         match time::timeout(timeout, self.cbor_receiver.recv()).await {
             Ok(Some(response)) => Ok(response),
             Ok(None) => Err(Error::Transport(TransportError::TransportUnavailable)),
-            Err(_) => Err(Error::Transport(TransportError::Timeout)),
+            Err(elapsed) => {
+                error!({ %elapsed, ?timeout }, "CBOR response recv timeout");
+                Err(Error::Transport(TransportError::Timeout))
+            }
         }
     }
 
