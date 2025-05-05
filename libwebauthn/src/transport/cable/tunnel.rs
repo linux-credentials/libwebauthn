@@ -88,6 +88,10 @@ struct CableInitialMessage {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub _padding: Option<ByteBuf>,
     pub info: ByteBuf,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub _unused_2: Option<()>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub _supported_features: Option<Vec<String>>,
 }
 
 #[repr(u8)]
