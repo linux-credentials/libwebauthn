@@ -13,6 +13,7 @@ use tokio_tungstenite::tungstenite::http::StatusCode;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 use tracing::{debug, error, trace, warn};
+use tungstenite::client::IntoClientRequest;
 
 use super::channel::{CableChannel, CableChannelDevice};
 use super::qr_code_device::CableQrCodeDevice;
@@ -140,9 +141,13 @@ pub async fn connect<'d>(
         tunnel_domain, routing_id, tunnel_id
     );
     debug!(?connect_url, "Connecting to tunnel server");
-    // TODO: set protocol: fido.cable
+    let mut request = connect_url.into_client_request().or(Err(Error::Transport(TransportError::InvalidEndpoint)))?;
+    request.headers_mut().insert(
+        "Sec-WebSocket-Protocol",
+        "fido.cable".parse().or(Err(Error::Transport(TransportError::InvalidEndpoint)))?,
+    );
 
-    let (mut ws_stream, response) = match connect_async(&connect_url).await {
+    let (mut ws_stream, response) = match connect_async(request).await {
         Ok((ws_stream, response)) => (ws_stream, response),
         Err(e) => {
             error!(?e, "Failed to connect to tunnel server");
