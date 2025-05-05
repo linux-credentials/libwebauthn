@@ -87,17 +87,17 @@ pub trait WebAuthn {
 
 pub(crate) async fn select_uv_proto(
     get_info_response: &Ctap2GetInfoResponse,
-) -> Result<Box<dyn PinUvAuthProtocol>, Error> {
+) -> Option<Box<dyn PinUvAuthProtocol>> {
     for &protocol in get_info_response.pin_auth_protos.iter().flatten() {
         match protocol {
-            1 => return Ok(Box::new(PinUvAuthProtocolOne::new())),
-            2 => return Ok(Box::new(PinUvAuthProtocolTwo::new())),
+            1 => return Some(Box::new(PinUvAuthProtocolOne::new())),
+            2 => return Some(Box::new(PinUvAuthProtocolTwo::new())),
             _ => (),
         };
     }
 
-    error!(?get_info_response.pin_auth_protos, "No supported PIN/UV auth protocols found");
-    Err(Error::Ctap(CtapError::Other))
+    warn!(?get_info_response.pin_auth_protos, "No supported PIN/UV auth protocols found");
+    None
 }
 
 #[async_trait]
@@ -310,18 +310,21 @@ where
 {
     let get_info_response = channel.ctap2_get_info().await?;
     ctap2_request.handle_legacy_preview(&get_info_response);
-    let uv_proto = select_uv_proto(&get_info_response).await?;
-    let token_identifier = Ctap2AuthTokenPermission::new(
-        uv_proto.version(),
-        ctap2_request.permissions(),
-        ctap2_request.permissions_rpid(),
-    );
-    if let Some(uv_auth_token) = channel.get_uv_auth_token(&token_identifier) {
-        ctap2_request.calculate_and_set_uv_auth(&uv_proto, uv_auth_token);
-        Ok(UsedPinUvAuthToken::FromStorage)
-    } else {
-        user_verification_helper(channel, user_verification, ctap2_request, timeout).await
+    let maybe_uv_proto = select_uv_proto(&get_info_response).await;
+
+    if let Some(uv_proto) = maybe_uv_proto {
+        let token_identifier = Ctap2AuthTokenPermission::new(
+            uv_proto.version(),
+            ctap2_request.permissions(),
+            ctap2_request.permissions_rpid(),
+        );
+        if let Some(uv_auth_token) = channel.get_uv_auth_token(&token_identifier) {
+            ctap2_request.calculate_and_set_uv_auth(&uv_proto, uv_auth_token);
+            return Ok(UsedPinUvAuthToken::FromStorage);
+        }
     }
+
+    user_verification_helper(channel, user_verification, ctap2_request, timeout).await
 }
 
 #[instrument(skip_all)]
@@ -378,7 +381,11 @@ where
             return Ok(UsedPinUvAuthToken::LegacyUV);
         }
 
-        let uv_proto = select_uv_proto(&get_info_response).await?;
+        let Some(uv_proto) = select_uv_proto(&get_info_response).await else {
+            error!("No supported PIN/UV auth protocols found");
+            return Err(Error::Ctap(CtapError::Other));
+        };
+
         // For operations that include a PIN, we want to fetch one before obtaining a shared secret.
         // This prevents the shared secret from expiring whilst we wait for the user to enter a PIN.
         let pin = match uv_operation {
