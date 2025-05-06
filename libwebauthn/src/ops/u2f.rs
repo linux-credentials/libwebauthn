@@ -148,7 +148,6 @@ impl UpgradableResponse<MakeCredentialResponse, MakeCredentialRequest> for Regis
             attestation_statement,
             enterprise_attestation: None,
             large_blob_key: None,
-            unsigned_extension_output: None,
         };
         Ok(resp.into_make_credential_output(request, None))
     }

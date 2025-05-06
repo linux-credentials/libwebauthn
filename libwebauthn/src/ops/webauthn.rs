@@ -16,8 +16,8 @@ use crate::{
         ctap1::{Ctap1RegisteredKey, Ctap1Version},
         ctap2::{
             Ctap2AttestationStatement, Ctap2COSEAlgorithmIdentifier, Ctap2CredentialType,
-            Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialRpEntity,
-            Ctap2PublicKeyCredentialUserEntity,
+            Ctap2MakeCredentialsResponseExtensions, Ctap2PublicKeyCredentialDescriptor,
+            Ctap2PublicKeyCredentialRpEntity, Ctap2PublicKeyCredentialUserEntity,
         },
     },
     webauthn::CtapError,
@@ -57,7 +57,23 @@ pub struct MakeCredentialResponse {
     pub attestation_statement: Ctap2AttestationStatement,
     pub enterprise_attestation: Option<bool>,
     pub large_blob_key: Option<Vec<u8>>,
-    pub unsigned_extension_output: Option<BTreeMap<Value, Value>>,
+    pub unsigned_extensions_output: Option<MakeCredentialsResponseUnsignedExtensions>,
+}
+
+#[derive(Debug, Default, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MakeCredentialsResponseUnsignedExtensions {
+    // pub app_id: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cred_props: Option<CredentialPropsExtension>,
+    // #[serde(skip_serializing_if = "Option::is_none")]
+    // pub cred_blob: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hmac_create_secret: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub large_blob: Option<MakeCredentialLargeBlobExtensionOutput>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prf: Option<MakeCredentialPrfOutput>,
 }
 
 #[derive(Debug, Clone)]
@@ -79,7 +95,7 @@ pub struct MakeCredentialRequest {
     pub timeout: Duration,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Serialize)]
 pub struct PRFValue {
     pub first: [u8; 32],
     pub second: Option<[u8; 32]>,
@@ -103,14 +119,10 @@ pub enum MakeCredentialHmacOrPrfInput {
     // },
 }
 
-#[derive(Debug, Default, Clone)]
-pub enum MakeCredentialHmacOrPrfOutput {
-    #[default]
-    None,
-    HmacGetSecret(bool),
-    Prf {
-        enabled: bool,
-    },
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct MakeCredentialPrfOutput {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -161,11 +173,24 @@ impl From<Ctap2CredentialProtectionPolicy> for CredentialProtectionPolicy {
 
 #[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct CredentialPropsExtension {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rk: Option<bool>,
+}
+
+#[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub enum MakeCredentialLargeBlobExtension {
     #[default]
     None,
     Preferred,
     Required,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize)]
+pub struct MakeCredentialLargeBlobExtensionOutput {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub supported: Option<bool>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -178,21 +203,9 @@ pub struct MakeCredentialsRequestExtensions {
     pub hmac_or_prf: MakeCredentialHmacOrPrfInput,
 }
 
-#[derive(Debug, Default, Clone)]
-pub struct MakeCredentialsResponseExtensions {
-    pub cred_protect: Option<CredentialProtectionPolicy>,
-    /// If storing credBlob was successful
-    pub cred_blob: Option<bool>,
-    /// Current min PIN lenght
-    pub min_pin_length: Option<u32>,
-    pub hmac_or_prf: MakeCredentialHmacOrPrfOutput,
-    // Currently, credProps only returns one value: rk = bool
-    // If these get more in the future, we can use a struct here.
-    pub cred_props_rk: Option<bool>,
-}
+pub type MakeCredentialsResponseExtensions = Ctap2MakeCredentialsResponseExtensions;
 
 impl MakeCredentialRequest {
-    #[cfg(test)]
     pub fn dummy() -> Self {
         Self {
             hash: vec![0; 32],
@@ -203,7 +216,7 @@ impl MakeCredentialRequest {
             extensions: None,
             origin: "example.org".to_owned(),
             require_resident_key: false,
-            user_verification: UserVerificationRequirement::Preferred,
+            user_verification: UserVerificationRequirement::Discouraged,
             timeout: Duration::from_secs(10),
         }
     }
@@ -265,9 +278,11 @@ pub struct GetAssertionRequestExtensions {
     pub large_blob: GetAssertionLargeBlobExtension,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct HMACGetSecretOutput {
     pub output1: [u8; 32],
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub output2: Option<[u8; 32]>,
 }
 

@@ -7,9 +7,10 @@ use super::{
 use crate::{
     fido::AuthenticatorData,
     ops::webauthn::{
-        CredentialProtectionPolicy, MakeCredentialHmacOrPrfInput, MakeCredentialHmacOrPrfOutput,
-        MakeCredentialLargeBlobExtension, MakeCredentialRequest, MakeCredentialResponse,
-        MakeCredentialsRequestExtensions, MakeCredentialsResponseExtensions,
+        CredentialPropsExtension, CredentialProtectionPolicy, MakeCredentialHmacOrPrfInput,
+        MakeCredentialLargeBlobExtension, MakeCredentialLargeBlobExtensionOutput,
+        MakeCredentialPrfOutput, MakeCredentialRequest, MakeCredentialResponse,
+        MakeCredentialsRequestExtensions, MakeCredentialsResponseUnsignedExtensions,
     },
     pin::PinUvAuthProtocol,
     proto::CtapError,
@@ -18,9 +19,7 @@ use crate::{
 use ctap_types::ctap2::credential_management::CredentialProtectionPolicy as Ctap2CredentialProtectionPolicy;
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
-use serde_cbor::Value;
 use serde_indexed::{DeserializeIndexed, SerializeIndexed};
-use std::collections::BTreeMap;
 
 #[derive(Debug, Default, Clone, Copy, Serialize)]
 pub struct Ctap2MakeCredentialOptions {
@@ -248,9 +247,6 @@ pub struct Ctap2MakeCredentialResponse {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub large_blob_key: Option<ByteBuf>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub unsigned_extension_output: Option<BTreeMap<Value, Value>>,
 }
 
 impl Ctap2MakeCredentialResponse {
@@ -259,23 +255,18 @@ impl Ctap2MakeCredentialResponse {
         request: &MakeCredentialRequest,
         info: Option<&Ctap2GetInfoResponse>,
     ) -> MakeCredentialResponse {
-        let authenticator_data = AuthenticatorData::<MakeCredentialsResponseExtensions> {
-            rp_id_hash: self.authenticator_data.rp_id_hash,
-            flags: self.authenticator_data.flags,
-            signature_count: self.authenticator_data.signature_count,
-            attested_credential: self.authenticator_data.attested_credential,
-            extensions: self
-                .authenticator_data
-                .extensions
-                .map(|x| x.into_output(request, info)),
-        };
+        let unsigned_extensions_output = self
+            .authenticator_data
+            .extensions
+            .as_ref()
+            .map(|x| x.to_unsigned_extensions(request, info));
         MakeCredentialResponse {
             format: self.format,
-            authenticator_data,
+            authenticator_data: self.authenticator_data,
             attestation_statement: self.attestation_statement,
             enterprise_attestation: self.enterprise_attestation,
             large_blob_key: self.large_blob_key.map(|x| x.into_vec()),
-            unsigned_extension_output: self.unsigned_extension_output,
+            unsigned_extensions_output,
         }
     }
 }
@@ -323,18 +314,11 @@ impl Ctap2UserVerifiableRequest for Ctap2MakeCredentialRequest {
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Ctap2MakeCredentialsResponseExtensions {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cred_protect: Option<Ctap2CredentialProtectionPolicy>,
     // If storing credBlob was successful
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cred_blob: Option<bool>,
-    // No output provided for largeBlobKey in MakeCredential requests
-    // pub large_blob_key: Option<bool>,
-
-    // Current min PIN lenght
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub min_pin_length: Option<u32>,
-
+    pub cred_protect: Option<Ctap2CredentialProtectionPolicy>,
     // Thanks, FIDO-spec for this consistent naming scheme...
     #[serde(
         rename = "hmac-secret",
@@ -342,33 +326,35 @@ pub struct Ctap2MakeCredentialsResponseExtensions {
         skip_serializing_if = "Option::is_none"
     )]
     pub hmac_secret: Option<bool>,
+    // Current min PIN lenght
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_pin_length: Option<u32>,
 }
 
 impl Ctap2MakeCredentialsResponseExtensions {
-    pub fn into_output(
-        self,
+    pub fn to_unsigned_extensions(
+        &self,
         request: &MakeCredentialRequest,
         info: Option<&Ctap2GetInfoResponse>,
-    ) -> MakeCredentialsResponseExtensions {
-        let hmac_or_prf = if let Some(incoming_ext) = &request.extensions {
+    ) -> MakeCredentialsResponseUnsignedExtensions {
+        let (hmac_create_secret, prf) = if let Some(incoming_ext) = &request.extensions {
             match &incoming_ext.hmac_or_prf {
-                MakeCredentialHmacOrPrfInput::None => MakeCredentialHmacOrPrfOutput::None,
-                MakeCredentialHmacOrPrfInput::HmacGetSecret => {
-                    MakeCredentialHmacOrPrfOutput::HmacGetSecret(
-                        self.hmac_secret.unwrap_or_default(),
-                    )
-                }
-                MakeCredentialHmacOrPrfInput::Prf => MakeCredentialHmacOrPrfOutput::Prf {
-                    enabled: self.hmac_secret.unwrap_or_default(),
-                },
+                MakeCredentialHmacOrPrfInput::None => (None, None),
+                MakeCredentialHmacOrPrfInput::HmacGetSecret => (self.hmac_secret, None),
+                MakeCredentialHmacOrPrfInput::Prf => (
+                    None,
+                    Some(MakeCredentialPrfOutput {
+                        enabled: self.hmac_secret,
+                    }),
+                ),
             }
         } else {
-            MakeCredentialHmacOrPrfOutput::None
+            (None, None)
         };
 
         // credProps extension
         // https://w3c.github.io/webauthn/#sctn-authenticator-credential-properties-extension
-        let cred_props_rk = match &request
+        let cred_props = match &request
             .extensions
             .as_ref()
             .and_then(|x| x.cred_props.as_ref())
@@ -384,20 +370,43 @@ impl Ctap2MakeCredentialsResponseExtensions {
                     // https://fidoalliance.org/specs/fido-v2.1-ps-20210615/fido-client-to-authenticator-protocol-v2.1-ps-20210615.html#op-makecred-step-rk
                     // if the "rk" option is false: the authenticator MUST create a non-discoverable credential.
                     // Note: This step is a change from CTAP2.0 where if the "rk" option is false the authenticator could optionally create a discoverable credential.
-                    Some(request.require_resident_key)
+                    Some(CredentialPropsExtension {
+                        rk: Some(request.require_resident_key),
+                    })
                 } else {
-                    // For CTAP 2.0, we can't say if "rk" is true or not.
+                    Some(CredentialPropsExtension {
+                        // For CTAP 2.0, we can't say if "rk" is true or not.
+                        rk: None,
+                    })
+                }
+            }
+        };
+
+        // largeBlob extension
+        // https://www.w3.org/TR/webauthn-3/#sctn-large-blob-extension
+        let large_blob = match &request
+            .extensions
+            .as_ref()
+            .and_then(|x| Some(&x.large_blob))
+        {
+            None | Some(MakeCredentialLargeBlobExtension::None) => None, // Not requested, so we don't give an answer
+            Some(MakeCredentialLargeBlobExtension::Preferred)
+            | Some(MakeCredentialLargeBlobExtension::Required) => {
+                if info.map(|x| x.option_enabled("largeBlobs")) == Some(true) {
+                    Some(MakeCredentialLargeBlobExtensionOutput {
+                        supported: Some(true),
+                    })
+                } else {
                     None
                 }
             }
         };
 
-        MakeCredentialsResponseExtensions {
-            cred_protect: self.cred_protect.map(|x| x.into()),
-            cred_blob: self.cred_blob,
-            min_pin_length: self.min_pin_length,
-            hmac_or_prf,
-            cred_props_rk,
+        MakeCredentialsResponseUnsignedExtensions {
+            cred_props,
+            hmac_create_secret,
+            large_blob,
+            prf,
         }
     }
 }

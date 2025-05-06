@@ -25,6 +25,7 @@ pub use client_pin::{
 mod make_credential;
 pub use make_credential::{
     Ctap2MakeCredentialOptions, Ctap2MakeCredentialRequest, Ctap2MakeCredentialResponse,
+    Ctap2MakeCredentialsResponseExtensions,
 };
 mod get_assertion;
 pub use get_assertion::{

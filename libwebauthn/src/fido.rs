@@ -2,8 +2,7 @@ use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use cosey::PublicKey;
 use serde::{
     de::{DeserializeOwned, Error as DesError, Visitor},
-    ser::Error as SerError,
-    Deserialize, Deserializer, Serialize, Serializer,
+    Deserialize, Deserializer, Serialize,
 };
 use serde_bytes::ByteBuf;
 use std::{
@@ -11,11 +10,14 @@ use std::{
     io::{Cursor, Read},
     marker::PhantomData,
 };
-use tracing::warn;
+use tracing::{error, warn};
 
-use crate::proto::{
-    ctap2::{Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialType},
-    CtapError,
+use crate::{
+    proto::{
+        ctap2::{Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialType},
+        CtapError,
+    },
+    webauthn::{Error, PlatformError},
 };
 
 #[derive(Debug, PartialEq, Eq)]
@@ -62,28 +64,6 @@ pub struct AttestedCredentialData {
     pub credential_public_key: PublicKey,
 }
 
-impl Serialize for AttestedCredentialData {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        // Name                 | Length
-        // --------------------------------
-        //  aaguid              | 16
-        //  credentialIdLenght  | 2
-        //  credentialId        | L
-        //  credentialPublicKey | variable
-        let mut res = self.aaguid.to_vec();
-        res.write_u16::<BigEndian>(self.credential_id.len() as u16)
-            .map_err(SerError::custom)?;
-        res.extend(&self.credential_id);
-        let cose_encoded_public_key =
-            serde_cbor::to_vec(&self.credential_public_key).map_err(SerError::custom)?;
-        res.extend(cose_encoded_public_key);
-        serializer.serialize_bytes(&res)
-    }
-}
-
 impl From<&AttestedCredentialData> for Ctap2PublicKeyCredentialDescriptor {
     fn from(data: &AttestedCredentialData) -> Self {
         Self {
@@ -103,14 +83,11 @@ pub struct AuthenticatorData<T> {
     pub extensions: Option<T>,
 }
 
-impl<T> Serialize for AuthenticatorData<T>
+impl<T> AuthenticatorData<T>
 where
     T: Clone + Serialize,
 {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
+    pub fn to_output(&self) -> Result<Vec<u8>, Error> {
         // Name                    | Length
         // -----------------------------------
         // rpIdHash                | 32
@@ -121,14 +98,46 @@ where
         let mut res = self.rp_id_hash.to_vec();
         res.push(self.flags.bits());
         res.write_u32::<BigEndian>(self.signature_count)
-            .map_err(SerError::custom)?;
+            .map_err(|e| {
+                error!("Failed to create AuthenticatorData output vec at signature_count: {e:?}");
+                Error::Platform(PlatformError::InvalidDeviceResponse)
+            })?;
+
         if let Some(att_data) = &self.attested_credential {
-            res.extend(serde_cbor::to_vec(att_data).map_err(SerError::custom)?);
+            // Name                 | Length
+            // --------------------------------
+            //  aaguid              | 16
+            //  credentialIdLenght  | 2
+            //  credentialId        | L
+            //  credentialPublicKey | variable
+            res.extend(att_data.aaguid);
+            res.write_u16::<BigEndian>(att_data.credential_id.len() as u16)
+            .map_err(|e| {
+                error!(
+                    "Failed to create AuthenticatorData output vec at attested_credential.credential_id: {e:?}"
+                );
+                Error::Platform(PlatformError::InvalidDeviceResponse)
+            })?;
+            res.extend(&att_data.credential_id);
+            let cose_encoded_public_key =
+                serde_cbor::to_vec(&att_data.credential_public_key)
+            .map_err(|e| {
+                error!(
+                    "Failed to create AuthenticatorData output vec at attested_credential.credential_public_key: {e:?}"
+                );
+                Error::Platform(PlatformError::InvalidDeviceResponse)
+            })?;
+            res.extend(cose_encoded_public_key);
         }
-        if let Some(extensions) = &self.extensions {
-            res.extend(serde_cbor::to_vec(extensions).map_err(SerError::custom)?);
+
+        if self.extensions.is_some() || self.flags.contains(AuthenticatorDataFlags::EXTENSION_DATA)
+        {
+            res.extend(serde_cbor::to_vec(&self.extensions).map_err(|e| {
+                error!("Failed to create AuthenticatorData output vec at extensions: {e:?}");
+                Error::Platform(PlatformError::InvalidDeviceResponse)
+            })?);
         }
-        serializer.serialize_bytes(&res)
+        Ok(res)
     }
 }
 
