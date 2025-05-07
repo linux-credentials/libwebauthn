@@ -184,12 +184,13 @@ impl CableQrCodeDevice<'_> {
     }
 
     async fn await_advertisement(&self) -> Result<(FidoDevice, DecryptedAdvert), Error> {
-        let stream = btleplug::manager::start_discovery_for_service_data(vec![
-            Uuid::parse_str(CABLE_UUID_GOOGLE).unwrap(),
+        let uuids = &[
             Uuid::parse_str(CABLE_UUID_FIDO).unwrap(),
-        ])
-        .await
-        .or(Err(Error::Transport(TransportError::TransportUnavailable)))?;
+            Uuid::parse_str(CABLE_UUID_GOOGLE).unwrap(), // Deprecated, but may still be in use.
+        ];
+        let stream = btleplug::manager::start_discovery_for_service_data(uuids)
+            .await
+            .or(Err(Error::Transport(TransportError::TransportUnavailable)))?;
 
         let mut stream = pin!(stream);
         while let Some((peripheral, data)) = stream.as_mut().next().await {
@@ -225,7 +226,8 @@ impl CableQrCodeDevice<'_> {
             return Ok((device, advert));
         }
 
-        unreachable!()
+        warn!("BLE advertisement discovery stream terminated");
+        Err(Error::Transport(TransportError::TransportUnavailable))
     }
 }
 

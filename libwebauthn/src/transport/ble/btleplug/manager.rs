@@ -78,10 +78,10 @@ async fn on_peripheral_service_data(
 }
 
 #[instrument(level = Level::DEBUG, skip_all)]
-/// Starts a discovery for devices with specific service data
+/// Starts a discovery for devices advertising service data on any of the provided UUIDs
 pub async fn start_discovery_for_service_data(
-    uuids: Vec<Uuid>,
-) -> Result<impl Stream<Item = (Peripheral, Vec<u8>)>, Error> {
+    uuids: &[Uuid],
+) -> Result<impl Stream<Item = (Peripheral, Vec<u8>)> + use<'_>, Error> {
     let adapter = get_adapter().await?;
     let scan_filter = ScanFilter::default();
 
@@ -93,11 +93,9 @@ pub async fn start_discovery_for_service_data(
         .or(Err(Error::ConnectionFailed))?;
 
     let stream = events.filter_map({
-        let adapter = adapter.clone();
-        let uuids = uuids.clone();
         move |event| {
             let adapter = adapter.clone();
-            let uuids = uuids.clone();
+            let uuids = uuids.to_vec();
             async move {
                 // trace!(?event);
                 match event {
