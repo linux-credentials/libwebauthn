@@ -194,7 +194,6 @@ impl UpgradableResponse<GetAssertionResponse, SignRequest> for SignResponse {
             credentials_count: None,
             user_selected: None,
             large_blob_key: None,
-            unsigned_extension_outputs: None,
             enterprise_attestation: None,
             attestation_statement: None,
         };

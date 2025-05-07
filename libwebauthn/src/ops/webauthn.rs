@@ -1,11 +1,7 @@
-use std::{
-    collections::{BTreeMap, HashMap},
-    time::Duration,
-};
+use std::{collections::HashMap, time::Duration};
 
 use ctap_types::ctap2::credential_management::CredentialProtectionPolicy as Ctap2CredentialProtectionPolicy;
 use serde::{Deserialize, Serialize};
-use serde_cbor::Value;
 use sha2::{Digest, Sha256};
 use tracing::{debug, error, instrument, trace};
 
@@ -16,8 +12,9 @@ use crate::{
         ctap1::{Ctap1RegisteredKey, Ctap1Version},
         ctap2::{
             Ctap2AttestationStatement, Ctap2COSEAlgorithmIdentifier, Ctap2CredentialType,
-            Ctap2MakeCredentialsResponseExtensions, Ctap2PublicKeyCredentialDescriptor,
-            Ctap2PublicKeyCredentialRpEntity, Ctap2PublicKeyCredentialUserEntity,
+            Ctap2GetAssertionResponseExtensions, Ctap2MakeCredentialsResponseExtensions,
+            Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialRpEntity,
+            Ctap2PublicKeyCredentialUserEntity,
         },
     },
     webauthn::CtapError,
@@ -97,7 +94,9 @@ pub struct MakeCredentialRequest {
 
 #[derive(Debug, Default, Clone, Serialize)]
 pub struct PRFValue {
+    #[serde(with = "serde_bytes")]
     pub first: [u8; 32],
+    #[serde(skip_serializing_if = "Option::is_none", with = "serde_bytes")]
     pub second: Option<[u8; 32]>,
 }
 
@@ -243,17 +242,10 @@ pub enum GetAssertionHmacOrPrfInput {
     },
 }
 
-#[derive(Debug, Default, Clone)]
-pub enum GetAssertionHmacOrPrfOutput {
-    #[default]
-    None,
-    HmacGetSecret(HMACGetSecretOutput),
-    Prf {
-        enabled: bool,
-        // The spec tells us this should be a Vec<PRFValue>, but doesn't
-        // explain how it could hold more than 1 value
-        result: PRFValue,
-    },
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct GetAssertionPrfOutput {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub results: Option<PRFValue>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -271,6 +263,15 @@ pub enum GetAssertionLargeBlobExtension {
     // Write(Vec<u8>),
 }
 
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize)]
+pub struct GetAssertionLargeBlobExtensionOutput {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blob: Option<Vec<u8>>,
+    // Not yet supported
+    // #[serde(skip_serializing_if = "Option::is_none")]
+    // pub written: Option<bool>,
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct GetAssertionRequestExtensions {
     pub cred_blob: Option<bool>,
@@ -286,7 +287,7 @@ pub struct HMACGetSecretOutput {
     pub output2: Option<[u8; 32]>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Ctap2HMACGetSecretOutput {
     // We get this from the device, but have to decrypt it, and
@@ -297,7 +298,7 @@ pub struct Ctap2HMACGetSecretOutput {
 
 impl Ctap2HMACGetSecretOutput {
     pub(crate) fn decrypt_output(
-        self,
+        &self,
         shared_secret: &[u8],
         uv_proto: &Box<dyn PinUvAuthProtocol>,
     ) -> Option<HMACGetSecretOutput> {
@@ -313,7 +314,7 @@ impl Ctap2HMACGetSecretOutput {
             res.output1.copy_from_slice(&output);
         } else if output.len() == 64 {
             let (o1, o2) = output.split_at(32);
-            res.output1.copy_from_slice(&o1);
+            res.output1.copy_from_slice(o1);
             res.output2 = Some(o2.try_into().unwrap());
         } else {
             error!("Failed to split HMAC Secret outputs. Unexpected output length: {}. Skipping HMAC extension", output.len());
@@ -324,11 +325,17 @@ impl Ctap2HMACGetSecretOutput {
     }
 }
 
-#[derive(Debug, Default, Clone)]
-pub struct GetAssertionResponseExtensions {
-    // Stored credBlob
-    pub cred_blob: Option<Vec<u8>>,
-    pub hmac_or_prf: GetAssertionHmacOrPrfOutput,
+pub type GetAssertionResponseExtensions = Ctap2GetAssertionResponseExtensions;
+
+#[derive(Debug, Default, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetAssertionResponseUnsignedExtensions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hmac_get_secret: Option<HMACGetSecretOutput>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub large_blob: Option<GetAssertionLargeBlobExtensionOutput>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prf: Option<GetAssertionPrfOutput>,
 }
 
 #[derive(Debug, Clone)]
@@ -345,7 +352,7 @@ pub struct Assertion {
     pub credentials_count: Option<u32>,
     pub user_selected: Option<bool>,
     pub large_blob_key: Option<Vec<u8>>,
-    pub unsigned_extension_outputs: Option<BTreeMap<Value, Value>>,
+    pub unsigned_extensions_output: Option<GetAssertionResponseUnsignedExtensions>,
     pub enterprise_attestation: Option<bool>,
     pub attestation_statement: Option<Ctap2AttestationStatement>,
 }

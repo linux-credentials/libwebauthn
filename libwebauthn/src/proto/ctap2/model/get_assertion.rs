@@ -2,9 +2,9 @@ use crate::{
     fido::AuthenticatorData,
     ops::webauthn::{
         Assertion, Ctap2HMACGetSecretOutput, GetAssertionHmacOrPrfInput,
-        GetAssertionHmacOrPrfOutput, GetAssertionLargeBlobExtension, GetAssertionRequest,
-        GetAssertionRequestExtensions, GetAssertionResponseExtensions, HMACGetSecretInput,
-        PRFValue,
+        GetAssertionLargeBlobExtension, GetAssertionLargeBlobExtensionOutput,
+        GetAssertionPrfOutput, GetAssertionRequest, GetAssertionRequestExtensions,
+        GetAssertionResponseUnsignedExtensions, HMACGetSecretInput, PRFValue,
     },
     pin::PinUvAuthProtocol,
     transport::AuthTokenData,
@@ -384,9 +384,6 @@ pub struct Ctap2GetAssertionResponse {
     pub large_blob_key: Option<ByteBuf>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub unsigned_extension_outputs: Option<BTreeMap<Value, Value>>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub enterprise_attestation: Option<bool>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -438,32 +435,27 @@ impl Ctap2GetAssertionResponse {
         request: &GetAssertionRequest,
         auth_data: Option<&AuthTokenData>,
     ) -> Assertion {
-        let authenticator_data = AuthenticatorData::<GetAssertionResponseExtensions> {
-            rp_id_hash: self.authenticator_data.rp_id_hash,
-            flags: self.authenticator_data.flags,
-            signature_count: self.authenticator_data.signature_count,
-            attested_credential: self.authenticator_data.attested_credential,
-            extensions: self
-                .authenticator_data
-                .extensions
-                .map(|x| x.into_output(request, auth_data)),
-        };
+        let unsigned_extensions_output = self
+            .authenticator_data
+            .extensions
+            .as_ref()
+            .map(|x| x.to_unsigned_extensions(request, &self, auth_data));
         Assertion {
             credential_id: self.credential_id,
-            authenticator_data,
+            authenticator_data: self.authenticator_data,
             signature: self.signature.into_vec(),
             user: self.user,
             credentials_count: self.credentials_count,
             user_selected: self.user_selected,
             large_blob_key: self.large_blob_key.map(ByteBuf::into_vec),
-            unsigned_extension_outputs: self.unsigned_extension_outputs,
+            unsigned_extensions_output,
             enterprise_attestation: self.enterprise_attestation,
             attestation_statement: self.attestation_statement,
         }
     }
 }
 
-#[derive(Debug, Default, Clone, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Ctap2GetAssertionResponseExtensions {
     // Stored credBlob
@@ -480,14 +472,15 @@ pub struct Ctap2GetAssertionResponseExtensions {
 }
 
 impl Ctap2GetAssertionResponseExtensions {
-    pub(crate) fn into_output(
-        self,
+    pub(crate) fn to_unsigned_extensions(
+        &self,
         request: &GetAssertionRequest,
+        response: &Ctap2GetAssertionResponse,
         auth_data: Option<&AuthTokenData>,
-    ) -> GetAssertionResponseExtensions {
-        let hmac_or_prf = if let Some(orig_ext) = &request.extensions {
+    ) -> GetAssertionResponseUnsignedExtensions {
+        let (hmac_get_secret, prf) = if let Some(orig_ext) = &request.extensions {
             // Decrypt the raw HMAC extension
-            let decrypted_hmac = self.hmac_secret.and_then(|x| {
+            let decrypted_hmac = self.hmac_secret.as_ref().and_then(|x| {
                 if let Some(auth_data) = auth_data {
                     let uv_proto = auth_data.protocol_version.create_protocol_object();
                     x.decrypt_output(&auth_data.shared_secret, &uv_proto)
@@ -498,28 +491,46 @@ impl Ctap2GetAssertionResponseExtensions {
             if let Some(decrypted) = decrypted_hmac {
                 // Repackaging it into output
                 match &orig_ext.hmac_or_prf {
-                    GetAssertionHmacOrPrfInput::None => GetAssertionHmacOrPrfOutput::None,
-                    GetAssertionHmacOrPrfInput::HmacGetSecret(..) => {
-                        GetAssertionHmacOrPrfOutput::HmacGetSecret(decrypted)
-                    }
-                    GetAssertionHmacOrPrfInput::Prf { .. } => GetAssertionHmacOrPrfOutput::Prf {
-                        enabled: true,
-                        result: PRFValue {
-                            first: decrypted.output1,
-                            second: decrypted.output2,
-                        },
-                    },
+                    GetAssertionHmacOrPrfInput::None => (None, None),
+                    GetAssertionHmacOrPrfInput::HmacGetSecret(..) => (Some(decrypted), None),
+                    GetAssertionHmacOrPrfInput::Prf { .. } => (
+                        None,
+                        Some(GetAssertionPrfOutput {
+                            results: Some(PRFValue {
+                                first: decrypted.output1,
+                                second: decrypted.output2,
+                            }),
+                        }),
+                    ),
                 }
             } else {
-                GetAssertionHmacOrPrfOutput::None
+                (None, None)
             }
         } else {
-            GetAssertionHmacOrPrfOutput::None
+            (None, None)
         };
 
-        GetAssertionResponseExtensions {
-            cred_blob: self.cred_blob,
-            hmac_or_prf,
+        // LargeBlobs was requested
+        let large_blob = request
+            .extensions
+            .as_ref()
+            .filter(|x| x.large_blob != GetAssertionLargeBlobExtension::None)
+            .map(|_| {
+                Some(GetAssertionLargeBlobExtensionOutput {
+                    blob: response
+                        .large_blob_key
+                        .as_ref()
+                        .map(|x| x.clone().into_vec()),
+                    // Not yet supported
+                    // written: None,
+                })
+            })
+            .unwrap_or_default();
+
+        GetAssertionResponseUnsignedExtensions {
+            hmac_get_secret,
+            large_blob,
+            prf,
         }
     }
 }

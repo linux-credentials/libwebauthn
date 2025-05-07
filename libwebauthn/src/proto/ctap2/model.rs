@@ -30,7 +30,7 @@ pub use make_credential::{
 mod get_assertion;
 pub use get_assertion::{
     Ctap2AttestationStatement, Ctap2GetAssertionOptions, Ctap2GetAssertionRequest,
-    Ctap2GetAssertionResponse, FidoU2fAttestationStmt,
+    Ctap2GetAssertionResponse, Ctap2GetAssertionResponseExtensions, FidoU2fAttestationStmt,
 };
 mod credential_management;
 pub use credential_management::{

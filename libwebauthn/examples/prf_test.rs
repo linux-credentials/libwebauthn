@@ -13,8 +13,8 @@ use tokio::sync::mpsc::Receiver;
 use tracing_subscriber::{self, EnvFilter};
 
 use libwebauthn::ops::webauthn::{
-    GetAssertionHmacOrPrfInput, GetAssertionHmacOrPrfOutput, GetAssertionRequest,
-    GetAssertionRequestExtensions, PRFValue, UserVerificationRequirement,
+    GetAssertionHmacOrPrfInput, GetAssertionRequest, GetAssertionRequestExtensions, PRFValue,
+    UserVerificationRequirement,
 };
 use libwebauthn::pin::PinRequestReason;
 use libwebauthn::proto::ctap2::{Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialType};
@@ -178,15 +178,15 @@ async fn run_success_test(
         println!(
             "{num}. result of {printoutput}: {:?}",
             assertion
-                .authenticator_data
-                .extensions
+                .unsigned_extensions_output
                 .as_ref()
-                .map(|e| match &e.hmac_or_prf {
-                    GetAssertionHmacOrPrfOutput::None => String::from("ERROR: No PRF output"),
-                    GetAssertionHmacOrPrfOutput::HmacGetSecret(..) =>
-                        String::from("ERROR: Got HMAC instead of PRF output"),
-                    GetAssertionHmacOrPrfOutput::Prf { enabled: _, result } =>
-                        hex::encode(result.first),
+                .map(|e| if let Some(prf) = &e.prf {
+                    let results = prf.results.as_ref().map(|r| hex::encode(r.first)).unwrap();
+                    format!("Found PRF results: {}", results)
+                } else if e.hmac_get_secret.is_some() {
+                    String::from("ERROR: Got HMAC instead of PRF output")
+                } else {
+                    String::from("ERROR: No PRF output")
                 })
                 .unwrap_or(String::from("ERROR: No extensions returned"))
         );
