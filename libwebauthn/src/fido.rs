@@ -87,7 +87,7 @@ impl<T> AuthenticatorData<T>
 where
     T: Clone + Serialize,
 {
-    pub fn to_output(&self) -> Result<Vec<u8>, Error> {
+    pub fn to_response_bytes(&self) -> Result<Vec<u8>, Error> {
         // Name                    | Length
         // -----------------------------------
         // rpIdHash                | 32
