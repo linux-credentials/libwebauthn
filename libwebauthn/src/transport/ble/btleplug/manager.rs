@@ -2,10 +2,11 @@ use std::collections::HashMap;
 
 use btleplug::api::bleuuid::uuid_from_u16;
 use btleplug::api::{
-    Central as _, Manager as _, Peripheral as _, PeripheralProperties, ScanFilter,
+    Central as _, CentralEvent, Manager as _, Peripheral as _, PeripheralProperties, ScanFilter,
 };
-use btleplug::platform::{Adapter, Manager, Peripheral};
-use tracing::{debug, info, instrument, Level};
+use btleplug::platform::{Adapter, Manager, Peripheral, PeripheralId};
+use futures::{Stream, StreamExt};
+use tracing::{debug, info, instrument, trace, warn, Level};
 use uuid::Uuid;
 
 use super::device::FidoEndpoints;
@@ -50,17 +51,64 @@ impl SupportedRevisions {
     }
 }
 
+async fn on_peripheral_service_data(
+    adapter: &Adapter,
+    id: &PeripheralId,
+    uuids: &[Uuid],
+    service_data: HashMap<Uuid, Vec<u8>>,
+) -> Option<(Peripheral, Vec<u8>)> {
+    for uuid in uuids {
+        if let Some(service_data) = service_data.get(uuid) {
+            trace!(?id, ?service_data, "Found service data");
+            let Ok(peripheral) = adapter.peripheral(id).await else {
+                warn!(?id, "Could not get peripheral");
+                return None;
+            };
+
+            debug!({ ?id, ?service_data }, "Found service data for peripheral");
+            return Some((peripheral, service_data.to_owned()));
+        }
+    }
+
+    trace!(
+        { ?id, ?service_data },
+        "Ignoring periperal as it doesn't have service data for desired UUID"
+    );
+    None
+}
+
 #[instrument(level = Level::DEBUG, skip_all)]
-pub async fn start_discovery(uuids: &[Uuid]) -> Result<(), Error> {
+/// Starts a discovery for devices advertising service data on any of the provided UUIDs
+pub async fn start_discovery_for_service_data(
+    uuids: &[Uuid],
+) -> Result<impl Stream<Item = (Peripheral, Vec<u8>)> + use<'_>, Error> {
     let adapter = get_adapter().await?;
-    let scan_filter = ScanFilter {
-        services: uuids.to_vec(),
-    };
+    let scan_filter = ScanFilter::default();
+
+    let events = adapter.events().await.or(Err(Error::Unavailable))?;
 
     adapter
         .start_scan(scan_filter)
         .await
-        .or(Err(Error::ConnectionFailed))
+        .or(Err(Error::ConnectionFailed))?;
+
+    let stream = events.filter_map({
+        move |event| {
+            let adapter = adapter.clone();
+            let uuids = uuids.to_vec();
+            async move {
+                // trace!(?event);
+                match event {
+                    CentralEvent::ServiceDataAdvertisement { id, service_data } => {
+                        on_peripheral_service_data(&adapter, &id, &uuids, service_data).await
+                    }
+                    _ => None,
+                }
+            }
+        }
+    });
+
+    Ok(stream)
 }
 
 /// TODO(#86): Support multiple adapters.
@@ -84,6 +132,7 @@ async fn discover_properties(
             .properties()
             .await
             .or(Err(Error::ConnectionFailed))?;
+        trace!({ ?peripheral, ?properties });
         if let Some(properties) = properties {
             result.push((peripheral, properties));
         }
@@ -117,38 +166,20 @@ pub async fn list_fido_devices() -> Result<Vec<FidoDevice>, Error> {
     Ok(with_properties)
 }
 
-#[instrument(level = Level::DEBUG, skip_all)]
-pub async fn list_devices_with_service_data(
-    service_uuid: Uuid,
-) -> Result<HashMap<FidoDevice, Vec<u8>>, Error> {
-    let adapter = get_adapter().await?;
-    let peripherals = adapter
-        .peripherals()
+pub async fn get_device(peripheral: Peripheral) -> Result<Option<FidoDevice>, Error> {
+    let Some(properties) = peripheral
+        .properties()
         .await
-        .or(Err(Error::ConnectionFailed))?;
-    for peripheral in &peripherals {
-        // TODO: parallelize this
-        peripheral
-            .discover_services()
-            .await
-            .or(Err(Error::ConnectionFailed))?;
-    }
-    let with_properties = discover_properties(peripherals).await?;
-    Ok(with_properties
-        .into_iter()
-        .filter_map(
-            |(peripheral, properties)| match properties.service_data.get(&service_uuid) {
-                Some(service_data) => {
-                    let device = FidoDevice {
-                        peripheral,
-                        properties: properties.to_owned(),
-                    };
-                    Some((device, service_data.to_owned()))
-                }
-                None => None,
-            },
-        )
-        .collect())
+        .or(Err(Error::ConnectionFailed))?
+    else {
+        return Ok(None);
+    };
+
+    let device = FidoDevice {
+        peripheral,
+        properties,
+    };
+    Ok(Some(device))
 }
 
 pub async fn supported_fido_revisions(

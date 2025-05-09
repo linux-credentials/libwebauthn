@@ -391,7 +391,10 @@ where
             return Err(Error::Platform(PlatformError::PinTooLong));
         }
 
-        let uv_proto = select_uv_proto(&get_info_response).await?;
+        let Some(uv_proto) = select_uv_proto(&get_info_response).await else {
+            error!("No supported PIN/UV auth protocols found");
+            return Err(Error::Ctap(CtapError::Other));
+        };
 
         let current_pin = match get_info_response.options.as_ref().unwrap().get("clientPin") {
             // Obtaining the current PIN, if one is set

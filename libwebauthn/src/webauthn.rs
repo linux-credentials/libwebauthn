@@ -87,17 +87,17 @@ pub trait WebAuthn {
 
 pub(crate) async fn select_uv_proto(
     get_info_response: &Ctap2GetInfoResponse,
-) -> Result<Box<dyn PinUvAuthProtocol>, Error> {
+) -> Option<Box<dyn PinUvAuthProtocol>> {
     for &protocol in get_info_response.pin_auth_protos.iter().flatten() {
         match protocol {
-            1 => return Ok(Box::new(PinUvAuthProtocolOne::new())),
-            2 => return Ok(Box::new(PinUvAuthProtocolTwo::new())),
+            1 => return Some(Box::new(PinUvAuthProtocolOne::new())),
+            2 => return Some(Box::new(PinUvAuthProtocolTwo::new())),
             _ => (),
         };
     }
 
-    error!(?get_info_response.pin_auth_protos, "No supported PIN/UV auth protocols found");
-    Err(Error::Ctap(CtapError::Other))
+    warn!(?get_info_response.pin_auth_protos, "No supported PIN/UV auth protocols found");
+    None
 }
 
 #[async_trait]
@@ -125,10 +125,12 @@ where
         let get_info_response = self.ctap2_get_info().await?;
         let mut ctap2_request =
             Ctap2MakeCredentialRequest::from_webauthn_request(op, &get_info_response)?;
-        if let Some(exclude_list) = &op.exclude {
-            let filtered_exclude_list =
-                ctap2_preflight(self, exclude_list, &op.hash, &op.relying_party.id).await;
-            ctap2_request.exclude = Some(filtered_exclude_list);
+        if Self::supports_preflight() {
+            if let Some(exclude_list) = &op.exclude {
+                let filtered_exclude_list =
+                    ctap2_preflight(self, exclude_list, &op.hash, &op.relying_party.id).await;
+                ctap2_request.exclude = Some(filtered_exclude_list);
+            }
         }
         let response = loop {
             let uv_auth_used =
@@ -183,21 +185,24 @@ where
         let get_info_response = self.ctap2_get_info().await?;
         let mut ctap2_request =
             Ctap2GetAssertionRequest::from_webauthn_request(op, &get_info_response)?;
-        let filtered_allow_list =
-            ctap2_preflight(self, &op.allow, &op.hash, &op.relying_party_id).await;
-        if filtered_allow_list.is_empty() && !op.allow.is_empty() {
-            // We filtered out everything in preflight, meaning none of the allowed
-            // credentials are present on this device. So we error out here
-            // But the spec requires some form of user interaction, so we run a
-            // dummy request, ignore the result and error out.
-            warn!("Preflight removed all credentials from the allow-list. Sending dummy request and erroring out.");
-            let dummy_request = Ctap2MakeCredentialRequest::dummy();
-            self.send_state_update(UxUpdate::PresenceRequired).await;
-            let _ = self.ctap2_make_credential(&dummy_request, op.timeout).await;
-            return Err(Error::Ctap(CtapError::NoCredentials));
+
+        if Self::supports_preflight() {
+            let filtered_allow_list =
+                ctap2_preflight(self, &op.allow, &op.hash, &op.relying_party_id).await;
+            if filtered_allow_list.is_empty() && !op.allow.is_empty() {
+                // We filtered out everything in preflight, meaning none of the allowed
+                // credentials are present on this device. So we error out here
+                // But the spec requires some form of user interaction, so we run a
+                // dummy request, ignore the result and error out.
+                warn!("Preflight removed all credentials from the allow-list. Sending dummy request and erroring out.");
+                let dummy_request = Ctap2MakeCredentialRequest::dummy();
+                self.send_state_update(UxUpdate::PresenceRequired).await;
+                let _ = self.ctap2_make_credential(&dummy_request, op.timeout).await;
+                return Err(Error::Ctap(CtapError::NoCredentials));
+            }
+            ctap2_request.allow = filtered_allow_list;
         }
 
-        ctap2_request.allow = filtered_allow_list;
         let response = loop {
             let uv_auth_used =
                 user_verification(self, op.user_verification, &mut ctap2_request, op.timeout)
@@ -310,18 +315,21 @@ where
 {
     let get_info_response = channel.ctap2_get_info().await?;
     ctap2_request.handle_legacy_preview(&get_info_response);
-    let uv_proto = select_uv_proto(&get_info_response).await?;
-    let token_identifier = Ctap2AuthTokenPermission::new(
-        uv_proto.version(),
-        ctap2_request.permissions(),
-        ctap2_request.permissions_rpid(),
-    );
-    if let Some(uv_auth_token) = channel.get_uv_auth_token(&token_identifier) {
-        ctap2_request.calculate_and_set_uv_auth(&uv_proto, uv_auth_token);
-        Ok(UsedPinUvAuthToken::FromStorage)
-    } else {
-        user_verification_helper(channel, user_verification, ctap2_request, timeout).await
+    let maybe_uv_proto = select_uv_proto(&get_info_response).await;
+
+    if let Some(uv_proto) = maybe_uv_proto {
+        let token_identifier = Ctap2AuthTokenPermission::new(
+            uv_proto.version(),
+            ctap2_request.permissions(),
+            ctap2_request.permissions_rpid(),
+        );
+        if let Some(uv_auth_token) = channel.get_uv_auth_token(&token_identifier) {
+            ctap2_request.calculate_and_set_uv_auth(&uv_proto, uv_auth_token);
+            return Ok(UsedPinUvAuthToken::FromStorage);
+        }
     }
+
+    user_verification_helper(channel, user_verification, ctap2_request, timeout).await
 }
 
 #[instrument(skip_all)]
@@ -378,7 +386,11 @@ where
             return Ok(UsedPinUvAuthToken::LegacyUV);
         }
 
-        let uv_proto = select_uv_proto(&get_info_response).await?;
+        let Some(uv_proto) = select_uv_proto(&get_info_response).await else {
+            error!("No supported PIN/UV auth protocols found");
+            return Err(Error::Ctap(CtapError::Other));
+        };
+
         // For operations that include a PIN, we want to fetch one before obtaining a shared secret.
         // This prevents the shared secret from expiring whilst we wait for the user to enter a PIN.
         let pin = match uv_operation {

@@ -25,7 +25,7 @@ use libwebauthn::proto::ctap2::{
 use libwebauthn::transport::Device;
 use libwebauthn::webauthn::{Error as WebAuthnError, WebAuthn};
 
-const TIMEOUT: Duration = Duration::from_secs(10);
+const TIMEOUT: Duration = Duration::from_secs(120);
 
 fn setup_logging() {
     tracing_subscriber::fmt()
