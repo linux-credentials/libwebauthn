@@ -1,5 +1,6 @@
 use std::fmt::{Debug, Display};
 use std::pin::pin;
+use std::sync::Arc;
 use std::time::SystemTime;
 
 use async_trait::async_trait;
@@ -81,16 +82,16 @@ impl ToString for CableQrCode {
 
 /// Represents a new device which will connect by scanning a QR code.
 /// This could be a new device, or an ephmemeral device whose details were not stored.
-pub struct CableQrCodeDevice<'d> {
+pub struct CableQrCodeDevice {
     /// The QR code to be scanned by the new authenticator.
     pub qr_code: CableQrCode,
     /// An ephemeral private, corresponding to the public key within the QR code.
     pub private_key: NonZeroScalar,
     /// An optional reference to the store. This may be None, if no persistence is desired.
-    store: Option<&'d mut Box<dyn CableKnownDeviceInfoStore>>,
+    pub(crate) store: Option<Arc<dyn CableKnownDeviceInfoStore>>,
 }
 
-impl Debug for CableQrCodeDevice<'_> {
+impl Debug for CableQrCodeDevice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CableQrCodeDevice")
             .field("qr_code", &self.qr_code)
@@ -125,12 +126,12 @@ impl From<&[u8]> for DecryptedAdvert {
     }
 }
 
-impl<'d> CableQrCodeDevice<'d> {
+impl CableQrCodeDevice {
     /// Generates a QR code, linking the provided known-device store. A device scanning
     /// this QR code may be persisted to the store after a successful connection.
     pub fn new_persistent(
         hint: QrCodeOperationHint,
-        store: &'d mut Box<dyn CableKnownDeviceInfoStore>,
+        store: Arc<dyn CableKnownDeviceInfoStore>,
     ) -> Self {
         Self::new(hint, true, Some(store))
     }
@@ -138,7 +139,7 @@ impl<'d> CableQrCodeDevice<'d> {
     fn new(
         hint: QrCodeOperationHint,
         state_assisted: bool,
-        store: Option<&'d mut Box<dyn CableKnownDeviceInfoStore>>,
+        store: Option<Arc<dyn CableKnownDeviceInfoStore>>,
     ) -> Self {
         let private_key_scalar = NonZeroScalar::random(&mut OsRng);
         let private_key = SecretKey::from_bytes(&private_key_scalar.to_bytes()).unwrap();
@@ -176,7 +177,7 @@ impl<'d> CableQrCodeDevice<'d> {
     }
 }
 
-impl CableQrCodeDevice<'_> {
+impl CableQrCodeDevice {
     /// Generates a QR code, without any known-device store. A device scanning this QR code
     /// will not be persisted.
     pub fn new_transient(hint: QrCodeOperationHint) -> Self {
@@ -231,18 +232,18 @@ impl CableQrCodeDevice<'_> {
     }
 }
 
-unsafe impl Send for CableQrCodeDevice<'_> {}
+unsafe impl Send for CableQrCodeDevice {}
 
-unsafe impl Sync for CableQrCodeDevice<'_> {}
+unsafe impl Sync for CableQrCodeDevice {}
 
-impl Display for CableQrCodeDevice<'_> {
+impl Display for CableQrCodeDevice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "CableQrCodeDevice")
     }
 }
 
 #[async_trait]
-impl<'d> Device<'d, Cable, CableChannel<'d>> for CableQrCodeDevice<'_> {
+impl<'d> Device<'d, Cable, CableChannel<'d>> for CableQrCodeDevice {
     async fn channel(&'d mut self) -> Result<(CableChannel<'d>, mpsc::Receiver<UxUpdate>), Error> {
         let (_device, advert) = self.await_advertisement().await?;
 

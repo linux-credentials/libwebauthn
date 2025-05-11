@@ -22,8 +22,8 @@ use super::qr_code_device::CableQrCodeDevice;
 
 #[derive(Debug)]
 pub enum CableChannelDevice<'d> {
-    QrCode(&'d CableQrCodeDevice<'d>),
-    Known(&'d CableKnownDevice<'d>),
+    QrCode(&'d CableQrCodeDevice),
+    Known(&'d CableKnownDevice),
 }
 
 #[derive(Debug)]

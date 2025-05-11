@@ -1,5 +1,6 @@
 use std::error::Error;
 use std::io::{self, Write};
+use std::sync::Arc;
 use std::time::Duration;
 
 use libwebauthn::pin::PinRequestReason;
@@ -78,12 +79,14 @@ async fn handle_updates(mut state_recv: Receiver<UxUpdate>) {
 pub async fn main() -> Result<(), Box<dyn Error>> {
     setup_logging();
 
-    let _device_info_store: Box<dyn CableKnownDeviceInfoStore> =
-        Box::new(EphemeralDeviceInfoStore::default());
+    let device_info_store: Arc<dyn CableKnownDeviceInfoStore> =
+        Arc::new(EphemeralDeviceInfoStore::default());
 
     // Create QR code
-    let mut device: CableQrCodeDevice<'_> =
-        CableQrCodeDevice::new_transient(QrCodeOperationHint::MakeCredential);
+    let mut device: CableQrCodeDevice = CableQrCodeDevice::new_persistent(
+        QrCodeOperationHint::MakeCredential,
+        device_info_store.clone(),
+    );
 
     println!("Created QR code, awaiting for advertisement.");
     let qr_code = QrCode::new(device.qr_code.to_string()).unwrap();
@@ -148,8 +151,10 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
     };
 
     // Create QR code
-    let mut device: CableQrCodeDevice<'_> =
-        CableQrCodeDevice::new_transient(QrCodeOperationHint::GetAssertionRequest);
+    let mut device: CableQrCodeDevice = CableQrCodeDevice::new_persistent(
+        QrCodeOperationHint::GetAssertionRequest,
+        device_info_store.clone(),
+    );
 
     println!("Created QR code, awaiting for advertisement.");
     let qr_code = QrCode::new(device.qr_code.to_string()).unwrap();
