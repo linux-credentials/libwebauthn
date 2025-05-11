@@ -125,7 +125,7 @@ unsafe impl Send for CableKnownDevice {}
 unsafe impl Sync for CableKnownDevice {}
 
 #[async_trait]
-impl<'d> Device<'d, Cable, CableChannel<'d>> for CableKnownDevice {
+impl<'d> Device<'d, Cable, CableChannel> for CableKnownDevice {
     async fn channel(&'d mut self) -> Result<(CableChannel, mpsc::Receiver<UxUpdate>), Error> {
         todo!()
     }

@@ -19,9 +19,8 @@ use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 use tracing::{debug, error, trace, warn};
 use tungstenite::client::IntoClientRequest;
 
-use super::channel::{CableChannel, CableChannelDevice};
+use super::channel::CableChannel;
 use super::known_devices::{CableKnownDeviceInfo, CableKnownDeviceInfoStore};
-use super::qr_code_device::CableQrCodeDevice;
 use crate::proto::ctap2::cbor::{CborRequest, CborResponse};
 use crate::proto::ctap2::{Ctap2CommandCode, Ctap2GetInfoResponse};
 use crate::transport::cable::known_devices::CableKnownDeviceId;
@@ -157,13 +156,13 @@ pub fn decode_tunnel_server_domain(encoded: u16) -> Option<String> {
 }
 
 pub async fn connect<'d>(
-    device: &'d CableQrCodeDevice,
+    maybe_known_device_store: &Option<Arc<dyn CableKnownDeviceInfoStore>>,
     tunnel_domain: &str,
     routing_id: &str,
     tunnel_id: &str,
     psk: &[u8; 32],
     private_key: &NonZeroScalar,
-) -> Result<(CableChannel<'d>, mpsc::Receiver<UxUpdate>), Error> {
+) -> Result<(CableChannel, mpsc::Receiver<UxUpdate>), Error> {
     let connect_url = format!(
         "wss://{}/cable/connect/{}/{}",
         tunnel_domain, routing_id, tunnel_id
@@ -207,13 +206,16 @@ pub async fn connect<'d>(
     // After this, the handshake should be complete and you can start sending/receiving encrypted messages.
     // ...
 
-    let (cbor_sender, cbor_receiver, handle_connection) =
-        task_connection(tunnel_domain, device, ws_stream, noise_state)?;
+    let (cbor_sender, cbor_receiver, handle_connection) = task_connection(
+        tunnel_domain,
+        maybe_known_device_store,
+        ws_stream,
+        noise_state,
+    )?;
 
     let (send, recv) = mpsc::channel(1);
     Ok((
         CableChannel {
-            device: CableChannelDevice::QrCode(device),
             handle_connection,
             cbor_sender,
             cbor_receiver,
@@ -329,7 +331,7 @@ async fn do_handshake(
 
 fn task_connection(
     tunnel_domain: &str,
-    device: &CableQrCodeDevice,
+    maybe_known_device_store: &Option<Arc<dyn CableKnownDeviceInfoStore>>,
     ws_stream: WebSocketStream<MaybeTlsStream<TcpStream>>,
     transport_state: TransportState,
 ) -> Result<(Sender<CborRequest>, Receiver<CborResponse>, JoinHandle<()>), Error> {
@@ -337,7 +339,7 @@ fn task_connection(
     let (cbor_rx_send, cbor_rx_recv) = mpsc::channel(16);
 
     let tunnel_domain: String = tunnel_domain.to_string();
-    let maybe_known_device_store = device.store.to_owned();
+    let maybe_known_device_store = maybe_known_device_store.clone();
     let handle_connection = task::spawn(async move {
         connection(
             &tunnel_domain,

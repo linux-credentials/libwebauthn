@@ -243,8 +243,8 @@ impl Display for CableQrCodeDevice {
 }
 
 #[async_trait]
-impl<'d> Device<'d, Cable, CableChannel<'d>> for CableQrCodeDevice {
-    async fn channel(&'d mut self) -> Result<(CableChannel<'d>, mpsc::Receiver<UxUpdate>), Error> {
+impl<'d> Device<'d, Cable, CableChannel> for CableQrCodeDevice {
+    async fn channel(&'d mut self) -> Result<(CableChannel, mpsc::Receiver<UxUpdate>), Error> {
         let (_device, advert) = self.await_advertisement().await?;
 
         let Some(tunnel_domain) =
@@ -270,7 +270,7 @@ impl<'d> Device<'d, Cable, CableChannel<'d>> for CableQrCodeDevice {
             .unwrap();
 
         return tunnel::connect(
-            self,
+            &self.store,
             &tunnel_domain,
             &routing_id_str,
             &tunnel_id_str,
