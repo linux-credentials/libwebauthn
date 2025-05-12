@@ -17,7 +17,10 @@ use tracing::{debug, instrument, trace, warn, Level};
 use tokio::net::UdpSocket;
 
 use crate::proto::ctap1::apdu::{ApduRequest, ApduResponse};
+use crate::proto::ctap1::{Ctap1, Ctap1RegisterRequest};
 use crate::proto::ctap2::cbor::{CborRequest, CborResponse};
+use crate::proto::ctap2::{Ctap2, Ctap2MakeCredentialRequest};
+use crate::proto::CtapError;
 use crate::transport::channel::{AuthTokenData, Channel, ChannelStatus, Ctap2AuthTokenStore};
 use crate::transport::device::SupportedProtocols;
 use crate::transport::error::{Error, TransportError};
@@ -96,6 +99,44 @@ impl<'d> HidChannel<'d> {
 
         sleep(WINK_MIN_WAIT).await;
         Ok(true)
+    }
+
+    #[instrument(skip_all)]
+    pub async fn blink_and_wait_for_user_presence(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<bool, Error> {
+        let supported = self.supported_protocols().await?;
+        if supported.fido2 {
+            let get_info_response = self.ctap2_get_info().await?;
+            if get_info_response.supports_fido_2_1() {
+                match self.ctap2_selection(timeout).await {
+                    Ok(_) => Ok(true),
+                    Err(_) => Ok(false),
+                }
+            } else {
+                let ctap2_request = Ctap2MakeCredentialRequest::dummy();
+                match self.ctap2_make_credential(&ctap2_request, timeout).await {
+                    Ok(_)
+                    | Err(Error::Ctap(CtapError::PINInvalid))
+                    | Err(Error::Ctap(CtapError::PINAuthInvalid))
+                    | Err(Error::Ctap(CtapError::PINNotSet)) => Ok(true),
+                    Err(_) => Ok(false),
+                }
+            }
+        } else if supported.u2f {
+            let register_request = Ctap1RegisterRequest::dummy(timeout);
+            match self.ctap1_register(&register_request).await {
+                Ok(_)
+                | Err(Error::Ctap(CtapError::PINInvalid))
+                | Err(Error::Ctap(CtapError::PINAuthInvalid))
+                | Err(Error::Ctap(CtapError::PINNotSet)) => Ok(true),
+                Err(_) => Ok(false),
+            }
+        } else {
+            // Neither fido2 nor u2f supported, so we just mark it as not selected
+            Ok(false)
+        }
     }
 
     #[instrument(level = Level::DEBUG, skip_all)]

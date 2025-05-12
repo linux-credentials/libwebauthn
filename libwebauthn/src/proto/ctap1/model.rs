@@ -78,11 +78,22 @@ impl Ctap1RegisterRequest {
 
         Ctap1RegisterRequest {
             version: Ctap1Version::U2fV2,
-            app_id_hash: app_id_hash,
+            app_id_hash,
             challenge: Vec::from(challenge),
             registered_keys,
             timeout,
             require_user_presence,
+        }
+    }
+
+    pub fn dummy(timeout: Duration) -> Self {
+        Ctap1RegisterRequest {
+            version: Ctap1Version::U2fV2,
+            app_id_hash: vec![0; 32],
+            challenge: vec![0; 32],
+            registered_keys: Vec::new(),
+            timeout,
+            require_user_presence: true,
         }
     }
 }

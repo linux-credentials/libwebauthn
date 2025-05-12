@@ -158,17 +158,15 @@ where
         debug!("CTAP2 Authenticator Selection request");
         let cbor_request = CborRequest::new(Ctap2CommandCode::AuthenticatorSelection);
 
-        loop {
-            self.cbor_send(&cbor_request, timeout).await?;
-            let cbor_response = self.cbor_recv(timeout).await?;
-            match cbor_response.status_code {
-                CtapError::Ok => {
-                    return Ok(());
-                }
-                error => {
-                    warn!(?error, "Selection request failed with status code");
-                    return Err(Error::Ctap(error));
-                }
+        self.cbor_send(&cbor_request, timeout).await?;
+        let cbor_response = self.cbor_recv(timeout).await?;
+        match cbor_response.status_code {
+            CtapError::Ok => {
+                return Ok(());
+            }
+            error => {
+                warn!(?error, "Selection request failed with status code");
+                return Err(Error::Ctap(error));
             }
         }
     }
