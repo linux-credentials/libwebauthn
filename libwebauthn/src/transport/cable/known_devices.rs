@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::sync::Arc;
 
+use crate::transport::cable::advertisement::await_advertisement;
+use crate::transport::cable::crypto::{derive, KeyPurpose};
 use crate::transport::error::Error;
 use crate::transport::Device;
 use crate::webauthn::TransportError;
@@ -9,11 +11,13 @@ use crate::UxUpdate;
 
 use async_trait::async_trait;
 use futures::lock::Mutex;
+use serde::Serialize;
+use serde_indexed::SerializeIndexed;
 use tokio::sync::mpsc;
 use tracing::{debug, trace};
 
 use super::channel::CableChannel;
-use super::tunnel::CableLinkingInfo;
+use super::tunnel::{self, CableLinkingInfo};
 use super::Cable;
 
 #[async_trait]
@@ -35,6 +39,15 @@ impl EphemeralDeviceInfoStore {
         Self {
             known_devices: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    pub async fn list_all(&self) -> Vec<(CableKnownDeviceId, CableKnownDeviceInfo)> {
+        debug!("Listing all known devices");
+        let known_devices = self.known_devices.lock().await;
+        known_devices
+            .iter()
+            .map(|(id, info)| (id.clone(), info.clone()))
+            .collect()
     }
 }
 
@@ -107,7 +120,7 @@ impl CableKnownDeviceInfo {
 #[derive(Debug)]
 pub struct CableKnownDevice {
     pub device_info: CableKnownDeviceInfo,
-    _store: Arc<dyn CableKnownDeviceInfoStore>,
+    pub(crate) store: Arc<dyn CableKnownDeviceInfoStore>,
 }
 
 impl Display for CableKnownDevice {
@@ -124,16 +137,99 @@ impl Display for CableKnownDevice {
 unsafe impl Send for CableKnownDevice {}
 unsafe impl Sync for CableKnownDevice {}
 
+impl CableKnownDevice {
+    pub async fn new(
+        device_info: &CableKnownDeviceInfo,
+        store: Arc<dyn CableKnownDeviceInfoStore>,
+    ) -> Result<CableKnownDevice, Error> {
+        let device = CableKnownDevice {
+            device_info: device_info.clone(),
+            store: store,
+        };
+        Ok(device)
+    }
+}
+
 #[async_trait]
 impl<'d> Device<'d, Cable, CableChannel> for CableKnownDevice {
     async fn channel(&'d mut self) -> Result<(CableChannel, mpsc::Receiver<UxUpdate>), Error> {
-        todo!()
+        debug!(?self.device_info.tunnel_domain, "Creating channel to tunnel server");
+
+        let (client_nonce, client_payload) = construct_client_payload(self.device_info.link_id);
+        let contact_id = base64_url::encode(&self.device_info.contact_id);
+
+        let connection_type = tunnel::CableTunnelConnectionType::KnownDevice {
+            contact_id: contact_id,
+            authenticator_public_key: self.device_info.public_key.to_vec(),
+            client_payload,
+        };
+        let mut ws_stream =
+            tunnel::connect(&self.device_info.tunnel_domain, &connection_type).await?;
+
+        let eid_key: [u8; 64] = derive(
+            &self.device_info.link_secret,
+            Some(&client_nonce),
+            KeyPurpose::EIDKey,
+        );
+
+        let (_device, advert) = await_advertisement(&eid_key).await?;
+
+        let mut psk: [u8; 32] = [0u8; 32];
+        psk.copy_from_slice(
+            &derive(
+                &self.device_info.link_secret,
+                Some(&advert.plaintext),
+                KeyPurpose::PSK,
+            )[..32],
+        );
+
+        let noise_state = tunnel::do_handshake(&mut ws_stream, psk, &connection_type).await?;
+
+        tunnel::channel(
+            noise_state,
+            &self.device_info.tunnel_domain,
+            &Some(self.store.clone()),
+            ws_stream,
+        )
+        .await
     }
 
     // #[instrument(skip_all)]
     // async fn supported_protocols(&mut self) -> Result<SupportedProtocols, Error> {
     //     todo!()
     // }
+}
+
+type ClientNonce = [u8; 16];
+
+// Key 3: either the string “ga” to hint that a getAssertion will follow, or “mc” to hint that a makeCredential will follow.
+#[derive(Debug, SerializeIndexed)]
+#[serde(offset = 1)]
+pub struct ClientPayload {
+    pub link_id: [u8; 8],
+    pub client_nonce: ClientNonce,
+    pub hint: ClientPayloadHint,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+pub enum ClientPayloadHint {
+    #[serde(rename = "ga")]
+    GetAssertion,
+    #[serde(rename = "mc")]
+    MakeCredential,
+}
+
+fn construct_client_payload(link_id: [u8; 8]) -> (ClientNonce, ClientPayload) {
+    let client_nonce = rand::random::<ClientNonce>();
+    let client_payload = {
+        ClientPayload {
+            link_id,
+            client_nonce,
+            // TODO: add hint
+            hint: ClientPayloadHint::MakeCredential,
+        }
+    };
+    (client_nonce, client_payload)
 }
 
 #[cfg(test)]

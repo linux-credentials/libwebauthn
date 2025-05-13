@@ -47,6 +47,12 @@ impl Display for CableChannel {
     }
 }
 
+impl Drop for CableChannel {
+    fn drop(&mut self) {
+        self.handle_connection.abort();
+    }
+}
+
 #[async_trait]
 impl<'d> Channel for CableChannel {
     async fn supported_protocols(&self) -> Result<SupportedProtocols, Error> {
