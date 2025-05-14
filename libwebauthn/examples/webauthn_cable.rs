@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use libwebauthn::pin::PinRequestReason;
 use libwebauthn::transport::cable::known_devices::{
-    self, CableKnownDevice, CableKnownDeviceId, CableKnownDeviceInfoStore, EphemeralDeviceInfoStore,
+    CableKnownDevice, ClientPayloadHint, EphemeralDeviceInfoStore,
 };
 use libwebauthn::transport::cable::qr_code_device::{CableQrCodeDevice, QrCodeOperationHint};
 use libwebauthn::UxUpdate;
@@ -142,8 +142,8 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         (&response.authenticator_data).try_into().unwrap()
     };
 
-    println!("Waiting for 10 seconds before contacting the device...");
-    sleep(Duration::from_secs(30)).await;
+    println!("Waiting for 5 seconds before contacting the device...");
+    sleep(Duration::from_secs(5)).await;
 
     let get_assertion = GetAssertionRequest {
         relying_party_id: "example.org".to_owned(),
@@ -158,10 +158,13 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
     let (_known_device_id, known_device_info) =
         all_devices.first().expect("No known devices found");
 
-    let mut known_device: CableKnownDevice =
-        CableKnownDevice::new(known_device_info, device_info_store.clone())
-            .await
-            .unwrap();
+    let mut known_device: CableKnownDevice = CableKnownDevice::new(
+        ClientPayloadHint::GetAssertion,
+        known_device_info,
+        device_info_store.clone(),
+    )
+    .await
+    .unwrap();
 
     // Connect to a known device
     let (mut channel, state_recv) = known_device.channel().await.unwrap();

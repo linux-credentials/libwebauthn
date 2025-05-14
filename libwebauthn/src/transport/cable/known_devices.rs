@@ -12,6 +12,7 @@ use crate::UxUpdate;
 use async_trait::async_trait;
 use futures::lock::Mutex;
 use serde::Serialize;
+use serde_bytes::ByteBuf;
 use serde_indexed::SerializeIndexed;
 use tokio::sync::mpsc;
 use tracing::{debug, trace};
@@ -119,6 +120,7 @@ impl CableKnownDeviceInfo {
 
 #[derive(Debug)]
 pub struct CableKnownDevice {
+    pub hint: ClientPayloadHint,
     pub device_info: CableKnownDeviceInfo,
     pub(crate) store: Arc<dyn CableKnownDeviceInfoStore>,
 }
@@ -139,10 +141,12 @@ unsafe impl Sync for CableKnownDevice {}
 
 impl CableKnownDevice {
     pub async fn new(
+        hint: ClientPayloadHint,
         device_info: &CableKnownDeviceInfo,
         store: Arc<dyn CableKnownDeviceInfoStore>,
     ) -> Result<CableKnownDevice, Error> {
         let device = CableKnownDevice {
+            hint,
             device_info: device_info.clone(),
             store: store,
         };
@@ -155,7 +159,8 @@ impl<'d> Device<'d, Cable, CableChannel> for CableKnownDevice {
     async fn channel(&'d mut self) -> Result<(CableChannel, mpsc::Receiver<UxUpdate>), Error> {
         debug!(?self.device_info.tunnel_domain, "Creating channel to tunnel server");
 
-        let (client_nonce, client_payload) = construct_client_payload(self.device_info.link_id);
+        let (client_nonce, client_payload) =
+            construct_client_payload(self.hint, self.device_info.link_id);
         let contact_id = base64_url::encode(&self.device_info.contact_id);
 
         let connection_type = tunnel::CableTunnelConnectionType::KnownDevice {
@@ -193,11 +198,6 @@ impl<'d> Device<'d, Cable, CableChannel> for CableKnownDevice {
         )
         .await
     }
-
-    // #[instrument(skip_all)]
-    // async fn supported_protocols(&mut self) -> Result<SupportedProtocols, Error> {
-    //     todo!()
-    // }
 }
 
 type ClientNonce = [u8; 16];
@@ -206,12 +206,12 @@ type ClientNonce = [u8; 16];
 #[derive(Debug, SerializeIndexed)]
 #[serde(offset = 1)]
 pub struct ClientPayload {
-    pub link_id: [u8; 8],
-    pub client_nonce: ClientNonce,
+    pub link_id: ByteBuf,
+    pub client_nonce: ByteBuf,
     pub hint: ClientPayloadHint,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Copy, Clone, Serialize, PartialEq)]
 pub enum ClientPayloadHint {
     #[serde(rename = "ga")]
     GetAssertion,
@@ -219,14 +219,16 @@ pub enum ClientPayloadHint {
     MakeCredential,
 }
 
-fn construct_client_payload(link_id: [u8; 8]) -> (ClientNonce, ClientPayload) {
+fn construct_client_payload(
+    hint: ClientPayloadHint,
+    link_id: [u8; 8],
+) -> (ClientNonce, ClientPayload) {
     let client_nonce = rand::random::<ClientNonce>();
     let client_payload = {
         ClientPayload {
-            link_id,
-            client_nonce,
-            // TODO: add hint
-            hint: ClientPayloadHint::MakeCredential,
+            link_id: ByteBuf::from(link_id),
+            client_nonce: ByteBuf::from(client_nonce),
+            hint,
         }
     };
     (client_nonce, client_payload)

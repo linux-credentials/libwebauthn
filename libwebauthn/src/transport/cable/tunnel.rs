@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use ctap_types::serde::cbor_deserialize;
-use ctap_types::serde::cbor_serialize;
 use futures::{SinkExt, StreamExt};
 use p256::NonZeroScalar;
 use serde::Deserialize;
@@ -13,7 +12,7 @@ use sha2::{Digest, Sha256};
 use snow::{Builder, TransportState};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::{self, Receiver, Sender};
-use tokio::task::{self, JoinHandle};
+use tokio::task;
 use tokio_tungstenite::tungstenite::http::StatusCode;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
@@ -202,7 +201,9 @@ pub(crate) async fn connect<'d>(
                 .or(Err(Error::Transport(TransportError::InvalidEndpoint)))?,
         );
     }
-    let (mut ws_stream, response) = match connect_async(request).await {
+    trace!(?request);
+
+    let (ws_stream, response) = match connect_async(request).await {
         Ok((ws_stream, response)) => (ws_stream, response),
         Err(e) => {
             error!(?e, "Failed to connect to tunnel server");

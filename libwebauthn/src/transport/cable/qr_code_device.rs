@@ -24,22 +24,12 @@ use crate::transport::Device;
 use crate::webauthn::TransportError;
 use crate::UxUpdate;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, PartialEq)]
 pub enum QrCodeOperationHint {
+    #[serde(rename = "ga")]
     GetAssertionRequest,
+    #[serde(rename = "mc")]
     MakeCredential,
-}
-
-impl Serialize for QrCodeOperationHint {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        match self {
-            QrCodeOperationHint::GetAssertionRequest => serializer.serialize_str("ga"),
-            QrCodeOperationHint::MakeCredential => serializer.serialize_str("mc"),
-        }
-    }
 }
 
 #[derive(Debug, SerializeIndexed)]
