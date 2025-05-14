@@ -578,7 +578,7 @@ async fn connection_recv_update(message: &[u8]) -> Result<Option<CableLinkingInf
     };
 
     let Some(Value::Map(linking_info_map)) = update_message.get(&Value::Integer(0x01)) else {
-        warn!("Epty linking info map");
+        warn!("Empty linking info map");
         return Ok(None);
     };
 
