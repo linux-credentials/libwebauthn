@@ -11,7 +11,7 @@ use hidapi::HidDevice as HidApiDevice;
 use rand::{thread_rng, Rng};
 use tokio::sync::mpsc;
 use tokio::time::sleep;
-use tracing::{debug, instrument, trace, warn, Level};
+use tracing::{debug, info, instrument, trace, warn, Level};
 
 #[cfg(feature = "virtual-hid-device")]
 use tokio::net::UdpSocket;
@@ -115,6 +115,7 @@ impl<'d> HidChannel<'d> {
                     Err(_) => Ok(false),
                 }
             } else {
+                info!("Creating dummy request to make the device blink");
                 let ctap2_request = Ctap2MakeCredentialRequest::dummy();
                 match self.ctap2_make_credential(&ctap2_request, timeout).await {
                     Ok(_)
@@ -125,6 +126,7 @@ impl<'d> HidChannel<'d> {
                 }
             }
         } else if supported.u2f {
+            info!("Creating dummy request to make the device blink");
             let register_request = Ctap1RegisterRequest::dummy(timeout);
             match self.ctap1_register(&register_request).await {
                 Ok(_)
