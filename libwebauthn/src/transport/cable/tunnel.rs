@@ -221,11 +221,17 @@ pub(crate) async fn connect<'d>(
     Ok(ws_stream)
 }
 
+pub(crate) struct TunnelNoiseState {
+    pub transport_state: TransportState,
+    #[allow(dead_code)]
+    pub handshake_hash: Vec<u8>,
+}
+
 pub(crate) async fn do_handshake(
     ws_stream: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
     psk: [u8; 32],
     connection_type: &CableTunnelConnectionType,
-) -> Result<TransportState, Error> {
+) -> Result<TunnelNoiseState, Error> {
     let noise_handshake = match connection_type {
         CableTunnelConnectionType::QrCode { private_key, .. } => {
             let local_private_key = private_key.to_owned().to_bytes();
@@ -327,11 +333,14 @@ pub(crate) async fn do_handshake(
         return Err(Error::Transport(TransportError::ConnectionFailed));
     }
 
-    Ok(noise_handshake.into_transport_mode()?)
+    Ok(TunnelNoiseState {
+        handshake_hash: noise_handshake.get_handshake_hash().to_vec(),
+        transport_state: noise_handshake.into_transport_mode()?,
+    })
 }
 
 pub(crate) async fn channel(
-    noise_state: TransportState,
+    noise_state: TunnelNoiseState,
     tunnel_domain: &str,
     maybe_known_device_store: &Option<Arc<dyn CableKnownDeviceInfoStore>>,
     ws_stream: WebSocketStream<MaybeTlsStream<TcpStream>>,
@@ -369,7 +378,7 @@ async fn connection(
     tunnel_domain: &str,
     known_device_store: &Option<Arc<dyn CableKnownDeviceInfoStore>>,
     mut ws_stream: WebSocketStream<MaybeTlsStream<TcpStream>>,
-    mut noise_state: TransportState,
+    mut noise_state: TunnelNoiseState,
     mut cbor_tx_recv: Receiver<CborRequest>,
     cbor_rx_send: Sender<CborResponse>,
 ) {
@@ -435,7 +444,7 @@ async fn connection(
 async fn connection_send(
     request: CborRequest,
     ws_stream: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
-    noise_state: &mut TransportState,
+    noise_state: &mut TunnelNoiseState,
 ) -> Result<(), Error> {
     debug!("Sending CBOR request");
     trace!(?request);
@@ -462,7 +471,10 @@ async fn connection_send(
     trace!(?frame_serialized);
 
     let mut encrypted_frame = vec![0u8; MAX_CBOR_SIZE + 1];
-    match noise_state.write_message(&frame_serialized, &mut encrypted_frame) {
+    match noise_state
+        .transport_state
+        .write_message(&frame_serialized, &mut encrypted_frame)
+    {
         Ok(size) => {
             encrypted_frame.resize(size, 0u8);
         }
@@ -510,10 +522,13 @@ async fn connection_recv_binary_frame(message: Message) -> Result<Option<Vec<u8>
 
 async fn decrypt_frame(
     encrypted_frame: Vec<u8>,
-    noise_state: &mut TransportState,
+    noise_state: &mut TunnelNoiseState,
 ) -> Result<Vec<u8>, Error> {
     let mut decrypted_frame = vec![0u8; MAX_CBOR_SIZE];
-    match noise_state.read_message(&encrypted_frame, &mut decrypted_frame) {
+    match noise_state
+        .transport_state
+        .read_message(&encrypted_frame, &mut decrypted_frame)
+    {
         Ok(size) => {
             debug!(decrypted_frame_len = size, "Decrypted CBOR response");
             decrypted_frame.resize(size, 0u8);
@@ -538,7 +553,7 @@ async fn decrypt_frame(
 
 async fn connection_recv_initial(
     message: Message,
-    noise_state: &mut TransportState,
+    noise_state: &mut TunnelNoiseState,
 ) -> Result<Vec<u8>, Error> {
     let Some(encrypted_frame) = connection_recv_binary_frame(message).await? else {
         return Err(Error::Transport(TransportError::ConnectionFailed));
@@ -633,7 +648,7 @@ async fn connection_recv(
     known_device_store: &Option<Arc<dyn CableKnownDeviceInfoStore>>,
     message: Message,
     cbor_rx_send: &Sender<CborResponse>,
-    noise_state: &mut TransportState,
+    noise_state: &mut TunnelNoiseState,
 ) -> Result<(), Error> {
     let Some(encrypted_frame) = connection_recv_binary_frame(message).await? else {
         return Ok(());
@@ -685,21 +700,24 @@ async fn connection_recv(
 
             let device_id: CableKnownDeviceId = (&linking_info).into();
             match known_device_store {
-                Some(store) => match parse_known_device(tunnel_domain, &device_id, &linking_info) {
-                    Ok(known_device) => {
-                        debug!(?device_id, "Updating known device");
-                        trace!(?known_device);
-                        store.put_known_device(&device_id, &known_device).await;
+                Some(store) => {
+                    match parse_known_device(tunnel_domain, &device_id, &linking_info, &noise_state)
+                    {
+                        Ok(known_device) => {
+                            debug!(?device_id, "Updating known device");
+                            trace!(?known_device);
+                            store.put_known_device(&device_id, &known_device).await;
+                        }
+                        Err(e) => {
+                            error!(
+                                ?e,
+                                "Invalid update message from authenticator, forgetting device"
+                            );
+                            store.delete_known_device(&device_id).await;
+                            return Err(Error::Transport(TransportError::TransportUnavailable));
+                        }
                     }
-                    Err(e) => {
-                        error!(
-                            ?e,
-                            "Invalid update message from authenticator, forgetting device"
-                        );
-                        store.delete_known_device(&device_id).await;
-                        return Err(Error::Transport(TransportError::TransportUnavailable));
-                    }
-                },
+                }
                 None => {
                     warn!("Ignoring update message without a device store");
                 }
@@ -714,6 +732,7 @@ fn parse_known_device(
     tunnel_domain: &str,
     _device_id: &CableKnownDeviceId,
     linking_info: &CableLinkingInfo,
+    _noise_state: &TunnelNoiseState,
 ) -> Result<CableKnownDeviceInfo, Error> {
     let known_device = CableKnownDeviceInfo::new(tunnel_domain, linking_info)?;
 
