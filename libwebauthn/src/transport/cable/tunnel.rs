@@ -3,7 +3,9 @@ use std::sync::Arc;
 
 use ctap_types::serde::cbor_deserialize;
 use futures::{SinkExt, StreamExt};
-use p256::NonZeroScalar;
+use hmac::{Hmac, Mac};
+use p256::{ecdh, NonZeroScalar};
+use p256::{PublicKey, SecretKey};
 use serde::Deserialize;
 use serde_bytes::ByteBuf;
 use serde_cbor::Value;
@@ -150,6 +152,7 @@ pub fn decode_tunnel_server_domain(encoded: u16) -> Option<String> {
     Some(ret)
 }
 
+#[derive(Clone)]
 pub(crate) enum CableTunnelConnectionType {
     QrCode {
         routing_id: String,
@@ -340,6 +343,7 @@ pub(crate) async fn do_handshake(
 }
 
 pub(crate) async fn channel(
+    connection_type: &CableTunnelConnectionType,
     noise_state: TunnelNoiseState,
     tunnel_domain: &str,
     maybe_known_device_store: &Option<Arc<dyn CableKnownDeviceInfoStore>>,
@@ -350,8 +354,10 @@ pub(crate) async fn channel(
 
     let tunnel_domain: String = tunnel_domain.to_string();
     let maybe_known_device_store = maybe_known_device_store.clone();
+    let connection_type = connection_type.to_owned();
     let handle_connection = task::spawn(async move {
         connection(
+            &connection_type,
             &tunnel_domain,
             &maybe_known_device_store,
             ws_stream,
@@ -375,6 +381,7 @@ pub(crate) async fn channel(
 }
 
 async fn connection(
+    connection_type: &CableTunnelConnectionType,
     tunnel_domain: &str,
     known_device_store: &Option<Arc<dyn CableKnownDeviceInfoStore>>,
     mut ws_stream: WebSocketStream<MaybeTlsStream<TcpStream>>,
@@ -414,7 +421,7 @@ async fn connection(
                     Ok(message) => {
                         debug!("Received WSS message");
                         trace!(?message);
-                        let _ = connection_recv(tunnel_domain, known_device_store, message, &cbor_rx_send, &mut noise_state).await;
+                        let _ = connection_recv(connection_type, tunnel_domain, known_device_store, message, &cbor_rx_send, &mut noise_state).await;
                     }
                 };
             }
@@ -644,6 +651,7 @@ async fn connection_recv_update(message: &[u8]) -> Result<Option<CableLinkingInf
 }
 
 async fn connection_recv(
+    connection_type: &CableTunnelConnectionType,
     tunnel_domain: &str,
     known_device_store: &Option<Arc<dyn CableKnownDeviceInfoStore>>,
     message: Message,
@@ -695,14 +703,23 @@ async fn connection_recv(
                 return Ok(());
             };
 
+            let CableTunnelConnectionType::QrCode { private_key, .. } = connection_type else {
+                warn!("Ignoring update message for non-QR code connection");
+                return Ok(());
+            };
+
             debug!("Received update message with linking info");
             trace!(?linking_info);
 
             let device_id: CableKnownDeviceId = (&linking_info).into();
             match known_device_store {
                 Some(store) => {
-                    match parse_known_device(tunnel_domain, &device_id, &linking_info, &noise_state)
-                    {
+                    match parse_known_device(
+                        private_key,
+                        tunnel_domain,
+                        &linking_info,
+                        &noise_state,
+                    ) {
                         Ok(known_device) => {
                             debug!(?device_id, "Updating known device");
                             trace!(?known_device);
@@ -728,17 +745,44 @@ async fn connection_recv(
     Ok(())
 }
 
+/// Validation requires a shared key computed on the QR code ephemeral identity key (private_key here).
+/// We're currently unable to validate the signature on linking information received for state-assisted transactions,
+/// so these should be discarded. This is the same Chrome currently does, although it may change in future spec versions.
+/// See: https://github.com/chromium/chromium/blob/88e250200e59daf52554bcc74870138143a830c4/device/fido/cable/fido_tunnel_device.cc#L547-L549
 fn parse_known_device(
+    private_key: &NonZeroScalar,
     tunnel_domain: &str,
-    _device_id: &CableKnownDeviceId,
     linking_info: &CableLinkingInfo,
-    _noise_state: &TunnelNoiseState,
+    noise_state: &TunnelNoiseState,
 ) -> Result<CableKnownDeviceInfo, Error> {
     let known_device = CableKnownDeviceInfo::new(tunnel_domain, linking_info)?;
+    let secret_key = SecretKey::from(private_key);
 
-    // TODO: validate the signature
-    // TODO: check public key hasn't changed for previous
+    let Ok(authenticator_public_key) =
+        PublicKey::from_sec1_bytes(&linking_info.authenticator_public_key)
+    else {
+        error!("Failed to parse public key.");
+        return Err(Error::Transport(TransportError::InvalidKey));
+    };
 
+    let shared_secret: Vec<u8> = ecdh::diffie_hellman(
+        secret_key.to_nonzero_scalar(),
+        authenticator_public_key.as_affine(),
+    )
+    .raw_secret_bytes()
+    .to_vec();
+
+    let mut hmac = Hmac::<Sha256>::new_from_slice(&shared_secret).expect("Any key size is valid");
+    hmac.update(&noise_state.handshake_hash);
+    let expected_mac = hmac.finalize().into_bytes().to_vec();
+
+    if expected_mac != linking_info.handshake_signature {
+        error!("Invalid handshake signature, rejecting update message");
+        trace!(?expected_mac, ?linking_info.handshake_signature);
+        return Err(Error::Transport(TransportError::InvalidSignature));
+    }
+
+    debug!("Parsed known device with valid signature");
     Ok(known_device)
 }
 

@@ -69,7 +69,7 @@ impl ToString for CableQrCode {
 pub struct CableQrCodeDevice {
     /// The QR code to be scanned by the new authenticator.
     pub qr_code: CableQrCode,
-    /// An ephemeral private, corresponding to the public key within the QR code.
+    /// An ephemeral private key, corresponding to the public key within the QR code.
     pub private_key: NonZeroScalar,
     /// An optional reference to the store. This may be None, if no persistence is desired.
     pub(crate) store: Option<Arc<dyn CableKnownDeviceInfoStore>>,
@@ -189,7 +189,14 @@ impl<'d> Device<'d, Cable, CableChannel> for CableQrCodeDevice {
         };
         let mut ws_stream = tunnel::connect(&tunnel_domain, &connection_type).await?;
         let noise_state = tunnel::do_handshake(&mut ws_stream, psk, &connection_type).await?;
-        tunnel::channel(noise_state, &tunnel_domain, &self.store, ws_stream).await
+        tunnel::channel(
+            &connection_type,
+            noise_state,
+            &tunnel_domain,
+            &self.store,
+            ws_stream,
+        )
+        .await
     }
 
     // #[instrument(skip_all)]

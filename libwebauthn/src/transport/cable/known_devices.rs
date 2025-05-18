@@ -191,6 +191,7 @@ impl<'d> Device<'d, Cable, CableChannel> for CableKnownDevice {
         let noise_state = tunnel::do_handshake(&mut ws_stream, psk, &connection_type).await?;
 
         tunnel::channel(
+            &connection_type,
             noise_state,
             &self.device_info.tunnel_domain,
             &Some(self.store.clone()),
@@ -203,7 +204,7 @@ impl<'d> Device<'d, Cable, CableChannel> for CableKnownDevice {
 type ClientNonce = [u8; 16];
 
 // Key 3: either the string “ga” to hint that a getAssertion will follow, or “mc” to hint that a makeCredential will follow.
-#[derive(Debug, SerializeIndexed)]
+#[derive(Clone, Debug, SerializeIndexed)]
 #[serde(offset = 1)]
 pub struct ClientPayload {
     pub link_id: ByteBuf,
