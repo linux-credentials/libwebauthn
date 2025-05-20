@@ -17,11 +17,15 @@ use crate::transport::Device;
 use crate::UxUpdate;
 
 #[derive(Debug)]
+// SoloVirtualKey is not clone-able, but in test-mode we don't care
+#[cfg_attr(not(feature = "virtual-hid-device"), derive(Clone))]
 pub struct HidDevice {
     pub backend: HidBackendDevice,
 }
 
 #[derive(Debug)]
+// SoloVirtualKey is not clone-able, but in test-mode we don't care
+#[cfg_attr(not(feature = "virtual-hid-device"), derive(Clone))]
 pub enum HidBackendDevice {
     HidApiDevice(DeviceInfo),
     #[cfg(feature = "virtual-hid-device")]
