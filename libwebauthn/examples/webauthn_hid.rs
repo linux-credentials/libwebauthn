@@ -17,7 +17,10 @@ use libwebauthn::proto::ctap2::{
     Ctap2CredentialType, Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialRpEntity,
     Ctap2PublicKeyCredentialUserEntity,
 };
+#[cfg(not(feature = "nfc"))]
 use libwebauthn::transport::hid::list_devices;
+#[cfg(feature = "nfc")]
+use libwebauthn::transport::nfc::list_devices;
 use libwebauthn::transport::{Channel as _, Device};
 use libwebauthn::webauthn::{Error as WebAuthnError, WebAuthn};
 

@@ -6,7 +6,10 @@ use tokio::sync::broadcast::Receiver;
 use tracing_subscriber::{self, EnvFilter};
 
 use libwebauthn::ops::u2f::{RegisterRequest, SignRequest};
+#[cfg(not(feature = "nfc"))]
 use libwebauthn::transport::hid::list_devices;
+#[cfg(feature = "nfc")]
+use libwebauthn::transport::nfc::list_devices;
 use libwebauthn::transport::{Channel as _, Device};
 use libwebauthn::u2f::U2F;
 
