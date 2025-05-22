@@ -3,6 +3,8 @@ use std::fmt::{Display, Formatter};
 pub mod channel;
 pub mod commands;
 pub mod device;
+#[cfg(feature = "libnfc")]
+pub mod libnfc;
 #[cfg(feature = "pcsc")]
 pub mod pcsc;
 
