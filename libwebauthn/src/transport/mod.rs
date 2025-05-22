@@ -6,6 +6,8 @@ pub mod device;
 pub mod hid;
 #[cfg(test)]
 pub mod virt;
+#[cfg(feature = "nfc")]
+pub mod nfc;
 
 mod channel;
 mod transport;
