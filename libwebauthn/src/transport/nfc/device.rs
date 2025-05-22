@@ -6,12 +6,16 @@ use tracing::{debug, info, instrument, trace};
 use crate::{transport::device::Device, webauthn::Error};
 
 use super::channel::NfcChannel;
+#[cfg(feature = "libnfc")]
+use super::libnfc;
 #[cfg(feature = "pcsc")]
 use super::pcsc;
 use super::{Context, Nfc};
 
 #[derive(Debug)]
 enum DeviceInfo {
+    #[cfg(feature = "libnfc")]
+    LibNfc(libnfc::Info),
     #[cfg(feature = "pcsc")]
     Pcsc(pcsc::Info),
 }
@@ -24,6 +28,8 @@ pub struct NfcDevice {
 impl fmt::Display for DeviceInfo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self {
+            #[cfg(feature = "libnfc")]
+            DeviceInfo::LibNfc(info) => write!(f, "{}", info),
             #[cfg(feature = "pcsc")]
             DeviceInfo::Pcsc(info) => write!(f, "{}", info),
         }
@@ -37,6 +43,13 @@ impl fmt::Display for NfcDevice {
 }
 
 impl NfcDevice {
+    #[cfg(feature = "libnfc")]
+    pub fn new_libnfc(info: libnfc::Info) -> Self {
+        NfcDevice {
+            info: DeviceInfo::LibNfc(info),
+        }
+    }
+
     #[cfg(feature = "pcsc")]
     pub fn new_pcsc(info: pcsc::Info) -> Self {
         NfcDevice {
@@ -47,6 +60,8 @@ impl NfcDevice {
     fn channel_sync<'d>(&'d self) -> Result<NfcChannel<Context>, Error> {
         trace!("nfc channel {:?}", self);
         let mut channel: NfcChannel<Context> = match &self.info {
+            #[cfg(feature = "libnfc")]
+            DeviceInfo::LibNfc(info) => info.channel(),
             #[cfg(feature = "pcsc")]
             DeviceInfo::Pcsc(info) => info.channel(),
         }?;
@@ -84,6 +99,8 @@ where
 pub async fn list_devices() -> Result<Vec<NfcDevice>, Error> {
     let mut all_devices = Vec::new();
     let list_devices_fns = [
+        #[cfg(feature = "libnfc")]
+        libnfc::list_devices,
         #[cfg(feature = "pcsc")]
         pcsc::list_devices,
     ];
