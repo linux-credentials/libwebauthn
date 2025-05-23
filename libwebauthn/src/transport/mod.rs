@@ -4,6 +4,8 @@ pub mod ble;
 pub mod cable;
 pub mod device;
 pub mod hid;
+#[cfg(feature = "nfc")]
+pub mod nfc;
 
 mod channel;
 mod transport;
