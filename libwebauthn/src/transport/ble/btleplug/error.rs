@@ -1,18 +1,19 @@
-#[derive(Debug, Copy, Clone, PartialEq)]
+use thiserror;
+
+#[derive(thiserror::Error, Debug, Copy, Clone, PartialEq)]
 pub enum Error {
+    #[error("invalid framing")]
     InvalidFraming,
+    #[error("operation failed")]
     OperationFailed,
+    #[error("connection failed")]
     ConnectionFailed,
+    #[error("unavailalbe")]
     Unavailable,
+    #[error("adapter powered off")]
     PoweredOff,
+    #[error("operation canceled")]
     Canceled,
+    #[error("operation timed out")]
     Timeout,
-}
-
-impl std::error::Error for Error {}
-
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{:?}", self)
-    }
 }
