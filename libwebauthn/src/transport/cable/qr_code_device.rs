@@ -1,9 +1,8 @@
 use std::fmt::{Debug, Display};
-use std::pin::pin;
+use std::sync::Arc;
 use std::time::SystemTime;
 
 use async_trait::async_trait;
-use futures::StreamExt;
 use p256::elliptic_curve::sec1::ToEncodedPoint;
 use p256::{NonZeroScalar, SecretKey};
 use rand::rngs::OsRng;
@@ -12,39 +11,25 @@ use serde::Serialize;
 use serde_bytes::ByteArray;
 use serde_indexed::SerializeIndexed;
 use tokio::sync::mpsc;
-use tracing::{debug, error, trace, warn};
-use uuid::Uuid;
+use tracing::{debug, error};
 
 use super::known_devices::CableKnownDeviceInfoStore;
 use super::tunnel::{self, KNOWN_TUNNEL_DOMAINS};
 use super::{channel::CableChannel, Cable};
-use crate::transport::ble::btleplug::{self, FidoDevice};
-use crate::transport::cable::crypto::{derive, trial_decrypt_advert, KeyPurpose};
+use crate::transport::cable::advertisement::await_advertisement;
+use crate::transport::cable::crypto::{derive, KeyPurpose};
 use crate::transport::cable::digit_encode;
 use crate::transport::error::Error;
 use crate::transport::Device;
 use crate::webauthn::TransportError;
 use crate::UxUpdate;
 
-const CABLE_UUID_FIDO: &str = "0000fff9-0000-1000-8000-00805f9b34fb";
-const CABLE_UUID_GOOGLE: &str = "0000fde2-0000-1000-8000-00805f9b34fb";
-
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, PartialEq)]
 pub enum QrCodeOperationHint {
+    #[serde(rename = "ga")]
     GetAssertionRequest,
+    #[serde(rename = "mc")]
     MakeCredential,
-}
-
-impl Serialize for QrCodeOperationHint {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        match self {
-            QrCodeOperationHint::GetAssertionRequest => serializer.serialize_str("ga"),
-            QrCodeOperationHint::MakeCredential => serializer.serialize_str("mc"),
-        }
-    }
 }
 
 #[derive(Debug, SerializeIndexed)]
@@ -81,16 +66,16 @@ impl ToString for CableQrCode {
 
 /// Represents a new device which will connect by scanning a QR code.
 /// This could be a new device, or an ephmemeral device whose details were not stored.
-pub struct CableQrCodeDevice<'d> {
+pub struct CableQrCodeDevice {
     /// The QR code to be scanned by the new authenticator.
     pub qr_code: CableQrCode,
-    /// An ephemeral private, corresponding to the public key within the QR code.
+    /// An ephemeral private key, corresponding to the public key within the QR code.
     pub private_key: NonZeroScalar,
     /// An optional reference to the store. This may be None, if no persistence is desired.
-    store: Option<&'d mut Box<dyn CableKnownDeviceInfoStore>>,
+    pub(crate) store: Option<Arc<dyn CableKnownDeviceInfoStore>>,
 }
 
-impl Debug for CableQrCodeDevice<'_> {
+impl Debug for CableQrCodeDevice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CableQrCodeDevice")
             .field("qr_code", &self.qr_code)
@@ -99,38 +84,12 @@ impl Debug for CableQrCodeDevice<'_> {
     }
 }
 
-#[derive(Debug)]
-struct DecryptedAdvert {
-    plaintext: [u8; 16],
-    nonce: [u8; 10],
-    routing_id: [u8; 3],
-    encoded_tunnel_server_domain: u16,
-}
-
-impl From<&[u8]> for DecryptedAdvert {
-    fn from(plaintext: &[u8]) -> Self {
-        let mut nonce = [0u8; 10];
-        nonce.copy_from_slice(&plaintext[1..11]);
-        let mut routing_id = [0u8; 3];
-        routing_id.copy_from_slice(&plaintext[11..14]);
-        let encoded_tunnel_server_domain = u16::from_le_bytes([plaintext[14], plaintext[15]]);
-        let mut plaintext_fixed = [0u8; 16];
-        plaintext_fixed.copy_from_slice(&plaintext[..16]);
-        Self {
-            plaintext: plaintext_fixed,
-            nonce,
-            routing_id,
-            encoded_tunnel_server_domain,
-        }
-    }
-}
-
-impl<'d> CableQrCodeDevice<'d> {
+impl CableQrCodeDevice {
     /// Generates a QR code, linking the provided known-device store. A device scanning
     /// this QR code may be persisted to the store after a successful connection.
     pub fn new_persistent(
         hint: QrCodeOperationHint,
-        store: &'d mut Box<dyn CableKnownDeviceInfoStore>,
+        store: Arc<dyn CableKnownDeviceInfoStore>,
     ) -> Self {
         Self::new(hint, true, Some(store))
     }
@@ -138,7 +97,7 @@ impl<'d> CableQrCodeDevice<'d> {
     fn new(
         hint: QrCodeOperationHint,
         state_assisted: bool,
-        store: Option<&'d mut Box<dyn CableKnownDeviceInfoStore>>,
+        store: Option<Arc<dyn CableKnownDeviceInfoStore>>,
     ) -> Self {
         let private_key_scalar = NonZeroScalar::random(&mut OsRng);
         let private_key = SecretKey::from_bytes(&private_key_scalar.to_bytes()).unwrap();
@@ -176,75 +135,29 @@ impl<'d> CableQrCodeDevice<'d> {
     }
 }
 
-impl CableQrCodeDevice<'_> {
+impl CableQrCodeDevice {
     /// Generates a QR code, without any known-device store. A device scanning this QR code
     /// will not be persisted.
     pub fn new_transient(hint: QrCodeOperationHint) -> Self {
         Self::new(hint, false, None)
     }
-
-    async fn await_advertisement(&self) -> Result<(FidoDevice, DecryptedAdvert), Error> {
-        let uuids = &[
-            Uuid::parse_str(CABLE_UUID_FIDO).unwrap(),
-            Uuid::parse_str(CABLE_UUID_GOOGLE).unwrap(), // Deprecated, but may still be in use.
-        ];
-        let stream = btleplug::manager::start_discovery_for_service_data(uuids)
-            .await
-            .or(Err(Error::Transport(TransportError::TransportUnavailable)))?;
-
-        let mut stream = pin!(stream);
-        while let Some((peripheral, data)) = stream.as_mut().next().await {
-            debug!({ ?peripheral, ?data }, "Found device with service data");
-
-            let Some(device) = btleplug::manager::get_device(peripheral.clone())
-                .await
-                .or(Err(Error::Transport(TransportError::TransportUnavailable)))?
-            else {
-                warn!(
-                    ?peripheral,
-                    "Unable to fetch peripheral properties, ignoring"
-                );
-                continue;
-            };
-
-            let eid_key: Vec<u8> = derive(&self.qr_code.qr_secret, None, KeyPurpose::EIDKey);
-            trace!(?device, ?data, ?eid_key);
-
-            let Some(decrypted) = trial_decrypt_advert(&eid_key, &data) else {
-                warn!(?device, "Trial decrypt failed, ignoring");
-                continue;
-            };
-            trace!(?decrypted);
-
-            let advert = DecryptedAdvert::from(decrypted.as_slice());
-            debug!(
-                ?device,
-                ?decrypted,
-                "Successfully decrypted advertisement from device"
-            );
-
-            return Ok((device, advert));
-        }
-
-        warn!("BLE advertisement discovery stream terminated");
-        Err(Error::Transport(TransportError::TransportUnavailable))
-    }
 }
 
-unsafe impl Send for CableQrCodeDevice<'_> {}
+unsafe impl Send for CableQrCodeDevice {}
 
-unsafe impl Sync for CableQrCodeDevice<'_> {}
+unsafe impl Sync for CableQrCodeDevice {}
 
-impl Display for CableQrCodeDevice<'_> {
+impl Display for CableQrCodeDevice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "CableQrCodeDevice")
     }
 }
 
 #[async_trait]
-impl<'d> Device<'d, Cable, CableChannel<'d>> for CableQrCodeDevice<'_> {
-    async fn channel(&'d mut self) -> Result<(CableChannel<'d>, mpsc::Receiver<UxUpdate>), Error> {
-        let (_device, advert) = self.await_advertisement().await?;
+impl<'d> Device<'d, Cable, CableChannel> for CableQrCodeDevice {
+    async fn channel(&'d mut self) -> Result<(CableChannel, mpsc::Receiver<UxUpdate>), Error> {
+        let eid_key: [u8; 64] = derive(self.qr_code.qr_secret.as_ref(), None, KeyPurpose::EIDKey);
+        let (_device, advert) = await_advertisement(&eid_key).await?;
 
         let Some(tunnel_domain) =
             tunnel::decode_tunnel_server_domain(advert.encoded_tunnel_server_domain)
@@ -257,26 +170,33 @@ impl<'d> Device<'d, Cable, CableChannel<'d>> for CableQrCodeDevice<'_> {
         let routing_id_str = hex::encode(&advert.routing_id);
         let _nonce_str = hex::encode(&advert.nonce);
 
-        let tunnel_id = &derive(&self.qr_code.qr_secret.as_ref(), None, KeyPurpose::TunnelID)[..16];
+        let tunnel_id = &derive(self.qr_code.qr_secret.as_ref(), None, KeyPurpose::TunnelID)[..16];
         let tunnel_id_str = hex::encode(&tunnel_id);
 
-        let psk: &[u8; 32] = &derive(
-            &self.qr_code.qr_secret.as_ref(),
-            Some(&advert.plaintext),
-            KeyPurpose::PSK,
-        )[..32]
-            .try_into()
-            .unwrap();
+        let mut psk: [u8; 32] = [0u8; 32];
+        psk.copy_from_slice(
+            &derive(
+                self.qr_code.qr_secret.as_ref(),
+                Some(&advert.plaintext),
+                KeyPurpose::PSK,
+            )[..32],
+        );
 
-        return tunnel::connect(
-            self,
+        let connection_type = tunnel::CableTunnelConnectionType::QrCode {
+            routing_id: routing_id_str,
+            tunnel_id: tunnel_id_str.clone(),
+            private_key: self.private_key,
+        };
+        let mut ws_stream = tunnel::connect(&tunnel_domain, &connection_type).await?;
+        let noise_state = tunnel::do_handshake(&mut ws_stream, psk, &connection_type).await?;
+        tunnel::channel(
+            &connection_type,
+            noise_state,
             &tunnel_domain,
-            &routing_id_str,
-            &tunnel_id_str,
-            psk,
-            &self.private_key,
+            &self.store,
+            ws_stream,
         )
-        .await;
+        .await
     }
 
     // #[instrument(skip_all)]

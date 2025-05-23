@@ -56,7 +56,7 @@ async fn on_peripheral_service_data(
     id: &PeripheralId,
     uuids: &[Uuid],
     service_data: HashMap<Uuid, Vec<u8>>,
-) -> Option<(Peripheral, Vec<u8>)> {
+) -> Option<(Adapter, Peripheral, Vec<u8>)> {
     for uuid in uuids {
         if let Some(service_data) = service_data.get(uuid) {
             trace!(?id, ?service_data, "Found service data");
@@ -66,7 +66,7 @@ async fn on_peripheral_service_data(
             };
 
             debug!({ ?id, ?service_data }, "Found service data for peripheral");
-            return Some((peripheral, service_data.to_owned()));
+            return Some((adapter.clone(), peripheral, service_data.to_owned()));
         }
     }
 
@@ -81,7 +81,7 @@ async fn on_peripheral_service_data(
 /// Starts a discovery for devices advertising service data on any of the provided UUIDs
 pub async fn start_discovery_for_service_data(
     uuids: &[Uuid],
-) -> Result<impl Stream<Item = (Peripheral, Vec<u8>)> + use<'_>, Error> {
+) -> Result<impl Stream<Item = (Adapter, Peripheral, Vec<u8>)> + use<'_>, Error> {
     let adapter = get_adapter().await?;
     let scan_filter = ScanFilter::default();
 
