@@ -108,7 +108,7 @@ pub(crate) struct CableLinkingInfo {
     pub authenticator_public_key: Vec<u8>,
     /// User-friendly name of the authenticator
     pub authenticator_name: String,
-    /// HMAC of the handshake hash (Noise's channel binding value) usinng the
+    /// HMAC of the handshake hash (Noise's channel binding value) using the
     /// shared secret (link_secret) as key
     #[allow(dead_code)]
     pub handshake_signature: Vec<u8>,

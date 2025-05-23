@@ -19,8 +19,8 @@ pub(crate) struct DecryptedAdvert {
     pub encoded_tunnel_server_domain: u16,
 }
 
-impl From<&[u8]> for DecryptedAdvert {
-    fn from(plaintext: &[u8]) -> Self {
+impl From<[u8; 16]> for DecryptedAdvert {
+    fn from(plaintext: [u8; 16]) -> Self {
         let mut nonce = [0u8; 10];
         nonce.copy_from_slice(&plaintext[1..11]);
         let mut routing_id = [0u8; 3];
@@ -70,7 +70,7 @@ pub(crate) async fn await_advertisement(
         };
         trace!(?decrypted);
 
-        let advert = DecryptedAdvert::from(decrypted.as_slice());
+        let advert = DecryptedAdvert::from(decrypted);
         debug!(
             ?device,
             ?decrypted,

@@ -28,7 +28,7 @@ fn reserved_bits_are_zero(plaintext: &[u8]) -> bool {
 }
 
 #[instrument]
-pub fn trial_decrypt_advert(eid_key: &[u8], candidate_advert: &[u8]) -> Option<Vec<u8>> {
+pub fn trial_decrypt_advert(eid_key: &[u8], candidate_advert: &[u8]) -> Option<[u8; 16]> {
     if candidate_advert.len() != 20 {
         warn!("candidate advert is not 20 bytes");
         return None;
@@ -55,7 +55,9 @@ pub fn trial_decrypt_advert(eid_key: &[u8], candidate_advert: &[u8]) -> Option<V
         return None;
     }
 
-    Some(block.to_vec())
+    let mut plaintext = [0u8; 16];
+    plaintext.copy_from_slice(&block);
+    Some(plaintext)
 }
 
 #[cfg(test)]
