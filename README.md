@@ -36,14 +36,14 @@ _Looking for the D-Bus API proposal?_ Check out [platform-api][linux-credentials
 - [Passkey Authentication][passkeys]
   - 🟢 Discoverable credentials (resident keys)
   - 🟢 Hybrid transport (caBLE v2): QR-initiated transactions
-  - 🟠 Hybrid transport (caBLE v2): State-assisted transactions ([#31][#31]: planned)
+  - 🟢 Hybrid transport (caBLE v2): State-assisted transactions (remember this phone)
 
 ## Transports
 
 |                      | USB (HID)                 | Bluetooth Low Energy (BLE) | NFC                   | TPM 2.0 (Platform)    | Hybrid (caBLEv2)                   |
 | -------------------- | ------------------------- | -------------------------- | --------------------- | --------------------- | ---------------------------------- |
 | **FIDO U2F**         | 🟢 Supported (via hidapi) | 🟢 Supported (via bluez)   | 🟠 Planned ([#5][#5]) | 🟠 Planned ([#4][#4]) | N/A                                |
-| **WebAuthn (FIDO2)** | 🟢 Supported (via hidapi) | 🟢 Supported (via bluez)   | 🟠 Planned ([#5][#5]) | 🟠 Planned ([#4][#4]) | 🟠 Partly implemented ([#31][#31]) |
+| **WebAuthn (FIDO2)** | 🟢 Supported (via hidapi) | 🟢 Supported (via bluez)   | 🟠 Planned ([#5][#5]) | 🟠 Planned ([#4][#4]) | 🟢 Supported |
 
 ## Example programs
 

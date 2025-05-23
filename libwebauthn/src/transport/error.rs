@@ -28,6 +28,9 @@ pub enum TransportError {
     NegotiationFailed,
     TransportUnavailable,
     Timeout,
+    UnknownDevice,
+    InvalidKey,
+    InvalidSignature,
 }
 
 impl std::error::Error for TransportError {}

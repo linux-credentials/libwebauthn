@@ -1,24 +1,32 @@
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
 use ctap_types::serde::cbor_deserialize;
 use futures::{SinkExt, StreamExt};
-use p256::NonZeroScalar;
+use hmac::{Hmac, Mac};
+use p256::{ecdh, NonZeroScalar};
+use p256::{PublicKey, SecretKey};
 use serde::Deserialize;
 use serde_bytes::ByteBuf;
+use serde_cbor::Value;
 use serde_indexed::DeserializeIndexed;
 use sha2::{Digest, Sha256};
 use snow::{Builder, TransportState};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::{self, Receiver, Sender};
-use tokio::task::{self, JoinHandle};
+use tokio::task;
 use tokio_tungstenite::tungstenite::http::StatusCode;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 use tracing::{debug, error, trace, warn};
 use tungstenite::client::IntoClientRequest;
 
-use super::channel::{CableChannel, CableChannelDevice};
-use super::qr_code_device::CableQrCodeDevice;
+use super::channel::CableChannel;
+use super::known_devices::ClientPayload;
+use super::known_devices::{CableKnownDeviceInfo, CableKnownDeviceInfoStore};
 use crate::proto::ctap2::cbor::{CborRequest, CborResponse};
 use crate::proto::ctap2::{Ctap2CommandCode, Ctap2GetInfoResponse};
+use crate::transport::cable::known_devices::CableKnownDeviceId;
 use crate::transport::error::Error;
 use crate::webauthn::TransportError;
 use crate::UxUpdate;
@@ -31,14 +39,8 @@ const P256_X962_LENGTH: usize = 65;
 const MAX_CBOR_SIZE: usize = 1024 * 1024;
 const PADDING_GRANULARITY: usize = 32;
 
-// const CABLE_PROLOGUE_STATE_ASSISTED = [0 as u8];
-const CABLE_PROLOGUE_QR_INITIATED: &[u8] = &[1 as u8];
-
-enum TransactionType {
-    #[allow(dead_code)] // TODO StateAssisted
-    StateAssisted,
-    QRInitiated,
-}
+const CABLE_PROLOGUE_STATE_ASSISTED: &[u8] = &[0u8];
+const CABLE_PROLOGUE_QR_INITIATED: &[u8] = &[1u8];
 
 #[derive(Debug, Clone)]
 struct CableTunnelMessage {
@@ -94,6 +96,24 @@ struct CableInitialMessage {
     pub _supported_features: Option<Vec<String>>,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct CableLinkingInfo {
+    /// Used by the tunnel to identify the authenticator (eg. Android FCM token)
+    pub contact_id: Vec<u8>,
+    /// Used by the authenticator to identify the client platform
+    pub link_id: Vec<u8>,
+    /// Shared secret between authenticator and client platform
+    pub link_secret: Vec<u8>,
+    /// Authenticator's public key, X9.62 uncompressed format
+    pub authenticator_public_key: Vec<u8>,
+    /// User-friendly name of the authenticator
+    pub authenticator_name: String,
+    /// HMAC of the handshake hash (Noise's channel binding value) using the
+    /// shared secret (link_secret) as key
+    #[allow(dead_code)]
+    pub handshake_signature: Vec<u8>,
+}
+
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, Deserialize)]
 enum CableTunnelMessageType {
@@ -132,26 +152,61 @@ pub fn decode_tunnel_server_domain(encoded: u16) -> Option<String> {
     Some(ret)
 }
 
-pub async fn connect<'d>(
-    device: &'d CableQrCodeDevice<'d>,
+#[derive(Clone)]
+pub(crate) enum CableTunnelConnectionType {
+    QrCode {
+        routing_id: String,
+        tunnel_id: String,
+        private_key: NonZeroScalar,
+    },
+    KnownDevice {
+        contact_id: String,
+        authenticator_public_key: Vec<u8>,
+        client_payload: ClientPayload,
+    },
+}
+
+pub(crate) async fn connect<'d>(
     tunnel_domain: &str,
-    routing_id: &str,
-    tunnel_id: &str,
-    psk: &[u8; 32],
-    private_key: &NonZeroScalar,
-) -> Result<(CableChannel<'d>, mpsc::Receiver<UxUpdate>), Error> {
-    let connect_url = format!(
-        "wss://{}/cable/connect/{}/{}",
-        tunnel_domain, routing_id, tunnel_id
-    );
+    connection_type: &CableTunnelConnectionType,
+) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>, Error> {
+    let connect_url = match connection_type {
+        CableTunnelConnectionType::QrCode {
+            routing_id,
+            tunnel_id,
+            ..
+        } => format!(
+            "wss://{}/cable/connect/{}/{}",
+            tunnel_domain, routing_id, tunnel_id
+        ),
+        CableTunnelConnectionType::KnownDevice { contact_id, .. } => {
+            format!("wss://{}/cable/contact/{}", tunnel_domain, contact_id)
+        }
+    };
     debug!(?connect_url, "Connecting to tunnel server");
-    let mut request = connect_url.into_client_request().or(Err(Error::Transport(TransportError::InvalidEndpoint)))?;
+    let mut request = connect_url
+        .into_client_request()
+        .or(Err(Error::Transport(TransportError::InvalidEndpoint)))?;
     request.headers_mut().insert(
         "Sec-WebSocket-Protocol",
-        "fido.cable".parse().or(Err(Error::Transport(TransportError::InvalidEndpoint)))?,
+        "fido.cable"
+            .parse()
+            .or(Err(Error::Transport(TransportError::InvalidEndpoint)))?,
     );
 
-    let (mut ws_stream, response) = match connect_async(request).await {
+    if let CableTunnelConnectionType::KnownDevice { client_payload, .. } = connection_type {
+        let client_payload = serde_cbor::to_vec(client_payload)
+            .or(Err(Error::Transport(TransportError::InvalidEndpoint)))?;
+        request.headers_mut().insert(
+            "X-caBLE-Client-Payload",
+            hex::encode(&client_payload)
+                .parse()
+                .or(Err(Error::Transport(TransportError::InvalidEndpoint)))?,
+        );
+    }
+    trace!(?request);
+
+    let (ws_stream, response) = match connect_async(request).await {
         Ok((ws_stream, response)) => (ws_stream, response),
         Err(e) => {
             error!(?e, "Failed to connect to tunnel server");
@@ -166,55 +221,41 @@ pub async fn connect<'d>(
     }
     debug!("Tunnel server returned success");
 
-    let noise_state = do_handshake(
-        &mut ws_stream,
-        psk,
-        private_key,
-        TransactionType::QRInitiated,
-    )
-    .await?;
-
-    // TODO: Handle the unsolicited GetInfo response upon connection
-
-    // After this, the handshake should be complete and you can start sending/receiving encrypted messages.
-    // ...
-
-    let (cbor_sender, cbor_receiver, handle_connection) = task_connection(ws_stream, noise_state)?;
-
-    let (send, recv) = mpsc::channel(1);
-    Ok((
-        CableChannel {
-            device: CableChannelDevice::QrCode(device),
-            handle_connection,
-            cbor_sender,
-            cbor_receiver,
-            tx: send,
-        },
-        recv,
-    ))
+    Ok(ws_stream)
 }
 
-async fn do_handshake(
-    ws_stream: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
-    psk: &[u8; 32],
-    private_key: &NonZeroScalar,
-    transaction_type: TransactionType,
-) -> Result<TransportState, Error> {
-    let local_private_key = private_key.to_bytes();
+pub(crate) struct TunnelNoiseState {
+    pub transport_state: TransportState,
+    #[allow(dead_code)]
+    pub handshake_hash: Vec<u8>,
+}
 
-    let noise_builder = match transaction_type {
-        TransactionType::QRInitiated => Builder::new("Noise_KNpsk0_P256_AESGCM_SHA256".parse()?)
-            .prologue(CABLE_PROLOGUE_QR_INITIATED)?
-            .local_private_key(&local_private_key.as_slice())?
-            .psk(0, psk)?,
-        TransactionType::StateAssisted => {
-            // Builder::new("Noise_NKpsk0_P256_AESGCM_SHA256".parse().unwrap())
-            todo!()
+pub(crate) async fn do_handshake(
+    ws_stream: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
+    psk: [u8; 32],
+    connection_type: &CableTunnelConnectionType,
+) -> Result<TunnelNoiseState, Error> {
+    let noise_handshake = match connection_type {
+        CableTunnelConnectionType::QrCode { private_key, .. } => {
+            let local_private_key = private_key.to_owned().to_bytes();
+            Builder::new("Noise_KNpsk0_P256_AESGCM_SHA256".parse()?)
+                .prologue(CABLE_PROLOGUE_QR_INITIATED)?
+                .local_private_key(local_private_key.as_slice())?
+                .psk(0, &psk)?
+                .build_initiator()
         }
+        CableTunnelConnectionType::KnownDevice {
+            authenticator_public_key,
+            ..
+        } => Builder::new("Noise_NKpsk0_P256_AESGCM_SHA256".parse()?)
+            .prologue(CABLE_PROLOGUE_STATE_ASSISTED)?
+            .remote_public_key(&authenticator_public_key)?
+            .psk(0, &psk)?
+            .build_initiator(),
     };
 
     // Build the Noise handshake as the initiator
-    let mut noise_handshake = match noise_builder.build_initiator() {
+    let mut noise_handshake = match noise_handshake {
         Ok(handshake) => handshake,
         Err(e) => {
             error!(?e, "Failed to build Noise handshake");
@@ -295,29 +336,56 @@ async fn do_handshake(
         return Err(Error::Transport(TransportError::ConnectionFailed));
     }
 
-    Ok(noise_handshake.into_transport_mode()?)
+    Ok(TunnelNoiseState {
+        handshake_hash: noise_handshake.get_handshake_hash().to_vec(),
+        transport_state: noise_handshake.into_transport_mode()?,
+    })
 }
 
-fn task_connection(
+pub(crate) async fn channel(
+    connection_type: &CableTunnelConnectionType,
+    noise_state: TunnelNoiseState,
+    tunnel_domain: &str,
+    maybe_known_device_store: &Option<Arc<dyn CableKnownDeviceInfoStore>>,
     ws_stream: WebSocketStream<MaybeTlsStream<TcpStream>>,
-    transport_state: TransportState,
-) -> Result<(Sender<CborRequest>, Receiver<CborResponse>, JoinHandle<()>), Error> {
+) -> Result<(CableChannel, mpsc::Receiver<UxUpdate>), Error> {
     let (cbor_tx_send, cbor_tx_recv) = mpsc::channel(16);
     let (cbor_rx_send, cbor_rx_recv) = mpsc::channel(16);
 
-    let handle_connection = task::spawn(connection(
-        ws_stream,
-        transport_state,
-        cbor_tx_recv,
-        cbor_rx_send,
-    ));
+    let tunnel_domain: String = tunnel_domain.to_string();
+    let maybe_known_device_store = maybe_known_device_store.clone();
+    let connection_type = connection_type.to_owned();
+    let handle_connection = task::spawn(async move {
+        connection(
+            &connection_type,
+            &tunnel_domain,
+            &maybe_known_device_store,
+            ws_stream,
+            noise_state,
+            cbor_tx_recv,
+            cbor_rx_send,
+        )
+        .await;
+    });
 
-    Ok((cbor_tx_send, cbor_rx_recv, handle_connection))
+    let (send, recv) = mpsc::channel(1);
+    Ok((
+        CableChannel {
+            handle_connection,
+            cbor_sender: cbor_tx_send,
+            cbor_receiver: cbor_rx_recv,
+            tx: send,
+        },
+        recv,
+    ))
 }
 
 async fn connection(
+    connection_type: &CableTunnelConnectionType,
+    tunnel_domain: &str,
+    known_device_store: &Option<Arc<dyn CableKnownDeviceInfoStore>>,
     mut ws_stream: WebSocketStream<MaybeTlsStream<TcpStream>>,
-    mut noise_state: TransportState,
+    mut noise_state: TunnelNoiseState,
     mut cbor_tx_recv: Receiver<CborRequest>,
     cbor_rx_send: Sender<CborResponse>,
 ) {
@@ -353,7 +421,7 @@ async fn connection(
                     Ok(message) => {
                         debug!("Received WSS message");
                         trace!(?message);
-                        let _ = connection_recv(message, &cbor_rx_send, &mut noise_state).await;
+                        let _ = connection_recv(connection_type, tunnel_domain, known_device_store, message, &cbor_rx_send, &mut noise_state).await;
                     }
                 };
             }
@@ -383,7 +451,7 @@ async fn connection(
 async fn connection_send(
     request: CborRequest,
     ws_stream: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
-    noise_state: &mut TransportState,
+    noise_state: &mut TunnelNoiseState,
 ) -> Result<(), Error> {
     debug!("Sending CBOR request");
     trace!(?request);
@@ -410,7 +478,10 @@ async fn connection_send(
     trace!(?frame_serialized);
 
     let mut encrypted_frame = vec![0u8; MAX_CBOR_SIZE + 1];
-    match noise_state.write_message(&frame_serialized, &mut encrypted_frame) {
+    match noise_state
+        .transport_state
+        .write_message(&frame_serialized, &mut encrypted_frame)
+    {
         Ok(size) => {
             encrypted_frame.resize(size, 0u8);
         }
@@ -458,10 +529,13 @@ async fn connection_recv_binary_frame(message: Message) -> Result<Option<Vec<u8>
 
 async fn decrypt_frame(
     encrypted_frame: Vec<u8>,
-    noise_state: &mut TransportState,
+    noise_state: &mut TunnelNoiseState,
 ) -> Result<Vec<u8>, Error> {
     let mut decrypted_frame = vec![0u8; MAX_CBOR_SIZE];
-    match noise_state.read_message(&encrypted_frame, &mut decrypted_frame) {
+    match noise_state
+        .transport_state
+        .read_message(&encrypted_frame, &mut decrypted_frame)
+    {
         Ok(size) => {
             debug!(decrypted_frame_len = size, "Decrypted CBOR response");
             decrypted_frame.resize(size, 0u8);
@@ -486,7 +560,7 @@ async fn decrypt_frame(
 
 async fn connection_recv_initial(
     message: Message,
-    noise_state: &mut TransportState,
+    noise_state: &mut TunnelNoiseState,
 ) -> Result<Vec<u8>, Error> {
     let Some(encrypted_frame) = connection_recv_binary_frame(message).await? else {
         return Err(Error::Transport(TransportError::ConnectionFailed));
@@ -513,10 +587,76 @@ async fn connection_recv_initial(
     Ok(initial_message.info.to_vec())
 }
 
+async fn connection_recv_update(message: &[u8]) -> Result<Option<CableLinkingInfo>, Error> {
+    // TODO(#66): Android adds a 999-key to the end the message, which is not part of the standard.
+    // For now, we parse the message to a map and manuually import fields.
+
+    let update_message: BTreeMap<Value, Value> = match serde_cbor::from_slice(&message) {
+        Ok(update_message) => update_message,
+        Err(e) => {
+            error!(?e, "Failed to decode update message");
+            return Err(Error::Transport(TransportError::ConnectionFailed));
+        }
+    };
+
+    let Some(Value::Map(linking_info_map)) = update_message.get(&Value::Integer(0x01)) else {
+        warn!("Empty linking info map");
+        return Ok(None);
+    };
+
+    trace!(?linking_info_map);
+
+    let Some(Value::Bytes(contact_id)) = linking_info_map.get(&Value::Integer(0x01)) else {
+        warn!("Missing contact ID");
+        return Ok(None);
+    };
+
+    let Some(Value::Bytes(link_id)) = linking_info_map.get(&Value::Integer(0x02)) else {
+        warn!("Missing link ID");
+        return Ok(None);
+    };
+
+    let Some(Value::Bytes(link_secret)) = linking_info_map.get(&Value::Integer(0x03)) else {
+        warn!("Missing link secret");
+        return Ok(None);
+    };
+
+    let Some(Value::Bytes(authenticator_public_key)) = linking_info_map.get(&Value::Integer(0x04))
+    else {
+        warn!("Missing authenticator public key");
+        return Ok(None);
+    };
+
+    let Some(Value::Text(authenticator_name)) = linking_info_map.get(&Value::Integer(0x05)) else {
+        warn!("Missing authenticator name");
+        return Ok(None);
+    };
+
+    let Some(Value::Bytes(handshake_signature)) = linking_info_map.get(&Value::Integer(0x06))
+    else {
+        warn!("Missing handshake_signature");
+        return Ok(None);
+    };
+
+    let linking_info = CableLinkingInfo {
+        contact_id: contact_id.clone(),
+        link_id: link_id.clone(),
+        link_secret: link_secret.clone(),
+        authenticator_public_key: authenticator_public_key.clone(),
+        authenticator_name: authenticator_name.clone(),
+        handshake_signature: handshake_signature.clone(),
+    };
+
+    Ok(Some(linking_info))
+}
+
 async fn connection_recv(
+    connection_type: &CableTunnelConnectionType,
+    tunnel_domain: &str,
+    known_device_store: &Option<Arc<dyn CableKnownDeviceInfoStore>>,
     message: Message,
     cbor_rx_send: &Sender<CborResponse>,
-    noise_state: &mut TransportState,
+    noise_state: &mut TunnelNoiseState,
 ) -> Result<(), Error> {
     let Some(encrypted_frame) = connection_recv_binary_frame(message).await? else {
         return Ok(());
@@ -555,18 +695,100 @@ async fn connection_recv(
         }
         CableTunnelMessageType::Update => {
             // Handle the update message
-            warn!(?cable_message, "Received update message");
-            // TODO: connection_recv_update(cable_message.payload).await?;
+            let maybe_update_message: Option<CableLinkingInfo> =
+                connection_recv_update(&cable_message.payload).await?;
+
+            let Some(linking_info) = maybe_update_message else {
+                warn!("Ignoring update message without linking info");
+                return Ok(());
+            };
+
+            let CableTunnelConnectionType::QrCode { private_key, .. } = connection_type else {
+                warn!("Ignoring update message for non-QR code connection");
+                return Ok(());
+            };
+
+            debug!("Received update message with linking info");
+            trace!(?linking_info);
+
+            let device_id: CableKnownDeviceId = (&linking_info).into();
+            match known_device_store {
+                Some(store) => {
+                    match parse_known_device(
+                        private_key,
+                        tunnel_domain,
+                        &linking_info,
+                        &noise_state,
+                    ) {
+                        Ok(known_device) => {
+                            debug!(?device_id, "Updating known device");
+                            trace!(?known_device);
+                            store.put_known_device(&device_id, &known_device).await;
+                        }
+                        Err(e) => {
+                            error!(
+                                ?e,
+                                "Invalid update message from authenticator, forgetting device"
+                            );
+                            store.delete_known_device(&device_id).await;
+                            return Err(Error::Transport(TransportError::TransportUnavailable));
+                        }
+                    }
+                }
+                None => {
+                    warn!("Ignoring update message without a device store");
+                }
+            };
         }
     };
 
     Ok(())
 }
 
+/// Validation requires a shared key computed on the QR code ephemeral identity key (private_key here).
+/// We're currently unable to validate the signature on linking information received for state-assisted transactions,
+/// so these should be discarded. This is the same Chrome currently does, although it may change in future spec versions.
+/// See: https://github.com/chromium/chromium/blob/88e250200e59daf52554bcc74870138143a830c4/device/fido/cable/fido_tunnel_device.cc#L547-L549
+fn parse_known_device(
+    private_key: &NonZeroScalar,
+    tunnel_domain: &str,
+    linking_info: &CableLinkingInfo,
+    noise_state: &TunnelNoiseState,
+) -> Result<CableKnownDeviceInfo, Error> {
+    let known_device = CableKnownDeviceInfo::new(tunnel_domain, linking_info)?;
+    let secret_key = SecretKey::from(private_key);
+
+    let Ok(authenticator_public_key) =
+        PublicKey::from_sec1_bytes(&linking_info.authenticator_public_key)
+    else {
+        error!("Failed to parse public key.");
+        return Err(Error::Transport(TransportError::InvalidKey));
+    };
+
+    let shared_secret: Vec<u8> = ecdh::diffie_hellman(
+        secret_key.to_nonzero_scalar(),
+        authenticator_public_key.as_affine(),
+    )
+    .raw_secret_bytes()
+    .to_vec();
+
+    let mut hmac = Hmac::<Sha256>::new_from_slice(&shared_secret).expect("Any key size is valid");
+    hmac.update(&noise_state.handshake_hash);
+    let expected_mac = hmac.finalize().into_bytes().to_vec();
+
+    if expected_mac != linking_info.handshake_signature {
+        error!("Invalid handshake signature, rejecting update message");
+        trace!(?expected_mac, ?linking_info.handshake_signature);
+        return Err(Error::Transport(TransportError::InvalidSignature));
+    }
+
+    debug!("Parsed known device with valid signature");
+    Ok(known_device)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn decode_tunnel_server_domain_known() {
         assert_eq!(

@@ -22,12 +22,12 @@ use super::qr_code_device::CableQrCodeDevice;
 
 #[derive(Debug)]
 pub enum CableChannelDevice<'d> {
-    QrCode(&'d CableQrCodeDevice<'d>),
-    Known(&'d CableKnownDevice<'d>),
+    QrCode(&'d CableQrCodeDevice),
+    Known(&'d CableKnownDevice),
 }
 
 #[derive(Debug)]
-pub struct CableChannel<'d> {
+pub struct CableChannel {
     /// The WebSocket stream used for communication.
     // pub(crate) ws_stream: WebSocketStream<MaybeTlsStream<TcpStream>>,
 
@@ -35,22 +35,26 @@ pub struct CableChannel<'d> {
     // pub(crate) noise_state: TransportState,
 
     /// The device that this channel is connected to.
-    pub device: CableChannelDevice<'d>,
-
     pub(crate) handle_connection: task::JoinHandle<()>,
     pub(crate) cbor_sender: mpsc::Sender<CborRequest>,
     pub(crate) cbor_receiver: mpsc::Receiver<CborResponse>,
     pub(crate) tx: mpsc::Sender<UxUpdate>,
 }
 
-impl Display for CableChannel<'_> {
+impl Display for CableChannel {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "CableChannel")
     }
 }
 
+impl Drop for CableChannel {
+    fn drop(&mut self) {
+        self.handle_connection.abort();
+    }
+}
+
 #[async_trait]
-impl<'d> Channel for CableChannel<'d> {
+impl<'d> Channel for CableChannel {
     async fn supported_protocols(&self) -> Result<SupportedProtocols, Error> {
         Ok(SupportedProtocols::fido2_only())
     }
@@ -111,7 +115,7 @@ impl<'d> Channel for CableChannel<'d> {
     }
 }
 
-impl<'d> Ctap2AuthTokenStore for CableChannel<'d> {
+impl<'d> Ctap2AuthTokenStore for CableChannel {
     fn store_auth_data(&mut self, _auth_token_data: AuthTokenData) {}
 
     fn get_auth_data(&self) -> Option<&AuthTokenData> {
