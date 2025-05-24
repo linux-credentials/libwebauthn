@@ -271,17 +271,14 @@ pub(crate) async fn do_handshake(
             return Err(Error::Transport(TransportError::ConnectionFailed));
         }
     };
+
+    let initial_msg: Vec<u8> = initial_msg_buffer[..initial_msg_len].into();
     trace!(
-        { handshake = ?initial_msg_buffer[..initial_msg_len] },
+        { handshake = ?initial_msg },
         "Sending initial handshake message"
     );
 
-    if let Err(e) = ws_stream
-        .send(Message::Binary(
-            initial_msg_buffer[..initial_msg_len].into(),
-        ))
-        .await
-    {
+    if let Err(e) = ws_stream.send(Message::Binary(initial_msg.into())).await {
         error!(?e, "Failed to send initial handshake message");
         return Err(Error::Transport(TransportError::ConnectionFailed));
     }
@@ -513,6 +510,7 @@ async fn connection_recv_binary_frame(message: Message) -> Result<Option<Vec<u8>
             Err(Error::Transport(TransportError::ConnectionFailed))
         }
         Message::Binary(encrypted_frame) => {
+            let encrypted_frame: Vec<u8> = encrypted_frame.into();
             debug!(
                 frame_len = encrypted_frame.len(),
                 "Received encrypted CBOR response"
