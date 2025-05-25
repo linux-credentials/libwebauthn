@@ -12,20 +12,20 @@ use crate::webauthn::CtapError;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Ctap1Transport {
-    BT,
-    BLE,
-    NFC,
-    USB,
+    Bt,
+    Ble,
+    Nfc,
+    Usb,
 }
 
 impl TryFrom<&Ctap2Transport> for Ctap1Transport {
     type Error = CtapError;
     fn try_from(ctap2: &Ctap2Transport) -> Result<Ctap1Transport, Self::Error> {
         match ctap2 {
-            Ctap2Transport::BLE => Ok(Ctap1Transport::BLE),
-            Ctap2Transport::USB => Ok(Ctap1Transport::USB),
-            Ctap2Transport::NFC => Ok(Ctap1Transport::NFC),
-            Ctap2Transport::INTERNAL => Err(CtapError::UnsupportedOption),
+            Ctap2Transport::Ble => Ok(Ctap1Transport::Ble),
+            Ctap2Transport::Usb => Ok(Ctap1Transport::Usb),
+            Ctap2Transport::Nfc => Ok(Ctap1Transport::Nfc),
+            Ctap2Transport::Internal => Err(CtapError::UnsupportedOption),
         }
     }
 }

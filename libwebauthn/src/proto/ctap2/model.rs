@@ -121,19 +121,19 @@ pub enum Ctap2PublicKeyCredentialType {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Ctap2Transport {
-    BLE,
-    NFC,
-    USB,
-    INTERNAL,
+    Ble,
+    Nfc,
+    Usb,
+    Internal,
 }
 
 impl From<&Ctap1Transport> for Ctap2Transport {
     fn from(ctap1: &Ctap1Transport) -> Ctap2Transport {
         match ctap1 {
-            Ctap1Transport::BT => Ctap2Transport::BLE,
-            Ctap1Transport::BLE => Ctap2Transport::BLE,
-            Ctap1Transport::USB => Ctap2Transport::USB,
-            Ctap1Transport::NFC => Ctap2Transport::NFC,
+            Ctap1Transport::Bt => Ctap2Transport::Ble,
+            Ctap1Transport::Ble => Ctap2Transport::Ble,
+            Ctap1Transport::Usb => Ctap2Transport::Usb,
+            Ctap1Transport::Nfc => Ctap2Transport::Nfc,
         }
     }
 }
@@ -211,13 +211,13 @@ pub enum Ctap2UserVerificationOperation {
 mod tests {
     use crate::proto::ctap2::Ctap2PublicKeyCredentialDescriptor;
 
-    use super::{Ctap2CredentialType, Ctap2COSEAlgorithmIdentifier, Ctap2PublicKeyCredentialType};
+    use super::{Ctap2COSEAlgorithmIdentifier, Ctap2CredentialType, Ctap2PublicKeyCredentialType};
+    use hex;
     use serde_bytes::ByteBuf;
     use serde_cbor;
-    use hex;
 
     #[test]
-    /// Verify CBOR serialization conforms to CTAP canonical standard, including ordering (see #95) 
+    /// Verify CBOR serialization conforms to CTAP canonical standard, including ordering (see #95)
     pub fn credential_type_field_serialization() {
         let credential_type = Ctap2CredentialType {
             algorithm: Ctap2COSEAlgorithmIdentifier::ES256,
@@ -230,7 +230,7 @@ mod tests {
     }
 
     #[test]
-    /// Verify CBOR serialization conforms to CTAP canonical standard, including ordering (see #95) 
+    /// Verify CBOR serialization conforms to CTAP canonical standard, including ordering (see #95)
     pub fn credential_descriptor_serialization() {
         let credential_descriptor = Ctap2PublicKeyCredentialDescriptor {
             id: ByteBuf::from(vec![0x42]),
