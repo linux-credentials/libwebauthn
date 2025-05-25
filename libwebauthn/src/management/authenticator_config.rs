@@ -1,3 +1,4 @@
+use crate::proto::ctap2::cbor::CborSerialize;
 use crate::proto::ctap2::Ctap2ClientPinRequest;
 pub use crate::transport::error::{CtapError, Error};
 use crate::transport::Channel;
@@ -14,7 +15,6 @@ use crate::{
 };
 use async_trait::async_trait;
 use serde_bytes::ByteBuf;
-use serde_cbor::ser::to_vec;
 use std::time::Duration;
 use tracing::info;
 
@@ -173,7 +173,7 @@ impl Ctap2UserVerifiableRequest for Ctap2AuthenticatorConfigRequest {
         data.push(0x0D);
         data.push(self.subcommand as u8);
         if self.subcommand == Ctap2AuthenticatorConfigCommand::SetMinPINLength {
-            data.extend(to_vec(&self.subcommand_params).unwrap());
+            data.extend((&self.subcommand_params).to_vec().unwrap());
         }
         let uv_auth_param = uv_proto.authenticate(uv_auth_token, &data);
         self.protocol = Some(uv_proto.version());
