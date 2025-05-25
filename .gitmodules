@@ -1,3 +1,6 @@
 [submodule "solo/src/ext"]
 	path = solo/src/ext
 	url = https://github.com/AlfioEmanueleFresta/solo.git
+[submodule "serde-indexed"]
+	path = serde-indexed
+	url = git@github.com:AlfioEmanueleFresta/serde-indexed.git

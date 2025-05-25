@@ -12,6 +12,7 @@ use std::{
 };
 use tracing::{error, warn};
 
+use crate::proto::ctap2::cbor::{CborDeserialize, CborSerialize};
 use crate::{
     proto::{
         ctap2::{Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialType},
@@ -95,7 +96,10 @@ where
         // signCount               | 4
         // attestedCredentialData  | variable
         // extensions              | variable
-        let mut res = self.rp_id_hash.to_vec();
+        let mut res = self.rp_id_hash.to_vec().map_err(|e| {
+            error!("Failed to create AuthenticatorData output vec at rp_id_hash: {e:?}");
+            Error::Platform(e.into())
+        })?;
         res.push(self.flags.bits());
         res.write_u32::<BigEndian>(self.signature_count)
             .map_err(|e| {
@@ -120,7 +124,7 @@ where
             })?;
             res.extend(&att_data.credential_id);
             let cose_encoded_public_key =
-                serde_cbor::to_vec(&att_data.credential_public_key)
+                att_data.credential_public_key.to_vec()
             .map_err(|e| {
                 error!(
                     "Failed to create AuthenticatorData output vec at attested_credential.credential_public_key: {e:?}"
@@ -132,7 +136,7 @@ where
 
         if self.extensions.is_some() || self.flags.contains(AuthenticatorDataFlags::EXTENSION_DATA)
         {
-            res.extend(serde_cbor::to_vec(&self.extensions).map_err(|e| {
+            res.extend(self.extensions.to_vec().map_err(|e| {
                 error!("Failed to create AuthenticatorData output vec at extensions: {e:?}");
                 Error::Platform(PlatformError::InvalidDeviceResponse)
             })?);
@@ -215,9 +219,8 @@ impl<'de, T: DeserializeOwned> Deserialize<'de> for AuthenticatorData<T> {
                     let mut credential_id = vec![0u8; credential_id_len];
                     cursor.read_exact(&mut credential_id).unwrap(); // We checked the length
 
-                    let mut deserializer = serde_cbor::Deserializer::from_reader(&mut cursor);
                     let credential_public_key: PublicKey =
-                        Deserialize::deserialize(&mut deserializer).map_err(DesError::custom)?;
+                        CborDeserialize::from_reader(&mut cursor).map_err(DesError::custom)?;
 
                     attested_credential = Some(AttestedCredentialData {
                         aaguid,
