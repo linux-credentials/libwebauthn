@@ -16,6 +16,7 @@ use tracing::{debug, error};
 use super::known_devices::CableKnownDeviceInfoStore;
 use super::tunnel::{self, KNOWN_TUNNEL_DOMAINS};
 use super::{channel::CableChannel, Cable};
+use crate::proto::ctap2::cbor::CborSerialize;
 use crate::transport::cable::advertisement::await_advertisement;
 use crate::transport::cable::crypto::{derive, KeyPurpose};
 use crate::transport::cable::digit_encode;
@@ -59,7 +60,7 @@ pub struct CableQrCode {
 
 impl ToString for CableQrCode {
     fn to_string(&self) -> String {
-        let serialized = serde_cbor::to_vec(self).unwrap();
+        let serialized = self.to_vec().unwrap();
         format!("FIDO:/{}", digit_encode(&serialized))
     }
 }

@@ -1,9 +1,9 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
-use serde_cbor::from_slice;
 use tracing::{debug, instrument, trace, warn};
 
+use crate::proto::ctap2::cbor::CborDeserialize;
 use crate::proto::ctap2::cbor::CborRequest;
 use crate::proto::ctap2::{Ctap2BioEnrollmentResponse, Ctap2CommandCode};
 use crate::transport::error::{CtapError, Error, PlatformError};
@@ -22,7 +22,7 @@ const TIMEOUT_GET_INFO: Duration = Duration::from_millis(250);
 
 macro_rules! parse_cbor {
     ($type:ty, $data:expr) => {{
-        match from_slice::<$type>($data) {
+        match CborDeserialize::<$type>::from_slice($data) {
             Ok(f) => f,
             Err(e) => {
                 tracing::error!(
