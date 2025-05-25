@@ -125,6 +125,7 @@ pub enum Ctap2Transport {
     Nfc,
     Usb,
     Internal,
+    Hybrid,
 }
 
 impl From<&Ctap1Transport> for Ctap2Transport {

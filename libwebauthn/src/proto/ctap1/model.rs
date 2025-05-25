@@ -26,6 +26,7 @@ impl TryFrom<&Ctap2Transport> for Ctap1Transport {
             Ctap2Transport::Usb => Ok(Ctap1Transport::Usb),
             Ctap2Transport::Nfc => Ok(Ctap1Transport::Nfc),
             Ctap2Transport::Internal => Err(CtapError::UnsupportedOption),
+            Ctap2Transport::Hybrid => Err(CtapError::UnsupportedOption),
         }
     }
 }
