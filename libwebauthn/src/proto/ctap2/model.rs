@@ -209,35 +209,35 @@ pub enum Ctap2UserVerificationOperation {
 
 #[cfg(test)]
 mod tests {
+    use crate::proto::ctap2::cbor::CborSerialize;
     use crate::proto::ctap2::Ctap2PublicKeyCredentialDescriptor;
 
-    use super::{Ctap2CredentialType, Ctap2COSEAlgorithmIdentifier, Ctap2PublicKeyCredentialType};
-    use serde_bytes::ByteBuf;
-    use serde_cbor;
+    use super::{Ctap2COSEAlgorithmIdentifier, Ctap2CredentialType, Ctap2PublicKeyCredentialType};
     use hex;
+    use serde_bytes::ByteBuf;
 
     #[test]
-    /// Verify CBOR serialization conforms to CTAP canonical standard, including ordering (see #95) 
+    /// Verify CBOR serialization conforms to CTAP canonical standard, including ordering (see #95)
     pub fn credential_type_field_serialization() {
         let credential_type = Ctap2CredentialType {
             algorithm: Ctap2COSEAlgorithmIdentifier::ES256,
             public_key_type: Ctap2PublicKeyCredentialType::PublicKey,
         };
-        let serialized = serde_cbor::to_vec(&credential_type).unwrap();
+        let serialized = credential_type.to_vec().unwrap();
         // Known good, verified by hand with cbor.me playground
         let expected = hex::decode("a263616c672664747970656a7075626c69632d6b6579").unwrap();
         assert_eq!(serialized, expected);
     }
 
     #[test]
-    /// Verify CBOR serialization conforms to CTAP canonical standard, including ordering (see #95) 
+    /// Verify CBOR serialization conforms to CTAP canonical standard, including ordering (see #95)
     pub fn credential_descriptor_serialization() {
         let credential_descriptor = Ctap2PublicKeyCredentialDescriptor {
             id: ByteBuf::from(vec![0x42]),
             r#type: Ctap2PublicKeyCredentialType::PublicKey,
             transports: None,
         };
-        let serialized = serde_cbor::to_vec(&credential_descriptor).unwrap();
+        let serialized = credential_descriptor.to_vec().unwrap();
         // Known good, verified by hand with cbor.me playground
         let expected = hex::decode("a2626964414264747970656a7075626c69632d6b6579").unwrap();
         assert_eq!(serialized, expected);
