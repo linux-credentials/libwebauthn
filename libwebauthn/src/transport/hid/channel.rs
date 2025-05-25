@@ -246,7 +246,10 @@ impl<'d> HidChannel<'d> {
     pub async fn hid_send(&self, msg: &HidMessage) -> Result<(), Error> {
         match &self.open_device {
             OpenHidDevice::HidApiDevice(hidapi_device) => {
-                let guard = hidapi_device.lock().unwrap();
+                let Ok(guard) = hidapi_device.lock() else {
+                    warn!("Poisoned lock on HID API device");
+                    return Err(Error::Transport(TransportError::ConnectionLost));
+                };
                 Self::hid_send_hidapi(guard.deref(), msg)
             }
             #[cfg(feature = "virtual-hid-device")]
@@ -264,7 +267,9 @@ impl<'d> HidChannel<'d> {
             report.extend(vec![0; PACKET_SIZE - packet.len()]);
             debug!({ packet = i, len = report.len() }, "Sending packet as HID report",);
             trace!(?report);
-            device.write(&report).unwrap();
+            device
+                .write(&report)
+                .or(Err(Error::Transport(TransportError::ConnectionLost)))?;
         }
         Ok(())
     }
@@ -307,7 +312,10 @@ impl<'d> HidChannel<'d> {
         loop {
             let response = match &self.open_device {
                 OpenHidDevice::HidApiDevice(hidapi_device) => {
-                    let guard = hidapi_device.lock().unwrap();
+                    let Ok(guard) = hidapi_device.lock() else {
+                        warn!("Poisoned lock on HID API device");
+                        return Err(Error::Transport(TransportError::ConnectionLost));
+                    };
                     Self::hid_recv_hidapi(guard.deref(), timeout)
                 }
                 #[cfg(feature = "virtual-hid-device")]
@@ -440,7 +448,10 @@ impl Channel for HidChannel<'_> {
         let cid = self.init.cid;
         debug!({ cid }, "Sending APDU request");
         trace!(?request);
-        let apdu_raw = request.raw_long().unwrap();
+        let Ok(apdu_raw) = request.raw_long() else {
+            warn!("Failed to serialize APDU request");
+            return Err(Error::Transport(TransportError::InvalidFraming));
+        };
         self.hid_send(&HidMessage::new(cid, HidCommand::Msg, &apdu_raw))
             .await?;
         Ok(())
