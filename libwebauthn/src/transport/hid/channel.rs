@@ -448,10 +448,9 @@ impl Channel for HidChannel<'_> {
         let cid = self.init.cid;
         debug!({ cid }, "Sending APDU request");
         trace!(?request);
-        let Ok(apdu_raw) = request.raw_long() else {
-            warn!("Failed to serialize APDU request");
-            return Err(Error::Transport(TransportError::InvalidFraming));
-        };
+        let apdu_raw = request
+            .raw_long()
+            .map_err(|e| TransportError::IoError(e.kind()))?;
         self.hid_send(&HidMessage::new(cid, HidCommand::Msg, &apdu_raw))
             .await?;
         Ok(())

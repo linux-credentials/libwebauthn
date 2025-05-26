@@ -453,7 +453,9 @@ async fn connection_send(
     debug!("Sending CBOR request");
     trace!(?request);
 
-    let cbor_request = request.raw_long().or(Err(TransportError::InvalidFraming))?;
+    let cbor_request = request
+        .raw_long()
+        .map_err(|e| TransportError::IoError(e.kind()))?;
     if cbor_request.len() > MAX_CBOR_SIZE {
         error!(
             cbor_request_len = cbor_request.len(),
