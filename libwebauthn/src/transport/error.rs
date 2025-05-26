@@ -1,6 +1,6 @@
 pub use crate::proto::CtapError;
 
-#[derive(thiserror::Error, Debug, PartialEq)]
+#[derive(thiserror::Error, Debug, Copy, Clone, PartialEq)]
 pub enum PlatformError {
     #[error("pin too short")]
     PinTooShort,
@@ -18,7 +18,7 @@ pub enum PlatformError {
     SyntaxError,
 }
 
-#[derive(thiserror::Error, Debug, PartialEq)]
+#[derive(thiserror::Error, Debug, Copy, Clone, PartialEq)]
 pub enum TransportError {
     #[error("connection failed")]
     ConnectionFailed,
@@ -42,7 +42,7 @@ pub enum TransportError {
     InvalidSignature,
 }
 
-#[derive(thiserror::Error, Debug, PartialEq)]
+#[derive(thiserror::Error, Debug, Copy, Clone, PartialEq)]
 pub enum Error {
     #[error("Transport error: {0}")]
     Transport(#[from] TransportError),
