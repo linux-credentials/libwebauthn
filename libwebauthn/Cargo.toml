@@ -18,18 +18,17 @@ hid-device-tests = ["virtual-hid-device"]
 virtual-hid-device = ["solo"]
 
 [dependencies]
-base64-url = "2.0.0"
+base64-url = "3.0.0"
 dbus = "0.9.5"
 tracing = "0.1.29"
-tracing-futures = { version = "0.2.5", features = ["tokio-executor"] }
 maplit = "1.0.2"
 sha2 = "0.10.2"
 uuid = { version = "1.5.0", features = ["serde", "v4"] }
 async-trait = "0.1.36"
 futures = "0.3.5"
-tokio = { version = "1.1.1", features = ["full"] }
+tokio = { version = "1.45.0", features = ["full"] }
 serde = "1.0.110"
-serde_cbor = "0.11.1"
+serde_cbor = "0.11.2"
 serde-indexed = "0.1.1"
 serde_derive = "1.0.123"
 serde_repr = "0.1.6"
@@ -38,16 +37,16 @@ num-traits = "0.2"
 num-derive = "0.4.1"
 byteorder = "1.3.4"
 num_enum = "0.7.1"
-x509-parser = "0.16.0"
+x509-parser = "0.17.0"
 time = "0.3.35"
 curve25519-dalek = "4.1.3"
 hex = "0.4.3"
-mockall = "0.11.4"
+mockall = "0.13.1"
 hidapi = { version = "2.4.1", default-features = false, features = [
     "linux-static-hidraw",
 ] }
 bitflags = "2.4.1"
-rand = "0.8.4"
+rand = "0.8.5"
 p256 = { version = "0.13.2", features = ["ecdh", "arithmetic", "serde"] }
 heapless = "0.7"
 cosey = "0.3.2"
@@ -57,16 +56,16 @@ cbc = { version = "0.1", features = ["alloc"] }
 hkdf = "0.12"
 solo = { path = "../solo", optional = true }
 text_io = "0.1"
-tungstenite = { version = "0.20.1" }
-tokio-tungstenite = { version = "0.20.1", features = [
+tungstenite = { version = "0.26.2" }
+tokio-tungstenite = { version = "0.26.2", features = [
     "rustls-tls-native-roots",
 ] }
 tokio-stream = "0.1.4"
 snow = { version = "0.10.0-alpha.1", features = ["use-p256"] }
-ctap-types = { version = "0.3.2" }
+ctap-types = { version = "0.4.0" }
 btleplug = "0.11.7"
 
 
 [dev-dependencies]
 tracing-subscriber = { version = "0.3.3", features = ["env-filter"] }
-qrcode = "0.12"
+qrcode = "0.14.1"
