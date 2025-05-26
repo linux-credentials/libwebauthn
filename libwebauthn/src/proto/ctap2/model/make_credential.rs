@@ -7,10 +7,9 @@ use super::{
 use crate::{
     fido::AuthenticatorData,
     ops::webauthn::{
-        CredentialPropsExtension, CredentialProtectionPolicy, MakeCredentialHmacOrPrfInput,
-        MakeCredentialLargeBlobExtension, MakeCredentialLargeBlobExtensionOutput,
-        MakeCredentialPrfOutput, MakeCredentialRequest, MakeCredentialResponse,
-        MakeCredentialsRequestExtensions, MakeCredentialsResponseUnsignedExtensions,
+        CredentialProtectionPolicy, MakeCredentialHmacOrPrfInput, MakeCredentialLargeBlobExtension,
+        MakeCredentialRequest, MakeCredentialResponse, MakeCredentialsRequestExtensions,
+        MakeCredentialsResponseUnsignedExtensions,
     },
     pin::PinUvAuthProtocol,
     proto::CtapError,
@@ -255,11 +254,12 @@ impl Ctap2MakeCredentialResponse {
         request: &MakeCredentialRequest,
         info: Option<&Ctap2GetInfoResponse>,
     ) -> MakeCredentialResponse {
-        let unsigned_extensions_output = self
-            .authenticator_data
-            .extensions
-            .as_ref()
-            .map(|x| x.to_unsigned_extensions(request, info));
+        let unsigned_extensions_output =
+            MakeCredentialsResponseUnsignedExtensions::from_signed_extensions(
+                &self.authenticator_data.extensions,
+                request,
+                info,
+            );
         MakeCredentialResponse {
             format: self.format,
             authenticator_data: self.authenticator_data,
@@ -329,84 +329,4 @@ pub struct Ctap2MakeCredentialsResponseExtensions {
     // Current min PIN lenght
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_pin_length: Option<u32>,
-}
-
-impl Ctap2MakeCredentialsResponseExtensions {
-    pub fn to_unsigned_extensions(
-        &self,
-        request: &MakeCredentialRequest,
-        info: Option<&Ctap2GetInfoResponse>,
-    ) -> MakeCredentialsResponseUnsignedExtensions {
-        let (hmac_create_secret, prf) = if let Some(incoming_ext) = &request.extensions {
-            match &incoming_ext.hmac_or_prf {
-                MakeCredentialHmacOrPrfInput::None => (None, None),
-                MakeCredentialHmacOrPrfInput::HmacGetSecret => (self.hmac_secret, None),
-                MakeCredentialHmacOrPrfInput::Prf => (
-                    None,
-                    Some(MakeCredentialPrfOutput {
-                        enabled: self.hmac_secret,
-                    }),
-                ),
-            }
-        } else {
-            (None, None)
-        };
-
-        // credProps extension
-        // https://w3c.github.io/webauthn/#sctn-authenticator-credential-properties-extension
-        let cred_props = match &request
-            .extensions
-            .as_ref()
-            .and_then(|x| x.cred_props.as_ref())
-        {
-            None | Some(false) => None, // Not requested, so we don't give an answer
-            Some(true) => {
-                // https://w3c.github.io/webauthn/#dom-credentialpropertiesoutput-rk
-                // Some authenticators create discoverable credentials even when not
-                // requested by the client platform. Because of this, client platforms may be
-                // forced to omit the rk property because they lack the assurance to be able
-                // to set it to false.
-                if info.map(|x| x.supports_fido_2_1()) == Some(true) {
-                    // https://fidoalliance.org/specs/fido-v2.1-ps-20210615/fido-client-to-authenticator-protocol-v2.1-ps-20210615.html#op-makecred-step-rk
-                    // if the "rk" option is false: the authenticator MUST create a non-discoverable credential.
-                    // Note: This step is a change from CTAP2.0 where if the "rk" option is false the authenticator could optionally create a discoverable credential.
-                    Some(CredentialPropsExtension {
-                        rk: Some(request.require_resident_key),
-                    })
-                } else {
-                    Some(CredentialPropsExtension {
-                        // For CTAP 2.0, we can't say if "rk" is true or not.
-                        rk: None,
-                    })
-                }
-            }
-        };
-
-        // largeBlob extension
-        // https://www.w3.org/TR/webauthn-3/#sctn-large-blob-extension
-        let large_blob = match &request
-            .extensions
-            .as_ref()
-            .and_then(|x| Some(&x.large_blob))
-        {
-            None | Some(MakeCredentialLargeBlobExtension::None) => None, // Not requested, so we don't give an answer
-            Some(MakeCredentialLargeBlobExtension::Preferred)
-            | Some(MakeCredentialLargeBlobExtension::Required) => {
-                if info.map(|x| x.option_enabled("largeBlobs")) == Some(true) {
-                    Some(MakeCredentialLargeBlobExtensionOutput {
-                        supported: Some(true),
-                    })
-                } else {
-                    None
-                }
-            }
-        };
-
-        MakeCredentialsResponseUnsignedExtensions {
-            cred_props,
-            hmac_create_secret,
-            large_blob,
-            prf,
-        }
-    }
 }
