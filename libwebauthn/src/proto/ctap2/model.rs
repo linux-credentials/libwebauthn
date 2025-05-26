@@ -116,6 +116,9 @@ impl Ctap2PublicKeyCredentialUserEntity {
 pub enum Ctap2PublicKeyCredentialType {
     #[serde(rename = "public-key")]
     PublicKey,
+
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -154,9 +157,11 @@ pub enum Ctap2COSEAlgorithmIdentifier {
     ES256 = -7,
     EDDSA = -8,
     TOPT = -9,
+    #[serde(other)]
+    Unknown = -999,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct Ctap2CredentialType {
     #[serde(rename = "alg")]
     pub algorithm: Ctap2COSEAlgorithmIdentifier,
@@ -183,6 +188,11 @@ impl Ctap2CredentialType {
             public_key_type,
             algorithm,
         }
+    }
+
+    pub fn is_known(&self) -> bool {
+        self.algorithm != Ctap2COSEAlgorithmIdentifier::Unknown
+            && self.public_key_type != Ctap2PublicKeyCredentialType::Unknown
     }
 }
 
@@ -242,5 +252,45 @@ mod tests {
         // Known good, verified by hand with cbor.me playground
         let expected = hex::decode("a2626964414264747970656a7075626c69632d6b6579").unwrap();
         assert_eq!(serialized, expected);
+    }
+
+    #[test]
+    pub fn deserialize_known_credential_type() {
+        // python $ cbor2.dumps({"alg":-7,"type":"public-key"}).hex()
+        let serialized: Vec<u8> =
+            hex::decode("a263616c672664747970656a7075626c69632d6b6579").unwrap();
+        let credential_type: Ctap2CredentialType = serde_cbor::from_slice(&serialized).unwrap();
+        assert_eq!(
+            credential_type,
+            Ctap2CredentialType {
+                algorithm: Ctap2COSEAlgorithmIdentifier::ES256,
+                public_key_type: Ctap2PublicKeyCredentialType::PublicKey,
+            }
+        );
+        assert!(credential_type.is_known());
+    }
+
+    #[test]
+    pub fn deserialize_unknown_credential_type_algorithm() {
+        // python $ cbor2.dumps({"alg":-42,"type":"public-key"}).hex()
+        let serialized: Vec<u8> =
+            hex::decode("a263616c67382964747970656a7075626c69632d6b6579").unwrap();
+        let credential_type: Ctap2CredentialType = serde_cbor::from_slice(&serialized).unwrap();
+        assert_eq!(
+            credential_type,
+            Ctap2CredentialType {
+                algorithm: Ctap2COSEAlgorithmIdentifier::Unknown,
+                public_key_type: Ctap2PublicKeyCredentialType::PublicKey,
+            }
+        );
+        assert!(!credential_type.is_known());
+    }
+
+    #[test]
+    pub fn deerialize_unknown_credential_type() {
+        // python $ cbor2.dumps({"alg":-7,"type":"unknown"}).hex()
+        let serialized: Vec<u8> = hex::decode("a263616c6726647479706567756e6b6e6f776e").unwrap();
+        let credential_type: Ctap2CredentialType = serde_cbor::from_slice(&serialized).unwrap();
+        assert!(!credential_type.is_known());
     }
 }
