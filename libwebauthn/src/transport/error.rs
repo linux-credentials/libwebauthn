@@ -1,81 +1,59 @@
 pub use crate::proto::CtapError;
 
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(thiserror::Error, Debug, Copy, Clone, PartialEq)]
 pub enum PlatformError {
+    #[error("pin too short")]
     PinTooShort,
+    #[error("pin too long")]
     PinTooLong,
+    #[error("pin not supported")]
     PinNotSupported,
+    #[error("no user verification mechanism available")]
     NoUvAvailable,
+    #[error("invalid device response")]
     InvalidDeviceResponse,
+    #[error("operation not supported")]
     NotSupported,
+    #[error("syntax error")]
     SyntaxError,
 }
 
-impl std::error::Error for PlatformError {}
-
-impl std::fmt::Display for PlatformError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{:?}", self)
-    }
-}
-
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(thiserror::Error, Debug, Copy, Clone, PartialEq)]
 pub enum TransportError {
+    #[error("connection failed")]
     ConnectionFailed,
+    #[error("connection lost")]
     ConnectionLost,
+    #[error("invalid endpoint")]
     InvalidEndpoint,
+    #[error("invalid framing")]
     InvalidFraming,
+    #[error("negotiation failed")]
     NegotiationFailed,
+    #[error("transport unavailable")]
     TransportUnavailable,
+    #[error("timeout")]
     Timeout,
+    #[error("device not found")]
     UnknownDevice,
+    #[error("invalid key")]
     InvalidKey,
+    #[error("invalid signature")]
     InvalidSignature,
 }
 
-impl std::error::Error for TransportError {}
-
-impl std::fmt::Display for TransportError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{:?}", self)
-    }
-}
-
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(thiserror::Error, Debug, Copy, Clone, PartialEq)]
 pub enum Error {
-    Transport(TransportError),
-    Ctap(CtapError),
-    Platform(PlatformError),
-}
-
-impl std::error::Error for Error {}
-
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{:?}", self)
-    }
-}
-
-impl From<CtapError> for Error {
-    fn from(error: CtapError) -> Self {
-        Error::Ctap(error)
-    }
-}
-
-impl From<TransportError> for Error {
-    fn from(error: TransportError) -> Self {
-        Error::Transport(error)
-    }
+    #[error("Transport error: {0}")]
+    Transport(#[from] TransportError),
+    #[error("Ctap error: {0}")]
+    Ctap(#[from] CtapError),
+    #[error("Platform error: {0}")]
+    Platform(#[from] PlatformError),
 }
 
 impl From<snow::Error> for Error {
     fn from(_error: snow::Error) -> Self {
         Error::Transport(TransportError::NegotiationFailed)
-    }
-}
-
-impl From<PlatformError> for Error {
-    fn from(error: PlatformError) -> Self {
-        Error::Platform(error)
     }
 }
