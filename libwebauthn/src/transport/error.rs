@@ -40,6 +40,8 @@ pub enum TransportError {
     InvalidKey,
     #[error("invalid signature")]
     InvalidSignature,
+    #[error("input/output error: {0}")]
+    IoError(std::io::ErrorKind),
 }
 
 #[derive(thiserror::Error, Debug, Copy, Clone, PartialEq)]

@@ -7,9 +7,7 @@ use crate::proto::ctap1::apdu::{ApduRequest, ApduResponse};
 use crate::proto::ctap2::cbor::{CborRequest, CborResponse};
 use crate::proto::CtapError;
 use crate::transport::ble::btleplug;
-use crate::transport::channel::{
-    AuthTokenData, Channel, ChannelStatus, Ctap2AuthTokenStore,
-};
+use crate::transport::channel::{AuthTokenData, Channel, ChannelStatus, Ctap2AuthTokenStore};
 use crate::transport::device::SupportedProtocols;
 use crate::transport::error::{Error, TransportError};
 use crate::UxUpdate;
@@ -129,7 +127,9 @@ impl<'a> Channel for BleChannel<'a> {
         debug!("Sending CBOR request");
         trace!(?request);
 
-        let cbor_request = request.raw_long().or(Err(TransportError::InvalidFraming))?;
+        let cbor_request = request
+            .raw_long()
+            .map_err(|e| TransportError::IoError(e.kind()))?;
         let request_frame = BleFrame::new(BleCommand::Msg, &cbor_request);
         self.connection
             .frame_send(&request_frame)
