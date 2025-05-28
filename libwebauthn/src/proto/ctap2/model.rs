@@ -287,7 +287,7 @@ mod tests {
     }
 
     #[test]
-    pub fn deerialize_unknown_credential_type() {
+    pub fn deserialize_unknown_credential_type() {
         // python $ cbor2.dumps({"alg":-7,"type":"unknown"}).hex()
         let serialized: Vec<u8> = hex::decode("a263616c6726647479706567756e6b6e6f776e").unwrap();
         let credential_type: Ctap2CredentialType = serde_cbor::from_slice(&serialized).unwrap();
