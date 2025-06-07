@@ -86,14 +86,16 @@ impl CableTunnelMessage {
 }
 
 #[derive(Clone, Debug, DeserializeIndexed)]
-#[serde_indexed(offset = 0)]
 struct CableInitialMessage {
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x00)]
     pub _padding: Option<ByteBuf>,
+
+    #[serde(index = 0x01)]
     pub info: ByteBuf,
+
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub _unused_2: Option<()>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x03)]
     pub _supported_features: Option<Vec<String>>,
 }
 

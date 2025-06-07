@@ -53,9 +53,10 @@ mod tests {
     use serde_indexed::{DeserializeIndexed, SerializeIndexed};
 
     #[derive(Debug, PartialEq, SerializeIndexed, DeserializeIndexed)]
-    #[serde_indexed(offset = 1)]
     struct TestStruct {
+        #[serde(index = 0x01)]
         pub a: u8,
+        #[serde(index = 0x02)]
         pub b: u8,
     }
 

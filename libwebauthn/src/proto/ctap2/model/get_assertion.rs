@@ -107,32 +107,38 @@ pub enum Ctap2AttestationStatement {
 
 // https://www.w3.org/TR/webauthn/#op-get-assertion
 #[derive(Debug, Clone, SerializeIndexed)]
-#[serde_indexed(offset = 1)]
 pub struct Ctap2GetAssertionRequest {
     /// rpId (0x01)
+    #[serde(index = 0x01)]
     pub relying_party_id: String,
 
     /// clientDataHash (0x02)
+    #[serde(index = 0x02)]
     pub client_data_hash: ByteBuf,
 
     /// allowList (0x03)
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(index = 0x03)]
     pub allow: Vec<Ctap2PublicKeyCredentialDescriptor>,
 
     /// extensions (0x04)
     #[serde(skip_serializing_if = "Self::skip_serializing_extensions")]
+    #[serde(index = 0x04)]
     pub extensions: Option<Ctap2GetAssertionRequestExtensions>,
 
     /// options (0x05)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x05)]
     pub options: Option<Ctap2GetAssertionOptions>,
 
     /// pinUvAuthParam (0x06)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x06)]
     pub pin_auth_param: Option<ByteBuf>,
 
     /// pinUvAuthProtocol (0x07)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x07)]
     pub pin_auth_proto: Option<u32>,
 }
 
@@ -350,45 +356,56 @@ impl Ctap2GetAssertionRequestExtensions {
 }
 
 #[derive(Debug, Clone, SerializeIndexed)]
-#[serde_indexed(offset = 1)]
 pub struct CalculatedHMACGetSecretInput {
     // keyAgreement(0x01): public key of platform key-agreement key.
+    #[serde(index = 0x01)]
     pub public_key: PublicKey,
     // saltEnc(0x02): Encryption of the one or two salts
+    #[serde(index = 0x02)]
     pub salt_enc: ByteBuf,
     // saltAuth(0x03): authenticate(shared secret, saltEnc)
+    #[serde(index = 0x03)]
     pub salt_auth: ByteBuf,
     // pinUvAuthProtocol(0x04): (optional) as selected when getting the shared secret. CTAP2.1 platforms MUST include this parameter if the value of pinUvAuthProtocol is not 1.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x04)]
     pub pin_auth_proto: Option<u32>,
 }
 
 #[derive(Debug, Clone, DeserializeIndexed)]
-#[serde_indexed(offset = 1)]
 pub struct Ctap2GetAssertionResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x01)]
     pub credential_id: Option<Ctap2PublicKeyCredentialDescriptor>,
 
+    #[serde(index = 0x02)]
     pub authenticator_data: AuthenticatorData<Ctap2GetAssertionResponseExtensions>,
 
+    #[serde(index = 0x03)]
     pub signature: ByteBuf,
 
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x04)]
     pub user: Option<Ctap2PublicKeyCredentialUserEntity>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x05)]
     pub credentials_count: Option<u32>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x06)]
     pub user_selected: Option<bool>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x07)]
     pub large_blob_key: Option<ByteBuf>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x08)]
     pub enterprise_attestation: Option<bool>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x09)]
     pub attestation_statement: Option<Ctap2AttestationStatement>,
 }
 
