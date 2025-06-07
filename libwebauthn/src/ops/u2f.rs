@@ -2,7 +2,6 @@ use std::time::Duration;
 
 use cosey as cose;
 use serde_bytes::ByteBuf;
-use serde_cbor::to_vec;
 use sha2::{Digest, Sha256};
 use tracing::{error, trace};
 use x509_parser::nom::AsBytes;
@@ -14,6 +13,7 @@ use crate::ops::webauthn::{
 };
 use crate::proto::ctap1::{Ctap1RegisterRequest, Ctap1SignRequest};
 use crate::proto::ctap1::{Ctap1RegisterResponse, Ctap1SignResponse};
+use crate::proto::ctap2::cbor::CborSerialize;
 use crate::proto::ctap2::{
     Ctap2AttestationStatement, Ctap2COSEAlgorithmIdentifier, Ctap2GetAssertionResponse,
     Ctap2MakeCredentialResponse, Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialType,
@@ -79,7 +79,7 @@ impl UpgradableResponse<MakeCredentialResponse, MakeCredentialRequest> for Regis
             x: x.into(),
             y: y.into(),
         });
-        let cose_encoded_public_key = to_vec(&cose_public_key).unwrap();
+        let cose_encoded_public_key = cose_public_key.to_vec()?;
         assert!(cose_encoded_public_key.len() == 77);
 
         // Let attestedCredData be a byte string with following structure:

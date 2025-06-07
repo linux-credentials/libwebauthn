@@ -10,39 +10,41 @@ use crate::pin::{PinUvAuthProtocol, PinUvAuthProtocolOne, PinUvAuthProtocolTwo};
 pub struct Ctap2ClientPinRequest {
     ///pinUvAuthProtocol (0x01)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x01)]
     pub protocol: Option<Ctap2PinUvAuthProtocol>,
 
     /// subCommand (0x02)
+    #[serde(index = 0x02)]
     pub command: Ctap2PinUvAuthProtocolCommand,
 
     /// keyAgreement (0x03)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x03)]
     pub key_agreement: Option<PublicKey>,
 
     /// pinUvAuthParam (0x04):
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x04)]
     pub uv_auth_param: Option<ByteBuf>,
 
     /// newPinEnc (0x05)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x05)]
     pub new_pin_encrypted: Option<ByteBuf>,
 
     /// pinHashEnc (0x06)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x06)]
     pub pin_hash_encrypted: Option<ByteBuf>,
-
-    #[serde(skip_serializing_if = "always_skip")]
-    pub unused_07: (),
-
-    #[serde(skip_serializing_if = "always_skip")]
-    pub unused_08: (),
 
     /// permissions (0x09)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x09)]
     pub permissions: Option<u32>,
 
-    /// permissions RPID (0x10)
+    /// permissions RPID (0x0A)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x0A)]
     pub permissions_rpid: Option<String>,
 }
 
@@ -55,8 +57,6 @@ impl Ctap2ClientPinRequest {
             uv_auth_param: None,
             new_pin_encrypted: None,
             pin_hash_encrypted: None,
-            unused_07: (),
-            unused_08: (),
             permissions: None,
             permissions_rpid: None,
         }
@@ -74,8 +74,6 @@ impl Ctap2ClientPinRequest {
             uv_auth_param: None,
             new_pin_encrypted: None,
             pin_hash_encrypted: Some(ByteBuf::from(pin_hash_enc)),
-            unused_07: (),
-            unused_08: (),
             permissions: None,
             permissions_rpid: None,
         }
@@ -89,8 +87,6 @@ impl Ctap2ClientPinRequest {
             uv_auth_param: None,
             new_pin_encrypted: None,
             pin_hash_encrypted: None,
-            unused_07: (),
-            unused_08: (),
             permissions: None,
             permissions_rpid: None,
         }
@@ -110,8 +106,6 @@ impl Ctap2ClientPinRequest {
             uv_auth_param: None,
             new_pin_encrypted: None,
             pin_hash_encrypted: Some(ByteBuf::from(pin_hash_enc)),
-            unused_07: (),
-            unused_08: (),
             permissions: Some(permissions.bits()),
             permissions_rpid: permissions_rpid.map(str::to_owned),
         }
@@ -130,8 +124,6 @@ impl Ctap2ClientPinRequest {
             uv_auth_param: None,
             new_pin_encrypted: None,
             pin_hash_encrypted: None,
-            unused_07: (),
-            unused_08: (),
             permissions: Some(permissions.bits()),
             permissions_rpid: permissions_rpid.map(str::to_owned),
         }
@@ -146,8 +138,6 @@ impl Ctap2ClientPinRequest {
             uv_auth_param: None,
             new_pin_encrypted: None,
             pin_hash_encrypted: None,
-            unused_07: (),
-            unused_08: (),
             permissions: None,
             permissions_rpid: None,
         }
@@ -167,8 +157,6 @@ impl Ctap2ClientPinRequest {
             uv_auth_param: Some(ByteBuf::from(uv_auth_param)),
             new_pin_encrypted: Some(ByteBuf::from(new_pin_enc)),
             pin_hash_encrypted: Some(ByteBuf::from(curr_pin_enc)),
-            unused_07: (),
-            unused_08: (),
             permissions: None,
             permissions_rpid: None,
         }
@@ -187,8 +175,6 @@ impl Ctap2ClientPinRequest {
             uv_auth_param: Some(ByteBuf::from(uv_auth_param)),
             new_pin_encrypted: Some(ByteBuf::from(new_pin_enc)),
             pin_hash_encrypted: None,
-            unused_07: (),
-            unused_08: (),
             permissions: None,
             permissions_rpid: None,
         }
@@ -237,31 +223,29 @@ pub enum Ctap2PinUvAuthProtocolCommand {
 }
 
 #[derive(Debug, Clone, Default, DeserializeIndexed)]
-#[serde_indexed(offset = 1)]
 pub struct Ctap2ClientPinResponse {
     /// keyAgreement (0x01)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x01)]
     pub key_agreement: Option<PublicKey>,
 
     /// pinUvAuthToken (0x02)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x02)]
     pub pin_uv_auth_token: Option<ByteBuf>,
 
     /// pinRetries (0x03)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x03)]
     pub pin_retries: Option<u32>,
 
     /// powerCycleState (0x04)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x04)]
     pub power_cycle_state: Option<bool>,
 
     /// uvRetries (0x05)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x05)]
     pub uv_retries: Option<u32>,
-}
-
-// Required by serde_indexed, as serde(skip) isn't supported yet:
-//   https://github.com/trussed-dev/serde-indexed/pull/14
-fn always_skip(_v: &()) -> bool {
-    true
 }

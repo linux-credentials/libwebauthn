@@ -7,120 +7,148 @@ use tracing::debug;
 use super::{Ctap2CredentialType, Ctap2UserVerificationOperation};
 
 #[derive(Debug, Clone, DeserializeIndexed)]
-#[serde_indexed(offset = 1)]
 pub struct Ctap2GetInfoResponse {
     /// versions (0x01)
+    #[serde(index = 0x01)]
     pub versions: Vec<String>,
 
     /// extensions (0x02)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x02)]
     pub extensions: Option<Vec<String>>,
 
     /// aaguid (0x03)
+    #[serde(index = 0x03)]
     pub aaguid: ByteBuf,
 
     /// options (0x04)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x04)]
     pub options: Option<HashMap<String, bool>>,
 
     /// maxMsgSize (0x05)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x05)]
     pub max_msg_size: Option<u32>,
 
     /// pinUvAuthProtocols (0x06)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x06)]
     pub pin_auth_protos: Option<Vec<u32>>,
 
     /// maxCredentialCountInList (0x07)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x07)]
     pub max_credential_count: Option<u32>,
 
     /// maxCredentialIdLength (0x08)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x08)]
     pub max_credential_id_length: Option<u32>,
 
     /// transports (0x09)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x09)]
     pub transports: Option<Vec<String>>,
 
     /// algorithms (0x0A)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x0A)]
     pub algorithms: Option<Vec<Ctap2CredentialType>>,
 
     /// maxSerializedLargeBlobArray (0x0B)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x0B)]
     pub max_blob_array: Option<u32>,
 
     /// forcePINChange (0x0C)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x0C)]
     pub force_pin_change: Option<bool>,
 
     /// minPINLength (0x0D)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x0D)]
     pub min_pin_length: Option<u32>,
 
     /// firmwareVersion (0x0E)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x0E)]
     pub firmware_version: Option<u32>,
 
     /// maxCredBlobLength (0x0F)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x0F)]
     pub max_cred_blob_length: Option<u32>,
 
     /// maxRPIDsForSetMinPINLength (0x10)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x10)]
     pub max_rpids_for_setminpinlength: Option<u32>,
 
     /// preferredPlatformUvAttempts (0x11)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x11)]
     pub preferred_platform_uv_attempts: Option<u32>,
 
     /// uvModality (0x12)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x12)]
     pub uv_modality: Option<u32>,
 
     /// certifications (0x13)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x13)]
     pub certifications: Option<HashMap<String, u32>>,
 
     /// remainingDiscoverableCredentials (0x14)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x14)]
     pub remaining_discoverable_creds: Option<u32>,
 
     /// vendorPrototypeConfigCommands (0x15)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x15)]
     pub vendor_proto_config_cmds: Option<Vec<u32>>,
 
     /// attestationFormats (0x16)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x16)]
     pub attestation_formats: Option<Vec<String>>,
 
     /// uvCountSinceLastPinEntry (0x17)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x17)]
     pub uv_count_since_last_pin_entry: Option<u32>,
 
     /// longTouchForReset (0x18)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x18)]
     pub long_touch_for_reset: Option<bool>,
 
     /// encIdentifier (0x19)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x19)]
     pub enc_identifier: Option<ByteBuf>,
 
     /// transportsForReset (0x1A)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x1A)]
     pub transports_for_reset: Option<Vec<String>>,
 
     /// pinComplexityPolicy (0x1B)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x1B)]
     pub pin_complexity_policy: Option<bool>,
 
     /// pinComplexityPolicyURL (0x1C)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x1C)]
     pub pin_complexity_policy_url: Option<ByteBuf>,
 
     /// maxPINLength (0x1D)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x1D)]
     pub max_pin_length: Option<u32>,
 }
 
