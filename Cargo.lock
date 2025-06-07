@@ -536,7 +536,7 @@ dependencies = [
  "heapless-bytes",
  "iso7816",
  "serde",
- "serde-indexed 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "serde-indexed 0.1.1",
  "serde_bytes",
  "serde_repr",
 ]
@@ -1014,12 +1014,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
-name = "hex-literal"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6fe2267d4ed49bc07b63801559be28c718ea06c4738b7a03c94df7386d2cde46"
-
-[[package]]
 name = "hidapi"
 version = "2.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1248,7 +1242,7 @@ dependencies = [
  "qrcode",
  "rand 0.8.5",
  "serde",
- "serde-indexed 0.1.1",
+ "serde-indexed 0.2.0",
  "serde_bytes",
  "serde_cbor",
  "serde_derive",
@@ -2030,34 +2024,21 @@ dependencies = [
 ]
 
 [[package]]
-name = "serde-byte-array"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "63213ee4ed648dbd87db6fa993d4275b46bfb4ddfd95b3756045007c2b28f742"
-dependencies = [
- "serde",
-]
-
-[[package]]
-name = "serde-indexed"
-version = "0.1.1"
-dependencies = [
- "heapless",
- "hex-literal",
- "proc-macro2",
- "quote",
- "serde",
- "serde-byte-array",
- "serde_bytes",
- "serde_cbor",
- "syn 2.0.101",
-]
-
-[[package]]
 name = "serde-indexed"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fca2da10b1f1623f47130256065e05e94fd7a98dbd26a780a4c5de831b21e5c2"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "serde-indexed"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8f68cf7478db8b81abcf71b6d195a34a4891bd3d39868731c4d73194d74ec7a3"
 dependencies = [
  "proc-macro2",
  "quote",

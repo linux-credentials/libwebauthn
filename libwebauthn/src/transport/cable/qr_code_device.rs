@@ -36,25 +36,38 @@ pub enum QrCodeOperationHint {
 #[derive(Debug, SerializeIndexed)]
 pub struct CableQrCode {
     // Key 0: a 33-byte, P-256, X9.62, compressed public key.
+    #[serde(index = 0x00)]
     pub public_key: ByteArray<33>,
+
     // Key 1: a 16-byte random QR secret.
+    #[serde(index = 0x01)]
     pub qr_secret: ByteArray<16>,
+
     /// Key 2: the number of assigned tunnel server domains known to this implementation.
+    #[serde(index = 0x02)]
     pub known_tunnel_domains_count: u8,
+
     /// Key 3: (optional) the current time in epoch seconds.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x03)]
     pub current_time: Option<u64>,
+
     /// Key 4: (optional) a boolean that is true if the device displaying the QR code can perform state-
     ///   assisted transactions.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x04)]
     pub state_assisted: Option<bool>,
+
     /// Key 5: either the string “ga” to hint that a getAssertion will follow, or “mc” to hint that a
     ///   makeCredential will follow. Implementations SHOULD treat unknown values as if they were “ga”.
     ///   This ﬁeld exists so that guidance can be given to the user immediately upon scanning the QR code,
     ///   prior to the authenticator receiving any CTAP message. While this hint SHOULD be as accurate as
     ///   possible, it does not constrain the subsequent CTAP messages that the platform may send.
+    #[serde(index = 0x05)]
     pub operation_hint: QrCodeOperationHint,
+
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x06)]
     pub supports_non_discoverable_mc: Option<bool>,
 }
 

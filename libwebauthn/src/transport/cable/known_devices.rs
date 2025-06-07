@@ -205,10 +205,14 @@ type ClientNonce = [u8; 16];
 
 // Key 3: either the string “ga” to hint that a getAssertion will follow, or “mc” to hint that a makeCredential will follow.
 #[derive(Clone, Debug, SerializeIndexed)]
-#[serde(offset = 1)]
 pub struct ClientPayload {
+    #[serde(index = 0x01)]
     pub link_id: ByteBuf,
+
+    #[serde(index = 0x02)]
     pub client_nonce: ByteBuf,
+
+    #[serde(index = 0x03)]
     pub hint: ClientPayloadHint,
 }
 
