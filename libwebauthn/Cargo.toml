@@ -61,7 +61,7 @@ tokio-tungstenite = { version = "0.26", features = [
     "rustls-tls-native-roots",
 ] }
 tokio-stream = "0.1"
-snow = { version = "0.10.0-alpha.1", features = ["use-p256"] }
+snow = { version = "0.10.0-beta.1", features = ["use-p256"] }
 ctap-types = { version = "0.4.0" }
 btleplug = "0.11.7"
 thiserror = "2.0.12"
