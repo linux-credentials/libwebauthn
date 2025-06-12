@@ -26,7 +26,7 @@ sha2 = "0.10.2"
 uuid = { version = "1.5.0", features = ["serde", "v4"] }
 async-trait = "0.1.36"
 futures = "0.3.5"
-tokio = { version = "1.45.0", features = ["full"] }
+tokio = { version = "1.45", features = ["full"] }
 serde = "1.0.110"
 serde_cbor = "0.11.2"
 serde-indexed = "0.1.1"
@@ -57,10 +57,10 @@ hkdf = "0.12"
 solo = { path = "../solo", optional = true }
 text_io = "0.1"
 tungstenite = { version = "0.26.2" }
-tokio-tungstenite = { version = "0.26.2", features = [
+tokio-tungstenite = { version = "0.26", features = [
     "rustls-tls-native-roots",
 ] }
-tokio-stream = "0.1.4"
+tokio-stream = "0.1"
 snow = { version = "0.10.0-beta.1", features = ["use-p256"] }
 ctap-types = { version = "0.4.0" }
 btleplug = "0.11.7"
