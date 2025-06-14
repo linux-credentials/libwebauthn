@@ -43,8 +43,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde::{Deserialize, Serialize};
     use serde_cbor;
     use serde_indexed::{DeserializeIndexed, SerializeIndexed};
+    use std::collections::BTreeMap;
 
     #[derive(Debug, PartialEq, SerializeIndexed, DeserializeIndexed)]
     struct IndexedStruct {
@@ -57,12 +59,12 @@ mod tests {
     #[test]
     fn test_deserialize_indexed() {
         let expected = IndexedStruct { a: 10, b: 20 };
-        let mut map = std::collections::BTreeMap::new();
+        let mut map = BTreeMap::new();
         map.insert(1, 10u8);
         map.insert(2, 20u8);
 
         let cbor = to_vec(&map).unwrap();
-        let result = from_slice::<IndexedStruct>(&cbor).unwrap();
+        let result: IndexedStruct = from_slice(&cbor).unwrap();
         assert_eq!(result, expected);
     }
 
@@ -78,13 +80,70 @@ mod tests {
     fn test_deserialize_indexed_ignore_extra_field() {
         // Map: 1 => 10, 2 => 20, 3 => 99 (unexpected)
         let expected = IndexedStruct { a: 10, b: 20 };
-        let mut map = std::collections::BTreeMap::new();
+        let mut map = BTreeMap::new();
         map.insert(1, 10u8);
         map.insert(2, 20u8);
         map.insert(3, 99u8); // unexpected field
 
         let cbor = to_vec(&map).unwrap();
-        let result = from_slice::<IndexedStruct>(&cbor).unwrap();
+        let result: IndexedStruct = from_slice(&cbor).unwrap();
         assert_eq!(result, expected);
+    }
+
+    #[derive(Debug, PartialEq, Serialize, Deserialize)]
+    struct NamedStruct {
+        #[serde(rename = "key")]
+        pub value: u8,
+    }
+
+    #[test]
+    fn test_deserialize_named() {
+        let expected = NamedStruct { value: 10 };
+        let mut map = BTreeMap::new();
+        map.insert("key", 10u8);
+
+        let cbor = to_vec(&map).unwrap();
+        let result: NamedStruct = from_slice(&cbor).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_serialize_named() {
+        let named_struct = NamedStruct { value: 10 };
+        let serialized = to_vec(&named_struct).unwrap();
+        let expected = serde_cbor::to_vec(&named_struct).unwrap();
+        assert_eq!(serialized, expected);
+    }
+
+    #[derive(Debug, PartialEq, SerializeIndexed, DeserializeIndexed)]
+    struct NestedStruct {
+        #[serde(index = 0x00)]
+        pub inner: NamedStruct,
+    }
+
+    #[test]
+    fn test_deserialize_nested() {
+        let expected = NestedStruct {
+            inner: NamedStruct { value: 10 },
+        };
+
+        let mut inner_map = BTreeMap::new();
+        inner_map.insert("key", 10u8);
+        let mut outer_map = BTreeMap::new();
+        outer_map.insert(0, inner_map);
+
+        let cbor = to_vec(&outer_map).unwrap();
+        let result: NestedStruct = from_slice(&cbor).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_serialize_nested() {
+        let nested_struct = NestedStruct {
+            inner: NamedStruct { value: 10 },
+        };
+        let serialized = to_vec(&nested_struct).unwrap();
+        let expected = serde_cbor::to_vec(&nested_struct).unwrap();
+        assert_eq!(serialized, expected);
     }
 }
