@@ -16,44 +16,38 @@ impl PartialEq for CborError {
     }
 }
 
-pub(crate) trait CborSerialize {
-    fn to_vec(&self) -> Result<Vec<u8>, CborError>;
-}
+pub(crate) type Value = serde_cbor::Value;
 
-impl<T> CborSerialize for T
+pub(crate) fn to_vec<T>(serializable: &T) -> Result<Vec<u8>, CborError>
 where
     T: Serialize,
 {
-    fn to_vec(&self) -> Result<Vec<u8>, CborError> {
-        serde_cbor::ser::to_vec(self).map_err(CborError::from)
-    }
+    serde_cbor::ser::to_vec(serializable).map_err(CborError::from)
 }
 
-pub(crate) trait CborDeserialize<T>: Sized + serde::de::DeserializeOwned {
-    fn from_reader<R: std::io::Read>(reader: R) -> Result<Self, CborError>;
-    fn from_slice(slice: &[u8]) -> Result<Self, CborError>;
+pub(crate) fn from_reader<T, R>(reader: R) -> Result<T, CborError>
+where
+    T: for<'de> serde::Deserialize<'de>,
+    R: std::io::Read,
+{
+    serde_cbor::de::from_reader(reader).map_err(CborError::from)
 }
 
-impl<T> CborDeserialize<T> for T
+pub(crate) fn from_slice<T>(slice: &[u8]) -> Result<T, CborError>
 where
     T: for<'de> serde::Deserialize<'de>,
 {
-    fn from_reader<R: std::io::Read>(reader: R) -> Result<Self, CborError> {
-        serde_cbor::de::from_reader(reader).map_err(CborError::from)
-    }
-
-    fn from_slice(slice: &[u8]) -> Result<Self, CborError> {
-        serde_cbor::de::from_slice(slice).map_err(CborError::from)
-    }
+    serde_cbor::de::from_slice(slice).map_err(CborError::from)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_cbor;
     use serde_indexed::{DeserializeIndexed, SerializeIndexed};
 
     #[derive(Debug, PartialEq, SerializeIndexed, DeserializeIndexed)]
-    struct TestStruct {
+    struct IndexedStruct {
         #[serde(index = 0x01)]
         pub a: u8,
         #[serde(index = 0x02)]
@@ -61,16 +55,36 @@ mod tests {
     }
 
     #[test]
-    fn test_deserialize_indexed_with_extra_field() {
+    fn test_deserialize_indexed() {
+        let expected = IndexedStruct { a: 10, b: 20 };
+        let mut map = std::collections::BTreeMap::new();
+        map.insert(1, 10u8);
+        map.insert(2, 20u8);
+
+        let cbor = to_vec(&map).unwrap();
+        let result = from_slice::<IndexedStruct>(&cbor).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_serialize_indexed() {
+        let indexed_struct = IndexedStruct { a: 10, b: 20 };
+        let serialized = to_vec(&indexed_struct).unwrap();
+        let expected = serde_cbor::to_vec(&indexed_struct).unwrap();
+        assert_eq!(serialized, expected);
+    }
+
+    #[test]
+    fn test_deserialize_indexed_ignore_extra_field() {
         // Map: 1 => 10, 2 => 20, 3 => 99 (unexpected)
-        let value = TestStruct { a: 10, b: 20 };
+        let expected = IndexedStruct { a: 10, b: 20 };
         let mut map = std::collections::BTreeMap::new();
         map.insert(1, 10u8);
         map.insert(2, 20u8);
         map.insert(3, 99u8); // unexpected field
 
-        let cbor = map.to_vec().unwrap();
-        let result = TestStruct::from_slice(&cbor).unwrap();
-        assert_eq!(result, value);
+        let cbor = to_vec(&map).unwrap();
+        let result = from_slice::<IndexedStruct>(&cbor).unwrap();
+        assert_eq!(result, expected);
     }
 }

@@ -24,8 +24,7 @@ use tungstenite::client::IntoClientRequest;
 use super::channel::CableChannel;
 use super::known_devices::ClientPayload;
 use super::known_devices::{CableKnownDeviceInfo, CableKnownDeviceInfoStore};
-use crate::proto::ctap2::cbor::CborSerialize;
-use crate::proto::ctap2::cbor::{CborRequest, CborResponse};
+use crate::proto::ctap2::cbor::{self, CborRequest, CborResponse};
 use crate::proto::ctap2::{Ctap2CommandCode, Ctap2GetInfoResponse};
 use crate::transport::cable::known_devices::CableKnownDeviceId;
 use crate::transport::error::Error;
@@ -198,7 +197,7 @@ pub(crate) async fn connect<'d>(
     );
 
     if let CableTunnelConnectionType::KnownDevice { client_payload, .. } = connection_type {
-        let client_payload = serde_cbor::to_vec(client_payload)
+        let client_payload = cbor::to_vec(client_payload)
             .or(Err(Error::Transport(TransportError::InvalidEndpoint)))?;
         request.headers_mut().insert(
             "X-caBLE-Client-Payload",
@@ -587,7 +586,7 @@ async fn connection_recv_initial(
         }
     };
 
-    Ok(initial_message.info.to_vec()?)
+    Ok(cbor::to_vec(&initial_message.info)?)
 }
 
 async fn connection_recv_update(message: &[u8]) -> Result<Option<CableLinkingInfo>, Error> {
@@ -685,7 +684,7 @@ async fn connection_recv(
         }
         CableTunnelMessageType::Ctap => {
             // Handle the CTAP message
-            let cbor_response: CborResponse = (&cable_message.payload.to_vec()?)
+            let cbor_response: CborResponse = (&cable_message.payload.to_vec())
                 .try_into()
                 .or(Err(TransportError::InvalidFraming))?;
 

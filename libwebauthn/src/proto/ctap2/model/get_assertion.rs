@@ -11,7 +11,7 @@ use crate::{
     webauthn::{Error, PlatformError},
 };
 
-use crate::proto::ctap2::cbor::CborSerialize;
+use crate::proto::ctap2::cbor::{self, Value};
 
 use super::{
     Ctap2AuthTokenPermissionRole, Ctap2COSEAlgorithmIdentifier, Ctap2GetInfoResponse,
@@ -21,7 +21,6 @@ use super::{
 use cosey::PublicKey;
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
-use serde_cbor::Value;
 use serde_indexed::{DeserializeIndexed, SerializeIndexed};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
@@ -255,7 +254,7 @@ impl Ctap2GetAssertionRequestExtensions {
         // saltEnc(0x02): Encryption of the one or two salts (called salt1 (32 bytes) and salt2 (32 bytes)) using the shared secret as follows:
         //     One salt case: encrypt(shared secret, salt1)
         //     Two salt case: encrypt(shared secret, salt1 || salt2)
-        let mut salts = input.salt1.to_vec()?;
+        let mut salts = cbor::to_vec(&input.salt1)?;
         if let Some(salt2) = input.salt2 {
             salts.extend(salt2);
         }

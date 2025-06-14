@@ -1,6 +1,6 @@
 use std::io::Error as IOError;
 
-use crate::proto::ctap2::cbor::CborSerialize;
+use crate::proto::ctap2::cbor;
 use crate::proto::ctap2::model::Ctap2ClientPinRequest;
 use crate::proto::ctap2::model::Ctap2CommandCode;
 use crate::proto::ctap2::model::Ctap2GetAssertionRequest;
@@ -40,7 +40,7 @@ impl From<&Ctap2MakeCredentialRequest> for CborRequest {
     fn from(request: &Ctap2MakeCredentialRequest) -> CborRequest {
         CborRequest {
             command: Ctap2CommandCode::AuthenticatorMakeCredential,
-            encoded_data: request.to_vec().unwrap(),
+            encoded_data: cbor::to_vec(&request).unwrap(),
         }
     }
 }
@@ -49,7 +49,7 @@ impl From<&Ctap2GetAssertionRequest> for CborRequest {
     fn from(request: &Ctap2GetAssertionRequest) -> CborRequest {
         CborRequest {
             command: Ctap2CommandCode::AuthenticatorGetAssertion,
-            encoded_data: request.to_vec().unwrap(),
+            encoded_data: cbor::to_vec(&request).unwrap(),
         }
     }
 }
@@ -58,7 +58,7 @@ impl From<&Ctap2ClientPinRequest> for CborRequest {
     fn from(request: &Ctap2ClientPinRequest) -> CborRequest {
         CborRequest {
             command: Ctap2CommandCode::AuthenticatorClientPin,
-            encoded_data: request.to_vec().unwrap(),
+            encoded_data: cbor::to_vec(&request).unwrap(),
         }
     }
 }
@@ -67,7 +67,7 @@ impl From<&Ctap2AuthenticatorConfigRequest> for CborRequest {
     fn from(request: &Ctap2AuthenticatorConfigRequest) -> CborRequest {
         CborRequest {
             command: Ctap2CommandCode::AuthenticatorConfig,
-            encoded_data: request.to_vec().unwrap(),
+            encoded_data: cbor::to_vec(&request).unwrap(),
         }
     }
 }
@@ -81,7 +81,7 @@ impl From<&Ctap2BioEnrollmentRequest> for CborRequest {
         };
         CborRequest {
             command,
-            encoded_data: request.to_vec().unwrap(),
+            encoded_data: cbor::to_vec(&request).unwrap(),
         }
     }
 }
@@ -95,7 +95,7 @@ impl From<&Ctap2CredentialManagementRequest> for CborRequest {
         };
         CborRequest {
             command,
-            encoded_data: request.to_vec().unwrap(),
+            encoded_data: cbor::to_vec(&request).unwrap(),
         }
     }
 }

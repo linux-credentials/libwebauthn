@@ -13,7 +13,7 @@ use crate::ops::webauthn::{
 };
 use crate::proto::ctap1::{Ctap1RegisterRequest, Ctap1SignRequest};
 use crate::proto::ctap1::{Ctap1RegisterResponse, Ctap1SignResponse};
-use crate::proto::ctap2::cbor::CborSerialize;
+use crate::proto::ctap2::cbor;
 use crate::proto::ctap2::{
     Ctap2AttestationStatement, Ctap2COSEAlgorithmIdentifier, Ctap2GetAssertionResponse,
     Ctap2MakeCredentialResponse, Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialType,
@@ -79,7 +79,7 @@ impl UpgradableResponse<MakeCredentialResponse, MakeCredentialRequest> for Regis
             x: x.into(),
             y: y.into(),
         });
-        let cose_encoded_public_key = cose_public_key.to_vec()?;
+        let cose_encoded_public_key = cbor::to_vec(&cose_public_key)?;
         assert!(cose_encoded_public_key.len() == 77);
 
         // Let attestedCredData be a byte string with following structure:

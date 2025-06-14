@@ -4,4 +4,4 @@ mod serde;
 
 pub use request::CborRequest;
 pub use response::CborResponse;
-pub(crate) use serde::{CborDeserialize, CborError, CborSerialize};
+pub(crate) use serde::{from_reader, from_slice, to_vec, CborError, Value};
