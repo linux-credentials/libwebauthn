@@ -1,6 +1,7 @@
+use crate::proto::ctap2::cbor::CborError;
 pub use crate::proto::CtapError;
 
-#[derive(thiserror::Error, Debug, Copy, Clone, PartialEq)]
+#[derive(thiserror::Error, Debug, PartialEq)]
 pub enum PlatformError {
     #[error("pin too short")]
     PinTooShort,
@@ -16,9 +17,11 @@ pub enum PlatformError {
     NotSupported,
     #[error("syntax error")]
     SyntaxError,
+    #[error("cbor serialization error: {0}")]
+    CborError(#[from] CborError),
 }
 
-#[derive(thiserror::Error, Debug, Copy, Clone, PartialEq)]
+#[derive(thiserror::Error, Debug, PartialEq)]
 pub enum TransportError {
     #[error("connection failed")]
     ConnectionFailed,
@@ -44,7 +47,7 @@ pub enum TransportError {
     IoError(std::io::ErrorKind),
 }
 
-#[derive(thiserror::Error, Debug, Copy, Clone, PartialEq)]
+#[derive(thiserror::Error, Debug, PartialEq)]
 pub enum Error {
     #[error("Transport error: {0}")]
     Transport(#[from] TransportError),
@@ -57,5 +60,11 @@ pub enum Error {
 impl From<snow::Error> for Error {
     fn from(_error: snow::Error) -> Self {
         Error::Transport(TransportError::NegotiationFailed)
+    }
+}
+
+impl From<CborError> for Error {
+    fn from(error: CborError) -> Self {
+        Error::Platform(PlatformError::CborError(error))
     }
 }

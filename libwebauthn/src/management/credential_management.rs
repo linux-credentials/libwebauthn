@@ -1,3 +1,4 @@
+use crate::proto::ctap2::cbor;
 use crate::{
     ops::webauthn::UserVerificationRequirement,
     pin::PinUvAuthProtocol,
@@ -17,7 +18,6 @@ use crate::{
 };
 use async_trait::async_trait;
 use serde_bytes::ByteBuf;
-use serde_cbor::ser::to_vec;
 use std::time::Duration;
 use tracing::info;
 
@@ -111,7 +111,7 @@ where
         Ok((
             Ctap2RPData::new(
                 unwrap_field!(resp.rp),
-                unwrap_field!(resp.rp_id_hash).to_vec(),
+                cbor::to_vec(&unwrap_field!(&resp.rp_id_hash))?,
             ),
             unwrap_field!(resp.total_rps),
         ))
@@ -138,7 +138,7 @@ where
         }?;
         Ok(Ctap2RPData::new(
             unwrap_field!(resp.rp),
-            unwrap_field!(resp.rp_id_hash).to_vec(),
+            cbor::to_vec(unwrap_field!(&resp.rp_id_hash))?,
         ))
     }
 
@@ -282,7 +282,7 @@ impl Ctap2UserVerifiableRequest for Ctap2CredentialManagementRequest {
 
         // e.g. pinUvAuthParam (0x04): authenticate(pinUvAuthToken, enumerateCredentialsBegin (0x04) || subCommandParams).
         if let Some(params) = &self.subcommand_params {
-            data.extend(to_vec(params).unwrap());
+            data.extend(cbor::to_vec(&params).unwrap());
         }
         let uv_auth_param = uv_proto.authenticate(uv_auth_token, &data);
         self.protocol = Some(uv_proto.version());
