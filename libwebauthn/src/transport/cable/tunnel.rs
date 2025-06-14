@@ -1,14 +1,12 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use ctap_types::serde::cbor_deserialize;
 use futures::{SinkExt, StreamExt};
 use hmac::{Hmac, Mac};
 use p256::{ecdh, NonZeroScalar};
 use p256::{PublicKey, SecretKey};
 use serde::Deserialize;
 use serde_bytes::ByteBuf;
-use serde_cbor::Value;
 use serde_indexed::DeserializeIndexed;
 use sha2::{Digest, Sha256};
 use snow::{Builder, TransportState};
@@ -24,7 +22,7 @@ use tungstenite::client::IntoClientRequest;
 use super::channel::CableChannel;
 use super::known_devices::ClientPayload;
 use super::known_devices::{CableKnownDeviceInfo, CableKnownDeviceInfoStore};
-use crate::proto::ctap2::cbor::{self, CborRequest, CborResponse};
+use crate::proto::ctap2::cbor::{self, CborRequest, CborResponse, Value};
 use crate::proto::ctap2::{Ctap2CommandCode, Ctap2GetInfoResponse};
 use crate::transport::cable::known_devices::CableKnownDeviceId;
 use crate::transport::error::Error;
@@ -570,7 +568,7 @@ async fn connection_recv_initial(
 
     let decrypted_frame = decrypt_frame(encrypted_frame, noise_state).await?;
 
-    let initial_message: CableInitialMessage = match cbor_deserialize(&decrypted_frame) {
+    let initial_message: CableInitialMessage = match cbor::from_slice(&decrypted_frame) {
         Ok(initial_message) => initial_message,
         Err(e) => {
             error!(?e, "Failed to decode initial message");
@@ -578,7 +576,7 @@ async fn connection_recv_initial(
         }
     };
 
-    let _: Ctap2GetInfoResponse = match cbor_deserialize(&initial_message.info) {
+    let _: Ctap2GetInfoResponse = match cbor::from_slice(&initial_message.info) {
         Ok(get_info_response) => get_info_response,
         Err(e) => {
             error!(?e, "Failed to decode GetInfo response");
