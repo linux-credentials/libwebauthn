@@ -220,12 +220,12 @@ pub enum Ctap2UserVerificationOperation {
 
 #[cfg(test)]
 mod tests {
+    use crate::proto::ctap2::cbor;
     use crate::proto::ctap2::Ctap2PublicKeyCredentialDescriptor;
 
     use super::{Ctap2COSEAlgorithmIdentifier, Ctap2CredentialType, Ctap2PublicKeyCredentialType};
     use hex;
     use serde_bytes::ByteBuf;
-    use serde_cbor;
 
     #[test]
     /// Verify CBOR serialization conforms to CTAP canonical standard, including ordering (see #95)
@@ -234,7 +234,7 @@ mod tests {
             algorithm: Ctap2COSEAlgorithmIdentifier::ES256,
             public_key_type: Ctap2PublicKeyCredentialType::PublicKey,
         };
-        let serialized = serde_cbor::to_vec(&credential_type).unwrap();
+        let serialized = cbor::to_vec(&credential_type).unwrap();
         // Known good, verified by hand with cbor.me playground
         let expected = hex::decode("a263616c672664747970656a7075626c69632d6b6579").unwrap();
         assert_eq!(serialized, expected);
@@ -248,7 +248,7 @@ mod tests {
             r#type: Ctap2PublicKeyCredentialType::PublicKey,
             transports: None,
         };
-        let serialized = serde_cbor::to_vec(&credential_descriptor).unwrap();
+        let serialized = cbor::to_vec(&credential_descriptor).unwrap();
         // Known good, verified by hand with cbor.me playground
         let expected = hex::decode("a2626964414264747970656a7075626c69632d6b6579").unwrap();
         assert_eq!(serialized, expected);

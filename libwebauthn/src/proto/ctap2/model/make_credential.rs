@@ -39,42 +39,51 @@ impl Ctap2MakeCredentialOptions {
 
 // https://www.w3.org/TR/webauthn/#authenticatormakecredential
 #[derive(Debug, Clone, SerializeIndexed)]
-#[serde_indexed(offset = 1)]
 pub struct Ctap2MakeCredentialRequest {
     /// clientDataHash (0x01)
+    #[serde(index = 0x01)]
     pub hash: ByteBuf,
 
     /// rp (0x02)
+    #[serde(index = 0x02)]
     pub relying_party: Ctap2PublicKeyCredentialRpEntity,
 
     /// user (0x03)
+    #[serde(index = 0x03)]
     pub user: Ctap2PublicKeyCredentialUserEntity,
 
     /// pubKeyCredParams (0x04)
+    #[serde(index = 0x04)]
     pub algorithms: Vec<Ctap2CredentialType>,
 
     /// excludeList (0x05)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x05)]
     pub exclude: Option<Vec<Ctap2PublicKeyCredentialDescriptor>>,
 
     /// extensions (0x06)
     #[serde(skip_serializing_if = "Self::skip_serializing_extensions")]
+    #[serde(index = 0x06)]
     pub extensions: Option<Ctap2MakeCredentialsRequestExtensions>,
 
     /// options (0x07)
     #[serde(skip_serializing_if = "Self::skip_serializing_options")]
+    #[serde(index = 0x07)]
     pub options: Option<Ctap2MakeCredentialOptions>,
 
     /// pinUvAuthParam (0x08)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x08)]
     pub pin_auth_param: Option<ByteBuf>,
 
     /// pinUvAuthProtocol (0x09)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x09)]
     pub pin_auth_proto: Option<u32>,
 
     /// enterpriseAttestation (0x0A)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x0A)]
     pub enterprise_attestation: Option<u32>,
 }
 
@@ -235,16 +244,22 @@ impl From<MakeCredentialsRequestExtensions> for Ctap2MakeCredentialsRequestExten
 }
 
 #[derive(Debug, Clone, DeserializeIndexed)]
-#[serde_indexed(offset = 1)]
 pub struct Ctap2MakeCredentialResponse {
+    #[serde(index = 0x01)]
     pub format: String,
+
+    #[serde(index = 0x02)]
     pub authenticator_data: AuthenticatorData<Ctap2MakeCredentialsResponseExtensions>,
+
+    #[serde(index = 0x03)]
     pub attestation_statement: Ctap2AttestationStatement,
 
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x04)]
     pub enterprise_attestation: Option<bool>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x05)]
     pub large_blob_key: Option<ByteBuf>,
 }
 

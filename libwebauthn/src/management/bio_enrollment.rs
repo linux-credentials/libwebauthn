@@ -1,3 +1,4 @@
+use crate::proto::ctap2::cbor;
 use crate::{
     ops::webauthn::UserVerificationRequirement,
     pin::PinUvAuthProtocol,
@@ -17,7 +18,6 @@ use crate::{
 };
 use async_trait::async_trait;
 use serde_bytes::ByteBuf;
-use serde_cbor::ser::to_vec;
 use std::time::Duration;
 use tracing::info;
 
@@ -213,7 +213,11 @@ where
         let remaining_samples = unwrap_field!(resp.remaining_samples);
         let template_id = unwrap_field!(resp.template_id).clone();
         let sample_status = unwrap_field!(resp.last_enroll_sample_status);
-        Ok((template_id.to_vec(), sample_status, remaining_samples))
+        Ok((
+            cbor::to_vec(&template_id)?,
+            sample_status,
+            remaining_samples,
+        ))
     }
 
     async fn capture_next_bio_enrollment_sample(
@@ -295,7 +299,7 @@ impl Ctap2UserVerifiableRequest for Ctap2BioEnrollmentRequest {
         };
         // e.g. "Authenticator calls verify(pinUvAuthToken, fingerprint (0x01) || removeEnrollment (0x06) || subCommandParams, pinUvAuthParam)"
         if let Some(params) = &self.subcommand_params {
-            data.extend(to_vec(params).unwrap());
+            data.extend(cbor::to_vec(&params).unwrap());
         }
         let uv_auth_param = uv_proto.authenticate(uv_auth_token, &data);
         self.protocol = Some(uv_proto.version());

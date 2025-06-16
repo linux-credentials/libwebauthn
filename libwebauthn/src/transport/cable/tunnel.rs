@@ -1,14 +1,12 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use ctap_types::serde::cbor_deserialize;
 use futures::{SinkExt, StreamExt};
 use hmac::{Hmac, Mac};
 use p256::{ecdh, NonZeroScalar};
 use p256::{PublicKey, SecretKey};
 use serde::Deserialize;
 use serde_bytes::ByteBuf;
-use serde_cbor::Value;
 use serde_indexed::DeserializeIndexed;
 use sha2::{Digest, Sha256};
 use snow::{Builder, TransportState};
@@ -24,7 +22,7 @@ use tungstenite::client::IntoClientRequest;
 use super::channel::CableChannel;
 use super::known_devices::ClientPayload;
 use super::known_devices::{CableKnownDeviceInfo, CableKnownDeviceInfoStore};
-use crate::proto::ctap2::cbor::{CborRequest, CborResponse};
+use crate::proto::ctap2::cbor::{self, CborRequest, CborResponse, Value};
 use crate::proto::ctap2::{Ctap2CommandCode, Ctap2GetInfoResponse};
 use crate::transport::cable::known_devices::CableKnownDeviceId;
 use crate::transport::error::Error;
@@ -85,14 +83,16 @@ impl CableTunnelMessage {
 }
 
 #[derive(Clone, Debug, DeserializeIndexed)]
-#[serde_indexed(offset = 0)]
 struct CableInitialMessage {
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x00)]
     pub _padding: Option<ByteBuf>,
+
+    #[serde(index = 0x01)]
     pub info: ByteBuf,
+
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub _unused_2: Option<()>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x03)]
     pub _supported_features: Option<Vec<String>>,
 }
 
@@ -195,7 +195,7 @@ pub(crate) async fn connect<'d>(
     );
 
     if let CableTunnelConnectionType::KnownDevice { client_payload, .. } = connection_type {
-        let client_payload = serde_cbor::to_vec(client_payload)
+        let client_payload = cbor::to_vec(client_payload)
             .or(Err(Error::Transport(TransportError::InvalidEndpoint)))?;
         request.headers_mut().insert(
             "X-caBLE-Client-Payload",
@@ -568,7 +568,7 @@ async fn connection_recv_initial(
 
     let decrypted_frame = decrypt_frame(encrypted_frame, noise_state).await?;
 
-    let initial_message: CableInitialMessage = match cbor_deserialize(&decrypted_frame) {
+    let initial_message: CableInitialMessage = match cbor::from_slice(&decrypted_frame) {
         Ok(initial_message) => initial_message,
         Err(e) => {
             error!(?e, "Failed to decode initial message");
@@ -576,7 +576,7 @@ async fn connection_recv_initial(
         }
     };
 
-    let _: Ctap2GetInfoResponse = match cbor_deserialize(&initial_message.info) {
+    let _: Ctap2GetInfoResponse = match cbor::from_slice(&initial_message.info) {
         Ok(get_info_response) => get_info_response,
         Err(e) => {
             error!(?e, "Failed to decode GetInfo response");
@@ -584,7 +584,7 @@ async fn connection_recv_initial(
         }
     };
 
-    Ok(initial_message.info.to_vec())
+    Ok(cbor::to_vec(&initial_message.info)?)
 }
 
 async fn connection_recv_update(message: &[u8]) -> Result<Option<CableLinkingInfo>, Error> {
