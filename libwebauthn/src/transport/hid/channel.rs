@@ -1,7 +1,7 @@
 use std::convert::TryFrom;
 use std::fmt::{Debug, Display, Formatter};
 use std::io::{Cursor as IOCursor, Seek, SeekFrom};
-use std::ops::Deref;
+use std::ops::DerefMut;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -9,7 +9,8 @@ use async_trait::async_trait;
 use byteorder::{BigEndian, ReadBytesExt};
 use hidapi::HidDevice as HidApiDevice;
 use rand::{thread_rng, Rng};
-use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::TryRecvError;
+use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::time::sleep;
 use tracing::{debug, info, instrument, trace, warn, Level};
 
@@ -27,6 +28,7 @@ use crate::transport::error::{Error, TransportError};
 use crate::transport::hid::framing::{
     HidCommand, HidMessage, HidMessageParser, HidMessageParserState,
 };
+use crate::webauthn::PlatformError;
 use crate::UxUpdate;
 
 use super::device::get_hidapi;
@@ -44,10 +46,22 @@ const REPORT_ID: u8 = 0x00;
 // by a CBOR command, so we want to ensure we wait some time after winking.
 const WINK_MIN_WAIT: Duration = Duration::from_secs(2);
 
+pub type CancelHidOperation = ();
 enum OpenHidDevice {
-    HidApiDevice(Arc<Mutex<HidApiDevice>>),
+    HidApiDevice(Arc<Mutex<(HidApiDevice, mpsc::Receiver<CancelHidOperation>)>>),
     #[cfg(feature = "virtual-hid-device")]
     VirtualDevice,
+}
+
+#[derive(Debug, Clone)]
+pub struct HidChannelHandle {
+    tx: Sender<CancelHidOperation>,
+}
+
+impl HidChannelHandle {
+    pub async fn cancel_ongoing_operation(&self) {
+        let _ = self.tx.send(()).await;
+    }
 }
 
 pub struct HidChannel<'d> {
@@ -57,6 +71,7 @@ pub struct HidChannel<'d> {
     init: InitResponse,
     auth_token_data: Option<AuthTokenData>,
     tx: mpsc::Sender<UxUpdate>,
+    handle: HidChannelHandle,
 }
 
 impl<'d> HidChannel<'d> {
@@ -64,13 +79,16 @@ impl<'d> HidChannel<'d> {
         device: &'d HidDevice,
         tx: mpsc::Sender<UxUpdate>,
     ) -> Result<HidChannel<'d>, Error> {
+        let (handle_tx, handle_rx) = mpsc::channel(1);
+        let handle = HidChannelHandle { tx: handle_tx };
+
         let mut channel = Self {
             status: ChannelStatus::Ready,
             device,
             open_device: match device.backend {
                 HidBackendDevice::HidApiDevice(_) => {
                     let hidapi_device = Self::hid_open(device)?;
-                    OpenHidDevice::HidApiDevice(Arc::new(Mutex::new(hidapi_device)))
+                    OpenHidDevice::HidApiDevice(Arc::new(Mutex::new((hidapi_device, handle_rx))))
                 }
                 #[cfg(feature = "virtual-hid-device")]
                 HidBackendDevice::VirtualDevice(_) => OpenHidDevice::VirtualDevice,
@@ -78,9 +96,14 @@ impl<'d> HidChannel<'d> {
             init: InitResponse::default(),
             auth_token_data: None,
             tx,
+            handle,
         };
         channel.init = channel.init(INIT_TIMEOUT).await?;
         Ok(channel)
+    }
+
+    pub fn get_handle(&self) -> HidChannelHandle {
+        self.handle.clone()
     }
 
     #[instrument(skip_all)]
@@ -246,22 +269,40 @@ impl<'d> HidChannel<'d> {
     pub async fn hid_send(&self, msg: &HidMessage) -> Result<(), Error> {
         match &self.open_device {
             OpenHidDevice::HidApiDevice(hidapi_device) => {
-                let Ok(guard) = hidapi_device.lock() else {
+                let Ok(mut guard) = hidapi_device.lock() else {
                     warn!("Poisoned lock on HID API device");
                     return Err(Error::Transport(TransportError::ConnectionLost));
                 };
-                Self::hid_send_hidapi(guard.deref(), msg)
+                let (device, cancel_rx) = guard.deref_mut();
+                let response = Self::hid_send_hidapi(device, cancel_rx, msg);
+                if matches!(response, Err(Error::Platform(PlatformError::Cancelled))) {
+                    // Using hid_send_hidapi directly, instead of hid_cancel, to avoid recursion
+                    let _ = Self::hid_send_hidapi(
+                        device,
+                        cancel_rx,
+                        &HidMessage::new(self.init.cid, HidCommand::Cancel, &[]),
+                    );
+                }
+                response
             }
             #[cfg(feature = "virtual-hid-device")]
             OpenHidDevice::VirtualDevice => Self::hid_send_virtual(msg).await,
         }
     }
 
-    fn hid_send_hidapi(device: &hidapi::HidDevice, msg: &HidMessage) -> Result<(), Error> {
+    fn hid_send_hidapi(
+        device: &hidapi::HidDevice,
+        cancel_rx: &mut Receiver<CancelHidOperation>,
+        msg: &HidMessage,
+    ) -> Result<(), Error> {
         let packets = msg
             .packets(PACKET_SIZE)
             .or(Err(Error::Transport(TransportError::InvalidFraming)))?;
         for (i, packet) in packets.iter().enumerate() {
+            if !matches!(cancel_rx.try_recv(), Err(TryRecvError::Empty)) {
+                return Err(Error::Platform(PlatformError::Cancelled));
+            }
+
             let mut report: Vec<u8> = vec![REPORT_ID];
             report.extend(packet);
             report.extend(vec![0; PACKET_SIZE - packet.len()]);
@@ -319,13 +360,15 @@ impl<'d> HidChannel<'d> {
                     // Note that we're just using spawn_blocking() on hid_recv(), not on hid_send(),
                     // since implementing this on hid_send and would cause unnecessary copies/locking.
                     tokio::task::spawn_blocking(move || {
-                        let Ok(guard) = device.lock() else {
+                        let Ok(mut guard) = device.lock() else {
                             warn!("Poisoned lock on HID API device");
                             return Err(Error::Transport(TransportError::ConnectionLost));
                         };
-                        let device = guard.deref();
-                        Self::hid_recv_hidapi(device, timeout)
-                    }).await.unwrap()
+                        let (device, cancel_rx) = guard.deref_mut();
+                        Self::hid_recv_hidapi(device, cancel_rx, timeout)
+                    })
+                    .await
+                    .expect("HID read not to panic.")
                 }
                 #[cfg(feature = "virtual-hid-device")]
                 OpenHidDevice::VirtualDevice => Self::hid_recv_virtual(timeout).await,
@@ -339,14 +382,26 @@ impl<'d> HidChannel<'d> {
                     debug!("Ignoring HID keep-alive");
                     continue;
                 }
+                Err(Error::Platform(PlatformError::Cancelled)) => {
+                    let _ = self.hid_cancel().await;
+                    break response;
+                }
                 _ => break response,
             }
         }
     }
 
-    fn hid_recv_hidapi(device: &hidapi::HidDevice, timeout: Duration) -> Result<HidMessage, Error> {
+    fn hid_recv_hidapi(
+        device: &hidapi::HidDevice,
+        cancel_rx: &mut Receiver<CancelHidOperation>,
+        timeout: Duration,
+    ) -> Result<HidMessage, Error> {
         let mut parser = HidMessageParser::new();
         loop {
+            if !matches!(cancel_rx.try_recv(), Err(TryRecvError::Empty)) {
+                return Err(Error::Platform(PlatformError::Cancelled));
+            }
+
             let mut report = [0; PACKET_SIZE];
             device
                 .read_timeout(&mut report, timeout.as_millis() as i32)
