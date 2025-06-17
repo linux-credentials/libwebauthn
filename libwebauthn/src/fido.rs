@@ -257,14 +257,23 @@ mod tests {
     #[test]
     fn test_serialize_auth_data() {
         // SHA-256 'example.com'
-        let rp_id_hash = [0xa3, 0x79, 0xa6, 0xf6, 0xee, 0xaf, 0xb9, 0xa5, 0x5e, 0x37, 0x8c, 0x11, 0x80, 0x34, 0xe2, 0x75, 0x1e, 0x68, 0x2f, 0xab, 0x9f, 0x2d, 0x30, 0xab, 0x13, 0xd2, 0x12, 0x55, 0x86, 0xce, 0x19, 0x47,];
+        let rp_id_hash = [
+            0xa3, 0x79, 0xa6, 0xf6, 0xee, 0xaf, 0xb9, 0xa5, 0x5e, 0x37, 0x8c, 0x11, 0x80, 0x34,
+            0xe2, 0x75, 0x1e, 0x68, 0x2f, 0xab, 0x9f, 0x2d, 0x30, 0xab, 0x13, 0xd2, 0x12, 0x55,
+            0x86, 0xce, 0x19, 0x47,
+        ];
         let flag_bits = 0b0100_0101;
         let flags = AuthenticatorDataFlags::from_bits(flag_bits).unwrap();
         let signature_count = 0;
-        let aaguid = [0x24, 0x38, 0x65, 0x2a, 0xbe, 0x9f, 0xbd, 0x84, 0x81, 0x0a, 0x84, 0x0d, 0x6f, 0xc4, 0x42, 0xa8, ];
+        let aaguid = [
+            0x24, 0x38, 0x65, 0x2a, 0xbe, 0x9f, 0xbd, 0x84, 0x81, 0x0a, 0x84, 0x0d, 0x6f, 0xc4,
+            0x42, 0xa8,
+        ];
         let credential_id = vec![0x01, 0x01, 0x03, 0x03, 0x05, 0x05, 0x07, 0x07];
         let pub_key_bytes = b"]\"\xff\xc5\x932x(\xd6-:1\xbb}\x8c$7\xf1&\xd4\xb4&\x02\x02\xa3\xd9\xe2\xba1\x1f\xec\xba";
-        let credential_public_key = cosey::PublicKey::Ed25519Key(Ed25519PublicKey { x: Bytes::from_slice(pub_key_bytes).unwrap() });
+        let credential_public_key = cosey::PublicKey::Ed25519Key(Ed25519PublicKey {
+            x: Bytes::from_slice(pub_key_bytes).unwrap(),
+        });
         /*
          * A4                                      # map(4)
          *    01                                   # unsigned(1) kty
@@ -280,9 +289,9 @@ mod tests {
         let mut cose_bytes = vec![0xa4, 0x01, 0x01, 0x03, 0x27, 0x20, 0x06, 0x21, 0x58, 0x20];
         cose_bytes.extend(pub_key_bytes);
         let attested_credential = Some(AttestedCredentialData {
-            aaguid, 
-            credential_id: credential_id.clone(), 
-            credential_public_key, 
+            aaguid,
+            credential_id: credential_id.clone(),
+            credential_public_key,
         });
         let auth_data: AuthenticatorData<()> = AuthenticatorData {
             rp_id_hash,
@@ -294,9 +303,15 @@ mod tests {
         let webauthn_auth_data = auth_data.to_response_bytes().unwrap();
         assert_eq!(rp_id_hash, &webauthn_auth_data[..32]);
         assert_eq!(flag_bits, webauthn_auth_data[32]);
-        assert_eq!(u32::to_be_bytes(signature_count), webauthn_auth_data[33..37]);
+        assert_eq!(
+            u32::to_be_bytes(signature_count),
+            webauthn_auth_data[33..37]
+        );
         assert_eq!(aaguid, &webauthn_auth_data[37..37 + 16]);
-        assert_eq!(&credential_id, &webauthn_auth_data[55..55 + &credential_id.len()]);
+        assert_eq!(
+            &credential_id,
+            &webauthn_auth_data[55..55 + &credential_id.len()]
+        );
         assert_eq!(cose_bytes, &webauthn_auth_data[55 + credential_id.len()..]);
     }
 }
