@@ -19,6 +19,8 @@ pub enum PlatformError {
     SyntaxError,
     #[error("cbor serialization error: {0}")]
     CborError(#[from] CborError),
+    #[error("cancelled by user")]
+    Cancelled,
 }
 
 #[derive(thiserror::Error, Debug, PartialEq)]
