@@ -6,7 +6,6 @@ use serde_repr::{Deserialize_repr, Serialize_repr};
 use crate::pin::{PinUvAuthProtocol, PinUvAuthProtocolOne, PinUvAuthProtocolTwo};
 
 #[derive(Debug, Clone, SerializeIndexed)]
-#[serde_indexed(offset = 1)]
 pub struct Ctap2ClientPinRequest {
     ///pinUvAuthProtocol (0x01)
     #[serde(skip_serializing_if = "Option::is_none")]
