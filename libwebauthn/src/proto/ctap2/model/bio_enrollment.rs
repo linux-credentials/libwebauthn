@@ -5,7 +5,6 @@ use serde_repr::{Deserialize_repr, Serialize_repr};
 use std::time::Duration;
 
 #[derive(Debug, Clone, SerializeIndexed)]
-#[serde_indexed(offset = 1)]
 pub struct Ctap2BioEnrollmentRequest {
     // modality (0x01) 	Unsigned Integer 	Optional 	The user verification modality being requested
     #[serde(skip_serializing_if = "Option::is_none")]
