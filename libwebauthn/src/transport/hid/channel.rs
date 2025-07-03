@@ -2,7 +2,7 @@ use std::convert::TryFrom;
 use std::fmt::{Debug, Display, Formatter};
 use std::io::{Cursor as IOCursor, Seek, SeekFrom};
 use std::ops::Deref;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -45,7 +45,7 @@ const REPORT_ID: u8 = 0x00;
 const WINK_MIN_WAIT: Duration = Duration::from_secs(2);
 
 enum OpenHidDevice {
-    HidApiDevice(Mutex<HidApiDevice>),
+    HidApiDevice(Arc<Mutex<HidApiDevice>>),
     #[cfg(feature = "virtual-hid-device")]
     VirtualDevice,
 }
@@ -70,7 +70,7 @@ impl<'d> HidChannel<'d> {
             open_device: match device.backend {
                 HidBackendDevice::HidApiDevice(_) => {
                     let hidapi_device = Self::hid_open(device)?;
-                    OpenHidDevice::HidApiDevice(Mutex::new(hidapi_device))
+                    OpenHidDevice::HidApiDevice(Arc::new(Mutex::new(hidapi_device)))
                 }
                 #[cfg(feature = "virtual-hid-device")]
                 HidBackendDevice::VirtualDevice(_) => OpenHidDevice::VirtualDevice,
@@ -312,11 +312,20 @@ impl<'d> HidChannel<'d> {
         loop {
             let response = match &self.open_device {
                 OpenHidDevice::HidApiDevice(hidapi_device) => {
-                    let Ok(guard) = hidapi_device.lock() else {
-                        warn!("Poisoned lock on HID API device");
-                        return Err(Error::Transport(TransportError::ConnectionLost));
-                    };
-                    Self::hid_recv_hidapi(guard.deref(), timeout)
+                    let device = Arc::clone(hidapi_device);
+                    // The HID device will block when waiting for a user to
+                    // interact with the device, so mark the task as blocking to
+                    // allow other tasks to complete.
+                    // Note that we're just using spawn_blocking() on hid_recv(), not on hid_send(),
+                    // since implementing this on hid_send and would cause unnecessary copies/locking.
+                    tokio::task::spawn_blocking(move || {
+                        let Ok(guard) = device.lock() else {
+                            warn!("Poisoned lock on HID API device");
+                            return Err(Error::Transport(TransportError::ConnectionLost));
+                        };
+                        let device = guard.deref();
+                        Self::hid_recv_hidapi(device, timeout)
+                    }).await.unwrap()
                 }
                 #[cfg(feature = "virtual-hid-device")]
                 OpenHidDevice::VirtualDevice => Self::hid_recv_virtual(timeout).await,
