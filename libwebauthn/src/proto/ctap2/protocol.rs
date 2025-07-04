@@ -110,6 +110,7 @@ where
             error => return Err(Error::Ctap(error)),
         };
         let data = unwrap_field!(cbor_response.data);
+        trace!("MakeCredential: {:?}", data);
         let ctap_response = parse_cbor!(Ctap2MakeCredentialResponse, &data);
         debug!("CTAP2 MakeCredential successful");
         trace!(?ctap_response);
@@ -130,6 +131,7 @@ where
             error => return Err(Error::Ctap(error)),
         };
         let data = unwrap_field!(cbor_response.data);
+        trace!("GetAssertion: {:?}", data);
         let ctap_response = parse_cbor!(Ctap2GetAssertionResponse, &data);
         debug!("CTAP2 GetAssertion successful");
         trace!(?ctap_response);
