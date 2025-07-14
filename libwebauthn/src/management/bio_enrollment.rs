@@ -12,7 +12,8 @@ use crate::{
     unwrap_field,
     webauthn::{
         error::{CtapError, Error, PlatformError},
-        handle_errors, user_verification, UsedPinUvAuthToken,
+        handle_errors,
+        pin_uv_auth_token::{user_verification, UsedPinUvAuthToken},
     },
     UxUpdate,
 };

@@ -23,7 +23,7 @@ use crate::{
     transport::Channel,
     webauthn::{
         error::{Error, PlatformError},
-        obtain_pin, obtain_shared_secret, select_uv_proto,
+        pin_uv_auth_token::{obtain_pin, obtain_shared_secret, select_uv_proto},
     },
 };
 
