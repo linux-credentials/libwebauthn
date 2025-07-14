@@ -20,9 +20,9 @@ use crate::proto::ctap2::cbor;
 use crate::transport::cable::advertisement::await_advertisement;
 use crate::transport::cable::crypto::{derive, KeyPurpose};
 use crate::transport::cable::digit_encode;
-use crate::transport::error::Error;
+use crate::transport::error::TransportError;
 use crate::transport::Device;
-use crate::webauthn::TransportError;
+use crate::webauthn::error::Error;
 use crate::UxUpdate;
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq)]

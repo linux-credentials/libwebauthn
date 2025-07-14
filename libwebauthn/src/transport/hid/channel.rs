@@ -24,11 +24,11 @@ use crate::proto::ctap2::{Ctap2, Ctap2MakeCredentialRequest};
 use crate::proto::CtapError;
 use crate::transport::channel::{AuthTokenData, Channel, ChannelStatus, Ctap2AuthTokenStore};
 use crate::transport::device::SupportedProtocols;
-use crate::transport::error::{Error, TransportError};
+use crate::transport::error::TransportError;
 use crate::transport::hid::framing::{
     HidCommand, HidMessage, HidMessageParser, HidMessageParserState,
 };
-use crate::webauthn::PlatformError;
+use crate::webauthn::error::{Error, PlatformError};
 use crate::UxUpdate;
 
 use super::device::get_hidapi;

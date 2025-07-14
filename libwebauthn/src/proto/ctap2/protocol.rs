@@ -5,9 +5,9 @@ use tracing::{debug, instrument, trace, warn};
 
 use crate::proto::ctap2::cbor::{self, CborRequest};
 use crate::proto::ctap2::{Ctap2BioEnrollmentResponse, Ctap2CommandCode};
-use crate::transport::error::{CtapError, Error, PlatformError};
 use crate::transport::Channel;
 use crate::unwrap_field;
+use crate::webauthn::error::{CtapError, Error, PlatformError};
 
 use super::model::Ctap2ClientPinResponse;
 use super::{

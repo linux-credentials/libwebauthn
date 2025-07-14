@@ -6,7 +6,8 @@ use uuid::Uuid;
 
 use crate::transport::ble::btleplug::{self, FidoDevice};
 use crate::transport::cable::crypto::trial_decrypt_advert;
-use crate::webauthn::{Error, TransportError};
+use crate::transport::error::TransportError;
+use crate::webauthn::error::Error;
 
 const CABLE_UUID_FIDO: &str = "0000fff9-0000-1000-8000-00805f9b34fb";
 const CABLE_UUID_GOOGLE: &str = "0000fde2-0000-1000-8000-00805f9b34fb";

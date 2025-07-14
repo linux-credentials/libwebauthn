@@ -8,12 +8,12 @@ use crate::{
         Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialUserEntity, Ctap2RPData,
         Ctap2UserVerifiableRequest,
     },
-    transport::{
-        error::{CtapError, Error, PlatformError},
-        Channel,
-    },
+    transport::Channel,
     unwrap_field,
-    webauthn::{handle_errors, user_verification, UsedPinUvAuthToken},
+    webauthn::{
+        error::{CtapError, Error, PlatformError},
+        handle_errors, user_verification, UsedPinUvAuthToken,
+    },
     UxUpdate,
 };
 use async_trait::async_trait;

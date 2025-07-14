@@ -9,7 +9,8 @@ use crate::proto::CtapError;
 use crate::transport::ble::btleplug;
 use crate::transport::channel::{AuthTokenData, Channel, ChannelStatus, Ctap2AuthTokenStore};
 use crate::transport::device::SupportedProtocols;
-use crate::transport::error::{Error, TransportError};
+use crate::transport::error::TransportError;
+use crate::webauthn::error::Error;
 use crate::UxUpdate;
 
 use super::btleplug::manager::SupportedRevisions;

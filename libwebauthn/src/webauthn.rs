@@ -21,8 +21,10 @@ use crate::proto::ctap2::{
     Ctap2MakeCredentialRequest, Ctap2PinUvAuthProtocol, Ctap2UserVerifiableRequest,
     Ctap2UserVerificationOperation,
 };
-pub use crate::transport::error::{CtapError, Error, PlatformError, TransportError};
+pub use crate::transport::error::TransportError;
 use crate::transport::{AuthTokenData, Channel, Ctap2AuthTokenPermission};
+pub mod error;
+pub use crate::webauthn::error::{CtapError, Error, PlatformError};
 use crate::{PinRequiredUpdate, UxUpdate};
 
 macro_rules! handle_errors {

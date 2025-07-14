@@ -12,8 +12,8 @@ use super::{
 };
 use crate::proto::ctap1::model::Preflight;
 use crate::proto::CtapError;
-use crate::transport::error::{Error, TransportError};
-use crate::transport::Channel;
+use crate::transport::{error::TransportError, Channel};
+use crate::webauthn::error::Error;
 
 const UP_SLEEP: Duration = Duration::from_millis(150);
 const VERSION_TIMEOUT: Duration = Duration::from_millis(500);
