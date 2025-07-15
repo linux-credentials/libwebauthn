@@ -5,8 +5,8 @@ use crate::fido::FidoProtocol;
 use crate::ops::u2f::{RegisterRequest, SignRequest};
 use crate::ops::u2f::{RegisterResponse, SignResponse};
 use crate::proto::ctap1::Ctap1;
-use crate::transport::error::{Error, TransportError};
-use crate::transport::Channel;
+use crate::transport::{error::TransportError, Channel};
+use crate::webauthn::error::Error;
 
 #[async_trait]
 pub trait U2F {

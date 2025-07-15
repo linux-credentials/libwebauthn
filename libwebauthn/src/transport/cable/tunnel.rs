@@ -25,8 +25,8 @@ use super::known_devices::{CableKnownDeviceInfo, CableKnownDeviceInfoStore};
 use crate::proto::ctap2::cbor::{self, CborRequest, CborResponse, Value};
 use crate::proto::ctap2::{Ctap2CommandCode, Ctap2GetInfoResponse};
 use crate::transport::cable::known_devices::CableKnownDeviceId;
-use crate::transport::error::Error;
-use crate::webauthn::TransportError;
+use crate::transport::error::TransportError;
+use crate::webauthn::error::Error;
 use crate::UxUpdate;
 
 pub(crate) const KNOWN_TUNNEL_DOMAINS: &[&str] = &["cable.ua5v.com", "cable.auth.com"];

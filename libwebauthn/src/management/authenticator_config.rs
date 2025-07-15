@@ -1,9 +1,9 @@
 use crate::proto::ctap2::cbor;
 use crate::proto::ctap2::Ctap2ClientPinRequest;
-pub use crate::transport::error::{CtapError, Error};
 use crate::transport::Channel;
+pub use crate::webauthn::error::{CtapError, Error};
 use crate::webauthn::handle_errors;
-use crate::webauthn::{user_verification, UsedPinUvAuthToken};
+use crate::webauthn::pin_uv_auth_token::{user_verification, UsedPinUvAuthToken};
 use crate::{
     ops::webauthn::UserVerificationRequirement,
     pin::PinUvAuthProtocol,

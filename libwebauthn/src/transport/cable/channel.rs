@@ -10,11 +10,12 @@ use crate::proto::{
     ctap1::apdu::{ApduRequest, ApduResponse},
     ctap2::cbor::{CborRequest, CborResponse},
 };
-use crate::transport::error::{Error, TransportError};
+use crate::transport::error::TransportError;
 use crate::transport::AuthTokenData;
 use crate::transport::{
     channel::ChannelStatus, device::SupportedProtocols, Channel, Ctap2AuthTokenStore,
 };
+use crate::webauthn::error::Error;
 use crate::UxUpdate;
 
 use super::known_devices::CableKnownDevice;

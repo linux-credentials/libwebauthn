@@ -8,7 +8,7 @@ use crate::proto::{
     ctap1::apdu::{ApduRequest, ApduResponse},
     ctap2::cbor::{CborRequest, CborResponse},
 };
-use crate::transport::error::Error;
+use crate::webauthn::error::Error;
 use crate::UxUpdate;
 
 use async_trait::async_trait;

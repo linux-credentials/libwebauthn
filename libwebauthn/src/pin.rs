@@ -1,7 +1,5 @@
 use std::time::Duration;
 
-use super::transport::error::Error;
-
 use aes::cipher::{block_padding::NoPadding, BlockDecryptMut};
 use async_trait::async_trait;
 use cbc::cipher::{BlockEncryptMut, KeyIvInit};
@@ -22,8 +20,11 @@ use crate::{
         ctap2::{Ctap2, Ctap2ClientPinRequest, Ctap2PinUvAuthProtocol},
         CtapError,
     },
-    transport::{error::PlatformError, Channel},
-    webauthn::{obtain_pin, obtain_shared_secret, select_uv_proto},
+    transport::Channel,
+    webauthn::{
+        error::{Error, PlatformError},
+        pin_uv_auth_token::{obtain_pin, obtain_shared_secret, select_uv_proto},
+    },
 };
 
 type Aes256CbcEncryptor = cbc::Encryptor<aes::Aes256>;

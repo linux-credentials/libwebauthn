@@ -7,7 +7,8 @@ use tokio::sync::mpsc;
 use tracing::{info, instrument};
 
 use crate::transport::device::Device;
-use crate::transport::error::{Error, TransportError};
+use crate::transport::error::TransportError;
+use crate::webauthn::error::Error;
 use crate::UxUpdate;
 
 use super::btleplug::manager::SupportedRevisions;

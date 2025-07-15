@@ -12,8 +12,9 @@ use solo::SoloVirtualKey;
 use super::channel::HidChannel;
 use super::Hid;
 
-use crate::transport::error::{Error, TransportError};
+use crate::transport::error::TransportError;
 use crate::transport::Device;
+use crate::webauthn::error::Error;
 use crate::UxUpdate;
 
 #[derive(Debug)]

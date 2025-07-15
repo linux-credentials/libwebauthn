@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use tokio::sync::mpsc;
 
 use crate::transport::ble::btleplug::manager::SupportedRevisions;
-use crate::transport::error::Error;
+use crate::webauthn::error::Error;
 
 use super::{Channel, Transport};
 
