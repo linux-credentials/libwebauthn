@@ -57,14 +57,11 @@ pub struct PackedAttestationStmt {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct FidoU2fAttestationStmt {
-    #[serde(rename = "alg")]
-    pub algorithm: Ctap2COSEAlgorithmIdentifier,
-
     #[serde(rename = "sig")]
     pub signature: ByteBuf,
 
     #[serde(rename = "x5c")]
-    pub certificates: Vec<ByteBuf>,
+    pub certificate: ByteBuf,
 }
 
 #[derive(Debug, Clone, Deserialize)]

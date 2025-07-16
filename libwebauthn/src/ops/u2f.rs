@@ -15,9 +15,8 @@ use crate::proto::ctap1::{Ctap1RegisterRequest, Ctap1SignRequest};
 use crate::proto::ctap1::{Ctap1RegisterResponse, Ctap1SignResponse};
 use crate::proto::ctap2::cbor;
 use crate::proto::ctap2::{
-    Ctap2AttestationStatement, Ctap2COSEAlgorithmIdentifier, Ctap2GetAssertionResponse,
-    Ctap2MakeCredentialResponse, Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialType,
-    FidoU2fAttestationStmt,
+    Ctap2AttestationStatement, Ctap2GetAssertionResponse, Ctap2MakeCredentialResponse,
+    Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialType, FidoU2fAttestationStmt,
 };
 use crate::webauthn::{CtapError, Error};
 
@@ -132,9 +131,8 @@ impl UpgradableResponse<MakeCredentialResponse, MakeCredentialRequest> for Regis
         //   Note: An ASN.1-encoded ECDSA signature value ranges over 8–72 bytes in length. [U2FRawMsgs] incorrectly
         //   states a different length range.
         let attestation_statement = Ctap2AttestationStatement::FidoU2F(FidoU2fAttestationStmt {
-            algorithm: Ctap2COSEAlgorithmIdentifier::ES256,
             signature: ByteBuf::from(self.signature.clone()),
-            certificates: vec![ByteBuf::from(self.attestation.clone())],
+            certificate: ByteBuf::from(self.attestation.clone()),
         });
 
         // Let attestationObject be a CBOR map (see "attObj" in Generating an Attestation Object [WebAuthn]) with the
