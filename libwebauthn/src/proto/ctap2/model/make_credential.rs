@@ -7,8 +7,9 @@ use super::{
 use crate::{
     fido::AuthenticatorData,
     ops::webauthn::{
-        CredentialProtectionPolicy, MakeCredentialHmacOrPrfInput, MakeCredentialLargeBlobExtension,
-        MakeCredentialRequest, MakeCredentialResponse, MakeCredentialsRequestExtensions,
+        CredentialProtectionPolicy, ResidentKeyRequirement,
+        MakeCredentialHmacOrPrfInput, MakeCredentialLargeBlobExtension, MakeCredentialRequest,
+        MakeCredentialResponse, MakeCredentialsRequestExtensions,
         MakeCredentialsResponseUnsignedExtensions,
     },
     pin::PinUvAuthProtocol,
@@ -19,6 +20,7 @@ use ctap_types::ctap2::credential_management::CredentialProtectionPolicy as Ctap
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 use serde_indexed::{DeserializeIndexed, SerializeIndexed};
+use tracing::warn;
 
 #[derive(Debug, Default, Clone, Copy, Serialize)]
 pub struct Ctap2MakeCredentialOptions {
@@ -123,73 +125,54 @@ impl Ctap2MakeCredentialRequest {
         req: &MakeCredentialRequest,
         info: &Ctap2GetInfoResponse,
     ) -> Result<Self, Error> {
-        // Cloning it, so we can modify it
-        let mut req = req.clone();
         // Checking if extensions can be fulfilled
-        //
-        // CredProtection
-        // https://fidoalliance.org/specs/fido-v2.1-ps-20210615/fido-client-to-authenticator-protocol-v2.1-ps-20210615.html#credProtectFeatureDetection
-        // When enforceCredentialProtectionPolicy is true, and credentialProtectionPolicy's value
-        // is either userVerificationOptionalWithCredentialIDList or userVerificationRequired,
-        // the platform SHOULD NOT create the credential in a way that does not implement the
-        // requested protection policy. (For example, by creating it on an authenticator that
-        // does not support this extension.)
-        if let Some(cred_protection) = req
-            .extensions
-            .as_ref()
-            .and_then(|x| x.cred_protect.as_ref())
-        {
-            if cred_protection.enforce_policy
-                && cred_protection.policy != CredentialProtectionPolicy::UserVerificationOptional
-                && !info.is_uv_protected()
-            {
-                return Err(Error::Ctap(CtapError::UnsupportedExtension));
+        let extensions = match &req.extensions {
+            Some(ext) => {
+                Some(Ctap2MakeCredentialsRequestExtensions::from_webauthn_request(ext, info)?)
             }
-        }
+            None => None,
+        };
 
-        // LargeBlob (NOTE: Not to be confused with LargeBlobKey. LargeBlob has "Preferred" as well)
-        // https://developer.mozilla.org/en-US/docs/Web/API/Web_Authentication_API/WebAuthn_extensions#largeblob
-        //
-        // "required": The credential will be created with an authenticator to store blobs. The create() call will fail if this is impossible.
-        if let Some(ext) = req.extensions.as_mut() {
-            if ext.large_blob == MakeCredentialLargeBlobExtension::Required
-                && !info.option_enabled("largeBlobs")
-            {
-                return Err(Error::Ctap(CtapError::UnsupportedExtension));
-            }
-            if !info.option_enabled("largeBlobs")
-                && ext.large_blob == MakeCredentialLargeBlobExtension::Preferred
-            {
-                // If it is preferred and the device does not support it, deactivate it.
-                // Then we can simply activate it later for all but None
-                ext.large_blob = MakeCredentialLargeBlobExtension::None;
-            }
-        }
-        Ok(Ctap2MakeCredentialRequest::from(req))
-    }
-}
-
-impl From<MakeCredentialRequest> for Ctap2MakeCredentialRequest {
-    fn from(op: MakeCredentialRequest) -> Ctap2MakeCredentialRequest {
-        Ctap2MakeCredentialRequest {
-            hash: ByteBuf::from(op.hash),
-            relying_party: op.relying_party,
-            user: op.user,
-            algorithms: op.algorithms,
-            exclude: op.exclude,
-            extensions: op.extensions.map(|x| x.into()),
-            options: Some(Ctap2MakeCredentialOptions {
-                require_resident_key: if op.require_resident_key {
+        // Discoverable credential / resident key requirements
+        let require_resident_key = match req.resident_key {
+            Some(ResidentKeyRequirement::Discouraged) => Some(false),
+            Some(ResidentKeyRequirement::Preferred) => {
+                if info.option_enabled("rk") {
                     Some(true)
                 } else {
+                    // The device does not support rk, so we try to not even mention it in the
+                    // final request, to avoid the possibility of weird devices failing.
+                    // If they don't support it, the default will not be to create a discoverable
+                    // credential.
                     None
-                },
+                }
+            }
+            Some(ResidentKeyRequirement::Required) => {
+                if !info.option_enabled("rk") {
+                    warn!("This request will potentially fail. Discoverable credential required, but device does not support it.");
+                }
+                // We still send the request to the device and let it sort it out.
+                // We only add a warning for easier debugging.
+                Some(true)
+            }
+            None => None,
+        };
+
+        Ok(Ctap2MakeCredentialRequest {
+            hash: ByteBuf::from(req.hash.clone()),
+            relying_party: req.relying_party.clone(),
+            user: req.user.clone(),
+            algorithms: req.algorithms.clone(),
+            exclude: req.exclude.clone(),
+            extensions,
+            options: Some(Ctap2MakeCredentialOptions {
+                require_resident_key,
                 deprecated_require_user_verification: None,
             }),
             pin_auth_param: None,
             pin_auth_proto: None,
             enterprise_attestation: None,
-        }
+        })
     }
 }
 
@@ -219,27 +202,70 @@ impl Ctap2MakeCredentialsRequestExtensions {
     }
 }
 
-impl From<MakeCredentialsRequestExtensions> for Ctap2MakeCredentialsRequestExtensions {
-    fn from(other: MakeCredentialsRequestExtensions) -> Self {
-        let hmac_secret = match other.hmac_or_prf {
+impl Ctap2MakeCredentialsRequestExtensions {
+    fn from_webauthn_request(
+        requested_extensions: &MakeCredentialsRequestExtensions,
+        info: &Ctap2GetInfoResponse,
+    ) -> Result<Self, Error> {
+        // CredProtection
+        // https://fidoalliance.org/specs/fido-v2.1-ps-20210615/fido-client-to-authenticator-protocol-v2.1-ps-20210615.html#credProtectFeatureDetection
+        // When enforceCredentialProtectionPolicy is true, and credentialProtectionPolicy's value
+        // is either userVerificationOptionalWithCredentialIDList or userVerificationRequired,
+        // the platform SHOULD NOT create the credential in a way that does not implement the
+        // requested protection policy. (For example, by creating it on an authenticator that
+        // does not support this extension.)
+        if let Some(cred_protection) = requested_extensions.cred_protect.as_ref() {
+            if cred_protection.enforce_policy
+                && cred_protection.policy != CredentialProtectionPolicy::UserVerificationOptional
+                && !info.is_uv_protected()
+            {
+                return Err(Error::Ctap(CtapError::UnsupportedExtension));
+            }
+        }
+
+        // LargeBlob (NOTE: Not to be confused with LargeBlobKey. LargeBlob has "Preferred" as well)
+        // https://developer.mozilla.org/en-US/docs/Web/API/Web_Authentication_API/WebAuthn_extensions#largeblob
+        //
+        let large_blob_key = match requested_extensions.large_blob {
+            MakeCredentialLargeBlobExtension::Required => {
+                // "required": The credential will be created with an authenticator to store blobs. The create() call will fail if this is impossible.
+                if !info.option_enabled("largeBlobs") {
+                    warn!("This request will potentially fail. Large blob extension required, but device does not support it.");
+                }
+                // We still send the request to the device and let it sort it out.
+                // We only add a warning for easier debugging.
+                Some(true)
+            }
+            MakeCredentialLargeBlobExtension::Preferred => {
+                if info.option_enabled("largeBlobs") {
+                    Some(true)
+                } else {
+                    // The device does not support large blobs, so we try to not even mention it in the
+                    // final request, to avoid the possibility of weird devices failing.
+                    None
+                }
+            }
+            MakeCredentialLargeBlobExtension::None => None,
+        };
+
+        // HMAC Secret
+        let hmac_secret = match requested_extensions.hmac_or_prf {
             MakeCredentialHmacOrPrfInput::None => None,
             MakeCredentialHmacOrPrfInput::HmacGetSecret | MakeCredentialHmacOrPrfInput::Prf => {
                 Some(true)
             }
         };
-        Ctap2MakeCredentialsRequestExtensions {
-            cred_blob: other.cred_blob,
+
+        Ok(Ctap2MakeCredentialsRequestExtensions {
+            cred_blob: requested_extensions.cred_blob.clone(),
             hmac_secret,
-            cred_protect: other.cred_protect.map(|x| x.policy.into()),
-            large_blob_key: if other.large_blob == MakeCredentialLargeBlobExtension::None {
-                None
-            } else {
-                // We modified "Preferred" to "None" if the device does not support it,
-                // so we can be sure to request it here for all but "None"
-                Some(true)
-            },
-            min_pin_length: other.min_pin_length,
-        }
+            cred_protect: requested_extensions
+                .cred_protect
+                .as_ref()
+                .map(|x| x.policy.clone().into()),
+            large_blob_key,
+            min_pin_length: requested_extensions.min_pin_length,
+        })
     }
 }
 

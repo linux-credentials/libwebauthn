@@ -15,7 +15,7 @@ pub use make_credential::{
     MakeCredentialHmacOrPrfInput, MakeCredentialLargeBlobExtension,
     MakeCredentialLargeBlobExtensionOutput, MakeCredentialPrfOutput, MakeCredentialRequest,
     MakeCredentialResponse, MakeCredentialsRequestExtensions, MakeCredentialsResponseExtensions,
-    MakeCredentialsResponseUnsignedExtensions,
+    MakeCredentialsResponseUnsignedExtensions, ResidentKeyRequirement,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -50,6 +50,7 @@ pub trait DowngradableRequest<T> {
 
 #[cfg(test)]
 mod tests {
+    use crate::ops::webauthn::make_credential::ResidentKeyRequirement;
     use crate::ops::webauthn::{
         DowngradableRequest, MakeCredentialRequest, UserVerificationRequirement,
     };
@@ -61,7 +62,7 @@ mod tests {
     fn ctap2_make_credential_downgradable() {
         let mut request = MakeCredentialRequest::dummy();
         request.algorithms = vec![Ctap2CredentialType::default()];
-        request.require_resident_key = false;
+        request.resident_key = Some(ResidentKeyRequirement::Discouraged);
         assert!(request.is_downgradable());
     }
 
@@ -69,7 +70,7 @@ mod tests {
     fn ctap2_make_credential_downgradable_unsupported_rk() {
         let mut request = MakeCredentialRequest::dummy();
         request.algorithms = vec![Ctap2CredentialType::default()];
-        request.require_resident_key = true;
+        request.resident_key = Some(ResidentKeyRequirement::Required);
         assert!(!request.is_downgradable());
     }
 

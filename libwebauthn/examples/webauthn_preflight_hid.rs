@@ -12,7 +12,8 @@ use tokio::sync::mpsc::Receiver;
 use tracing_subscriber::{self, EnvFilter};
 
 use libwebauthn::ops::webauthn::{
-    GetAssertionRequest, GetAssertionResponse, MakeCredentialRequest, UserVerificationRequirement,
+    GetAssertionRequest, GetAssertionResponse, MakeCredentialRequest, ResidentKeyRequirement,
+    UserVerificationRequirement,
 };
 use libwebauthn::pin::PinRequestReason;
 use libwebauthn::proto::ctap2::{
@@ -164,7 +165,7 @@ async fn make_credential_call(
         hash: Vec::from(challenge),
         relying_party: Ctap2PublicKeyCredentialRpEntity::new("example.org", "example.org"),
         user: Ctap2PublicKeyCredentialUserEntity::new(&user_id, "mario.rossi", "Mario Rossi"),
-        require_resident_key: false,
+        resident_key: Some(ResidentKeyRequirement::Discouraged),
         user_verification: UserVerificationRequirement::Preferred,
         algorithms: vec![Ctap2CredentialType::default()],
         exclude: exclude_list,

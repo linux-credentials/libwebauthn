@@ -13,7 +13,7 @@ use libwebauthn::ops::webauthn::{
     CredentialProtectionExtension, CredentialProtectionPolicy, GetAssertionHmacOrPrfInput,
     GetAssertionRequest, GetAssertionRequestExtensions, HMACGetSecretInput,
     MakeCredentialHmacOrPrfInput, MakeCredentialLargeBlobExtension, MakeCredentialRequest,
-    MakeCredentialsRequestExtensions, UserVerificationRequirement,
+    MakeCredentialsRequestExtensions, ResidentKeyRequirement, UserVerificationRequirement,
 };
 use libwebauthn::pin::PinRequestReason;
 use libwebauthn::proto::ctap2::{
@@ -108,7 +108,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             hash: Vec::from(challenge),
             relying_party: Ctap2PublicKeyCredentialRpEntity::new("example.org", "example.org"),
             user: Ctap2PublicKeyCredentialUserEntity::new(&user_id, "mario.rossi", "Mario Rossi"),
-            require_resident_key: true,
+            resident_key: Some(ResidentKeyRequirement::Required),
             user_verification: UserVerificationRequirement::Preferred,
             algorithms: vec![Ctap2CredentialType::default()],
             exclude: None,
