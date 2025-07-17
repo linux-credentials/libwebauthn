@@ -12,11 +12,10 @@ pub use get_assertion::{
 };
 pub use make_credential::{
     CredentialPropsExtension, CredentialProtectionExtension, CredentialProtectionPolicy,
-    DiscoverableCredentialRequirement, MakeCredentialHmacOrPrfInput,
-    MakeCredentialLargeBlobExtension, MakeCredentialLargeBlobExtensionOutput,
-    MakeCredentialPrfOutput, MakeCredentialRequest, MakeCredentialResponse,
-    MakeCredentialsRequestExtensions, MakeCredentialsResponseExtensions,
-    MakeCredentialsResponseUnsignedExtensions,
+    MakeCredentialHmacOrPrfInput, MakeCredentialLargeBlobExtension,
+    MakeCredentialLargeBlobExtensionOutput, MakeCredentialPrfOutput, MakeCredentialRequest,
+    MakeCredentialResponse, MakeCredentialsRequestExtensions, MakeCredentialsResponseExtensions,
+    MakeCredentialsResponseUnsignedExtensions, ResidentKeyRequirement,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -51,9 +50,9 @@ pub trait DowngradableRequest<T> {
 
 #[cfg(test)]
 mod tests {
+    use crate::ops::webauthn::make_credential::ResidentKeyRequirement;
     use crate::ops::webauthn::{
-        DiscoverableCredentialRequirement, DowngradableRequest, MakeCredentialRequest,
-        UserVerificationRequirement,
+        DowngradableRequest, MakeCredentialRequest, UserVerificationRequirement,
     };
     use crate::proto::ctap2::{
         Ctap2COSEAlgorithmIdentifier, Ctap2CredentialType, Ctap2PublicKeyCredentialType,
@@ -63,7 +62,7 @@ mod tests {
     fn ctap2_make_credential_downgradable() {
         let mut request = MakeCredentialRequest::dummy();
         request.algorithms = vec![Ctap2CredentialType::default()];
-        request.discoverable_credential = Some(DiscoverableCredentialRequirement::Discouraged);
+        request.resident_key = Some(ResidentKeyRequirement::Discouraged);
         assert!(request.is_downgradable());
     }
 
@@ -71,7 +70,7 @@ mod tests {
     fn ctap2_make_credential_downgradable_unsupported_rk() {
         let mut request = MakeCredentialRequest::dummy();
         request.algorithms = vec![Ctap2CredentialType::default()];
-        request.discoverable_credential = Some(DiscoverableCredentialRequirement::Required);
+        request.resident_key = Some(ResidentKeyRequirement::Required);
         assert!(!request.is_downgradable());
     }
 

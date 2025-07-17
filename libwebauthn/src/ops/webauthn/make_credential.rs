@@ -98,11 +98,11 @@ impl MakeCredentialsResponseUnsignedExtensions {
                     // https://fidoalliance.org/specs/fido-v2.1-ps-20210615/fido-client-to-authenticator-protocol-v2.1-ps-20210615.html#op-makecred-step-rk
                     // if the "rk" option is false: the authenticator MUST create a non-discoverable credential.
                     // Note: This step is a change from CTAP2.0 where if the "rk" option is false the authenticator could optionally create a discoverable credential.
-                    match request.discoverable_credential {
-                        Some(DiscoverableCredentialRequirement::Discouraged) | None => {
+                    match request.resident_key {
+                        Some(ResidentKeyRequirement::Discouraged) | None => {
                             Some(CredentialPropsExtension { rk: Some(false) })
                         }
-                        Some(DiscoverableCredentialRequirement::Preferred) => {
+                        Some(ResidentKeyRequirement::Preferred) => {
                             if info.map(|i| i.option_enabled("rk")).unwrap_or_default() {
                                 Some(CredentialPropsExtension { rk: Some(true) })
                             } else {
@@ -111,7 +111,7 @@ impl MakeCredentialsResponseUnsignedExtensions {
                                 Some(CredentialPropsExtension { rk: Some(false) })
                             }
                         }
-                        Some(DiscoverableCredentialRequirement::Required) => {
+                        Some(ResidentKeyRequirement::Required) => {
                             Some(CredentialPropsExtension { rk: Some(true) })
                         }
                     }
@@ -150,7 +150,7 @@ impl MakeCredentialsResponseUnsignedExtensions {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum DiscoverableCredentialRequirement {
+pub enum ResidentKeyRequirement {
     Required,
     Preferred,
     Discouraged,
@@ -164,7 +164,7 @@ pub struct MakeCredentialRequest {
     pub relying_party: Ctap2PublicKeyCredentialRpEntity,
     /// userEntity
     pub user: Ctap2PublicKeyCredentialUserEntity,
-    pub discoverable_credential: Option<DiscoverableCredentialRequirement>,
+    pub resident_key: Option<ResidentKeyRequirement>,
     pub user_verification: UserVerificationRequirement,
     /// credTypesAndPubKeyAlgs
     pub algorithms: Vec<Ctap2CredentialType>,
@@ -291,7 +291,7 @@ impl MakeCredentialRequest {
             exclude: None,
             extensions: None,
             origin: "example.org".to_owned(),
-            discoverable_credential: None,
+            resident_key: None,
             user_verification: UserVerificationRequirement::Discouraged,
             timeout: Duration::from_secs(10),
         }
@@ -316,8 +316,8 @@ impl DowngradableRequest<RegisterRequest> for MakeCredentialRequest {
 
         // Options must not include "rk" set to true.
         if matches!(
-            self.discoverable_credential,
-            Some(DiscoverableCredentialRequirement::Required)
+            self.resident_key,
+            Some(ResidentKeyRequirement::Required)
         ) {
             debug!("Not downgradable: request requires resident key");
             return false;

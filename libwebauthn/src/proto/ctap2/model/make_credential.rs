@@ -7,7 +7,7 @@ use super::{
 use crate::{
     fido::AuthenticatorData,
     ops::webauthn::{
-        CredentialProtectionPolicy, DiscoverableCredentialRequirement,
+        CredentialProtectionPolicy, ResidentKeyRequirement,
         MakeCredentialHmacOrPrfInput, MakeCredentialLargeBlobExtension, MakeCredentialRequest,
         MakeCredentialResponse, MakeCredentialsRequestExtensions,
         MakeCredentialsResponseUnsignedExtensions,
@@ -134,9 +134,9 @@ impl Ctap2MakeCredentialRequest {
         };
 
         // Discoverable credential / resident key requirements
-        let require_resident_key = match req.discoverable_credential {
-            Some(DiscoverableCredentialRequirement::Discouraged) => Some(false),
-            Some(DiscoverableCredentialRequirement::Preferred) => {
+        let require_resident_key = match req.resident_key {
+            Some(ResidentKeyRequirement::Discouraged) => Some(false),
+            Some(ResidentKeyRequirement::Preferred) => {
                 if info.option_enabled("rk") {
                     Some(true)
                 } else {
@@ -147,7 +147,7 @@ impl Ctap2MakeCredentialRequest {
                     None
                 }
             }
-            Some(DiscoverableCredentialRequirement::Required) => {
+            Some(ResidentKeyRequirement::Required) => {
                 if !info.option_enabled("rk") {
                     warn!("This request will potentially fail. Discoverable credential required, but device does not support it.");
                 }
