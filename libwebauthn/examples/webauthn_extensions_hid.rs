@@ -10,10 +10,10 @@ use tokio::sync::mpsc::Receiver;
 use tracing_subscriber::{self, EnvFilter};
 
 use libwebauthn::ops::webauthn::{
-    CredentialProtectionExtension, CredentialProtectionPolicy, GetAssertionHmacOrPrfInput,
-    GetAssertionRequest, GetAssertionRequestExtensions, HMACGetSecretInput,
-    MakeCredentialHmacOrPrfInput, MakeCredentialLargeBlobExtension, MakeCredentialRequest,
-    MakeCredentialsRequestExtensions, UserVerificationRequirement,
+    CredentialProtectionExtension, CredentialProtectionPolicy, DiscoverableCredentialRequirement,
+    GetAssertionHmacOrPrfInput, GetAssertionRequest, GetAssertionRequestExtensions,
+    HMACGetSecretInput, MakeCredentialHmacOrPrfInput, MakeCredentialLargeBlobExtension,
+    MakeCredentialRequest, MakeCredentialsRequestExtensions, UserVerificationRequirement,
 };
 use libwebauthn::pin::PinRequestReason;
 use libwebauthn::proto::ctap2::{
@@ -108,7 +108,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             hash: Vec::from(challenge),
             relying_party: Ctap2PublicKeyCredentialRpEntity::new("example.org", "example.org"),
             user: Ctap2PublicKeyCredentialUserEntity::new(&user_id, "mario.rossi", "Mario Rossi"),
-            require_resident_key: true,
+            discoverable_credential: Some(DiscoverableCredentialRequirement::Required),
             user_verification: UserVerificationRequirement::Preferred,
             algorithms: vec![Ctap2CredentialType::default()],
             exclude: None,

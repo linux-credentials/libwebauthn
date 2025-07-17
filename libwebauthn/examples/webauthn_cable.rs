@@ -18,7 +18,8 @@ use tokio::time::sleep;
 use tracing_subscriber::{self, EnvFilter};
 
 use libwebauthn::ops::webauthn::{
-    GetAssertionRequest, MakeCredentialRequest, UserVerificationRequirement,
+    DiscoverableCredentialRequirement, GetAssertionRequest, MakeCredentialRequest,
+    UserVerificationRequirement,
 };
 use libwebauthn::proto::ctap2::{
     Ctap2CredentialType, Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialRpEntity,
@@ -112,7 +113,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             hash: Vec::from(challenge),
             relying_party: Ctap2PublicKeyCredentialRpEntity::new("example.org", "example.org"),
             user: Ctap2PublicKeyCredentialUserEntity::new(&user_id, "mario.rossi", "Mario Rossi"),
-            require_resident_key: false,
+            discoverable_credential: Some(DiscoverableCredentialRequirement::Discouraged),
             user_verification: UserVerificationRequirement::Preferred,
             algorithms: vec![Ctap2CredentialType::default()],
             exclude: None,

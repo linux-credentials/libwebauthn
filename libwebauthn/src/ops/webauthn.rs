@@ -12,9 +12,10 @@ pub use get_assertion::{
 };
 pub use make_credential::{
     CredentialPropsExtension, CredentialProtectionExtension, CredentialProtectionPolicy,
-    MakeCredentialHmacOrPrfInput, MakeCredentialLargeBlobExtension,
-    MakeCredentialLargeBlobExtensionOutput, MakeCredentialPrfOutput, MakeCredentialRequest,
-    MakeCredentialResponse, MakeCredentialsRequestExtensions, MakeCredentialsResponseExtensions,
+    DiscoverableCredentialRequirement, MakeCredentialHmacOrPrfInput,
+    MakeCredentialLargeBlobExtension, MakeCredentialLargeBlobExtensionOutput,
+    MakeCredentialPrfOutput, MakeCredentialRequest, MakeCredentialResponse,
+    MakeCredentialsRequestExtensions, MakeCredentialsResponseExtensions,
     MakeCredentialsResponseUnsignedExtensions,
 };
 
@@ -51,7 +52,8 @@ pub trait DowngradableRequest<T> {
 #[cfg(test)]
 mod tests {
     use crate::ops::webauthn::{
-        DowngradableRequest, MakeCredentialRequest, UserVerificationRequirement,
+        DiscoverableCredentialRequirement, DowngradableRequest, MakeCredentialRequest,
+        UserVerificationRequirement,
     };
     use crate::proto::ctap2::{
         Ctap2COSEAlgorithmIdentifier, Ctap2CredentialType, Ctap2PublicKeyCredentialType,
@@ -61,7 +63,7 @@ mod tests {
     fn ctap2_make_credential_downgradable() {
         let mut request = MakeCredentialRequest::dummy();
         request.algorithms = vec![Ctap2CredentialType::default()];
-        request.require_resident_key = false;
+        request.discoverable_credential = Some(DiscoverableCredentialRequirement::Discouraged);
         assert!(request.is_downgradable());
     }
 
@@ -69,7 +71,7 @@ mod tests {
     fn ctap2_make_credential_downgradable_unsupported_rk() {
         let mut request = MakeCredentialRequest::dummy();
         request.algorithms = vec![Ctap2CredentialType::default()];
-        request.require_resident_key = true;
+        request.discoverable_credential = Some(DiscoverableCredentialRequirement::Required);
         assert!(!request.is_downgradable());
     }
 
