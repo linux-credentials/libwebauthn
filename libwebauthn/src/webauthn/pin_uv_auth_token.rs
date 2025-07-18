@@ -15,7 +15,7 @@ use crate::proto::ctap2::{
 pub use crate::transport::error::TransportError;
 use crate::transport::{AuthTokenData, Channel, Ctap2AuthTokenPermission};
 pub use crate::webauthn::error::{CtapError, Error, PlatformError};
-use crate::{PinRequiredUpdate, UxUpdate};
+use crate::{PinRequiredUpdate, UvUpdate};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 
@@ -185,7 +185,9 @@ where
                 )
             }
             Ctap2UserVerificationOperation::GetPinUvAuthTokenUsingUvWithPermissions => {
-                channel.send_state_update(UxUpdate::PresenceRequired).await;
+                channel
+                    .send_ux_update(UvUpdate::PresenceRequired.into())
+                    .await;
                 Ctap2ClientPinRequest::new_get_uv_token_with_perm(
                     uv_proto.version(),
                     public_key.clone(),
@@ -213,7 +215,7 @@ where
                     .ok() // It's optional, so soft-error here
                     .flatten();
                 channel
-                    .send_state_update(UxUpdate::UvRetry { attempts_left })
+                    .send_ux_update(UvUpdate::UvRetry { attempts_left }.into())
                     .await;
                 if let Some(attempts) = attempts_left {
                     // The spec says: "If the platform receives CTAP2ERRUV_BLOCKED **or** uvRetries <= 0"
@@ -313,11 +315,14 @@ where
 
     let (tx, rx) = tokio::sync::oneshot::channel();
     channel
-        .send_state_update(UxUpdate::PinRequired(PinRequiredUpdate {
-            reply_to: tx,
-            reason,
-            attempts_left,
-        }))
+        .send_ux_update(
+            UvUpdate::PinRequired(PinRequiredUpdate {
+                reply_to: tx,
+                reason,
+                attempts_left,
+            })
+            .into(),
+        )
         .await;
     let pin = match rx.await {
         Ok(pin) => pin,

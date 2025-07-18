@@ -4,11 +4,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use libwebauthn::pin::PinRequestReason;
+use libwebauthn::transport::cable::channel::CableUxUpdate;
 use libwebauthn::transport::cable::known_devices::{
     CableKnownDevice, ClientPayloadHint, EphemeralDeviceInfoStore,
 };
 use libwebauthn::transport::cable::qr_code_device::{CableQrCodeDevice, QrCodeOperationHint};
-use libwebauthn::UxUpdate;
+use libwebauthn::UvUpdate;
 use qrcode::render::unicode;
 use qrcode::QrCode;
 use rand::{thread_rng, Rng};
@@ -36,42 +37,44 @@ fn setup_logging() {
         .init();
 }
 
-async fn handle_updates(mut state_recv: Receiver<UxUpdate>) {
+async fn handle_updates(mut state_recv: Receiver<CableUxUpdate>) {
     while let Some(update) = state_recv.recv().await {
         match update {
-            UxUpdate::PresenceRequired => println!("Please touch your device!"),
-            UxUpdate::UvRetry { attempts_left } => {
-                print!("UV failed.");
-                if let Some(attempts_left) = attempts_left {
-                    print!(" You have {attempts_left} attempts left.");
-                }
-            }
-            UxUpdate::PinRequired(update) => {
-                let mut attempts_str = String::new();
-                if let Some(attempts) = update.attempts_left {
-                    attempts_str = format!(". You have {attempts} attempts left!");
-                };
-
-                match update.reason {
-                    PinRequestReason::RelyingPartyRequest => println!("RP required a PIN."),
-                    PinRequestReason::AuthenticatorPolicy => {
-                        println!("Your device requires a PIN.")
-                    }
-                    PinRequestReason::FallbackFromUV => {
-                        println!("UV failed too often and is blocked. Falling back to PIN.")
+            CableUxUpdate::UvUpdate(uv_update) => match uv_update {
+                UvUpdate::PresenceRequired => println!("Please touch your device!"),
+                UvUpdate::UvRetry { attempts_left } => {
+                    print!("UV failed.");
+                    if let Some(attempts_left) = attempts_left {
+                        print!(" You have {attempts_left} attempts left.");
                     }
                 }
-                print!("PIN: Please enter the PIN for your authenticator{attempts_str}: ");
-                io::stdout().flush().unwrap();
-                let pin_raw: String = read!("{}\n");
+                UvUpdate::PinRequired(update) => {
+                    let mut attempts_str = String::new();
+                    if let Some(attempts) = update.attempts_left {
+                        attempts_str = format!(". You have {attempts} attempts left!");
+                    };
 
-                if pin_raw.is_empty() {
-                    println!("PIN: No PIN provided, cancelling operation.");
-                    update.cancel();
-                } else {
-                    let _ = update.send_pin(&pin_raw);
+                    match update.reason {
+                        PinRequestReason::RelyingPartyRequest => println!("RP required a PIN."),
+                        PinRequestReason::AuthenticatorPolicy => {
+                            println!("Your device requires a PIN.")
+                        }
+                        PinRequestReason::FallbackFromUV => {
+                            println!("UV failed too often and is blocked. Falling back to PIN.")
+                        }
+                    }
+                    print!("PIN: Please enter the PIN for your authenticator{attempts_str}: ");
+                    io::stdout().flush().unwrap();
+                    let pin_raw: String = read!("{}\n");
+
+                    if pin_raw.is_empty() {
+                        println!("PIN: No PIN provided, cancelling operation.");
+                        update.cancel();
+                    } else {
+                        let _ = update.send_pin(&pin_raw);
+                    }
                 }
-            }
+            },
         }
     }
 }

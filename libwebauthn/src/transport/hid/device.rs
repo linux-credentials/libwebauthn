@@ -15,7 +15,7 @@ use super::Hid;
 use crate::transport::error::TransportError;
 use crate::transport::Device;
 use crate::webauthn::error::Error;
-use crate::UxUpdate;
+use crate::UvUpdate;
 
 #[derive(Debug)]
 // SoloVirtualKey is not clone-able, but in test-mode we don't care
@@ -94,7 +94,7 @@ impl HidDevice {
 
 #[async_trait]
 impl<'d> Device<'d, Hid, HidChannel<'d>> for HidDevice {
-    async fn channel(&'d mut self) -> Result<(HidChannel<'d>, mpsc::Receiver<UxUpdate>), Error> {
+    async fn channel(&'d mut self) -> Result<(HidChannel<'d>, mpsc::Receiver<UvUpdate>), Error> {
         let (send, recv) = mpsc::channel(1);
         let channel = HidChannel::new(self, send).await?;
         Ok((channel, recv))

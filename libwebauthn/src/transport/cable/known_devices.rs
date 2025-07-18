@@ -3,11 +3,11 @@ use std::fmt::{Debug, Display};
 use std::sync::Arc;
 
 use crate::transport::cable::advertisement::await_advertisement;
+use crate::transport::cable::channel::CableUxUpdate;
 use crate::transport::cable::crypto::{derive, KeyPurpose};
 use crate::transport::error::TransportError;
 use crate::transport::Device;
 use crate::webauthn::error::Error;
-use crate::UxUpdate;
 
 use async_trait::async_trait;
 use futures::lock::Mutex;
@@ -156,7 +156,7 @@ impl CableKnownDevice {
 
 #[async_trait]
 impl<'d> Device<'d, Cable, CableChannel> for CableKnownDevice {
-    async fn channel(&'d mut self) -> Result<(CableChannel, mpsc::Receiver<UxUpdate>), Error> {
+    async fn channel(&'d mut self) -> Result<(CableChannel, mpsc::Receiver<CableUxUpdate>), Error> {
         debug!(?self.device_info.tunnel_domain, "Creating channel to tunnel server");
 
         let (client_nonce, client_payload) =

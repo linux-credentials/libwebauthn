@@ -18,12 +18,12 @@ use super::tunnel::{self, KNOWN_TUNNEL_DOMAINS};
 use super::{channel::CableChannel, Cable};
 use crate::proto::ctap2::cbor;
 use crate::transport::cable::advertisement::await_advertisement;
+use crate::transport::cable::channel::CableUxUpdate;
 use crate::transport::cable::crypto::{derive, KeyPurpose};
 use crate::transport::cable::digit_encode;
 use crate::transport::error::TransportError;
 use crate::transport::Device;
 use crate::webauthn::error::Error;
-use crate::UxUpdate;
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq)]
 pub enum QrCodeOperationHint {
@@ -169,7 +169,7 @@ impl Display for CableQrCodeDevice {
 
 #[async_trait]
 impl<'d> Device<'d, Cable, CableChannel> for CableQrCodeDevice {
-    async fn channel(&'d mut self) -> Result<(CableChannel, mpsc::Receiver<UxUpdate>), Error> {
+    async fn channel(&'d mut self) -> Result<(CableChannel, mpsc::Receiver<CableUxUpdate>), Error> {
         let eid_key: [u8; 64] = derive(self.qr_code.qr_secret.as_ref(), None, KeyPurpose::EIDKey);
         let (_device, advert) = await_advertisement(&eid_key).await?;
 
