@@ -11,7 +11,7 @@ use crate::transport::channel::{AuthTokenData, Channel, ChannelStatus, Ctap2Auth
 use crate::transport::device::SupportedProtocols;
 use crate::transport::error::TransportError;
 use crate::webauthn::error::Error;
-use crate::UxUpdate;
+use crate::UvUpdate;
 
 use super::btleplug::manager::SupportedRevisions;
 use super::btleplug::Connection;
@@ -29,14 +29,14 @@ pub struct BleChannel<'a> {
     connection: Connection,
     revision: FidoRevision,
     auth_token_data: Option<AuthTokenData>,
-    tx: mpsc::Sender<UxUpdate>,
+    tx: mpsc::Sender<UvUpdate>,
 }
 
 impl<'a> BleChannel<'a> {
     pub async fn new(
         device: &'a BleDevice,
         revisions: &SupportedRevisions,
-        tx: mpsc::Sender<UxUpdate>,
+        tx: mpsc::Sender<UvUpdate>,
     ) -> Result<BleChannel<'a>, Error> {
         let revision = revisions
             .select_protocol(FidoProtocol::U2F)
@@ -69,6 +69,8 @@ impl Display for BleChannel<'_> {
 
 #[async_trait]
 impl<'a> Channel for BleChannel<'a> {
+    type UxUpdate = UvUpdate;
+
     async fn supported_protocols(&self) -> Result<SupportedProtocols, Error> {
         Ok(self.revision.into())
     }
@@ -162,7 +164,7 @@ impl<'a> Channel for BleChannel<'a> {
         Ok(cbor_response)
     }
 
-    fn get_state_sender(&self) -> &mpsc::Sender<UxUpdate> {
+    fn get_ux_update_sender(&self) -> &mpsc::Sender<Self::UxUpdate> {
         &self.tx
     }
 }

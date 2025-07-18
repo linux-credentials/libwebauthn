@@ -16,7 +16,7 @@ use crate::transport::{
     channel::ChannelStatus, device::SupportedProtocols, Channel, Ctap2AuthTokenStore,
 };
 use crate::webauthn::error::Error;
-use crate::UxUpdate;
+use crate::UvUpdate;
 
 use super::known_devices::CableKnownDevice;
 use super::qr_code_device::CableQrCodeDevice;
@@ -39,7 +39,7 @@ pub struct CableChannel {
     pub(crate) handle_connection: task::JoinHandle<()>,
     pub(crate) cbor_sender: mpsc::Sender<CborRequest>,
     pub(crate) cbor_receiver: mpsc::Receiver<CborResponse>,
-    pub(crate) tx: mpsc::Sender<UxUpdate>,
+    pub(crate) tx: mpsc::Sender<CableUxUpdate>,
 }
 
 impl Display for CableChannel {
@@ -54,8 +54,21 @@ impl Drop for CableChannel {
     }
 }
 
+#[derive(Debug)]
+pub enum CableUxUpdate {
+    UvUpdate(UvUpdate),
+}
+
+impl From<UvUpdate> for CableUxUpdate {
+    fn from(update: UvUpdate) -> Self {
+        CableUxUpdate::UvUpdate(update)
+    }
+}
+
 #[async_trait]
 impl<'d> Channel for CableChannel {
+    type UxUpdate = CableUxUpdate;
+
     async fn supported_protocols(&self) -> Result<SupportedProtocols, Error> {
         Ok(SupportedProtocols::fido2_only())
     }
@@ -106,7 +119,7 @@ impl<'d> Channel for CableChannel {
         }
     }
 
-    fn get_state_sender(&self) -> &mpsc::Sender<UxUpdate> {
+    fn get_ux_update_sender(&self) -> &mpsc::Sender<CableUxUpdate> {
         &self.tx
     }
 

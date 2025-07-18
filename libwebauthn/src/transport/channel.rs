@@ -9,7 +9,7 @@ use crate::proto::{
     ctap2::cbor::{CborRequest, CborResponse},
 };
 use crate::webauthn::error::Error;
-use crate::UxUpdate;
+use crate::UvUpdate;
 
 use async_trait::async_trait;
 use cosey::PublicKey;
@@ -27,10 +27,13 @@ pub enum ChannelStatus {
 
 #[async_trait]
 pub trait Channel: Send + Sync + Display + Ctap2AuthTokenStore {
-    fn get_state_sender(&self) -> &mpsc::Sender<UxUpdate>;
-    async fn send_state_update(&mut self, state: UxUpdate) {
-        debug!("Sending state update: {state:?}");
-        match self.get_state_sender().send(state).await {
+    /// UX updates for this channel, must include UV updates.
+    type UxUpdate: Send + Sync + Debug + From<UvUpdate>;
+
+    fn get_ux_update_sender(&self) -> &mpsc::Sender<Self::UxUpdate>;
+    async fn send_ux_update(&mut self, state: Self::UxUpdate) {
+        debug!(?state, "Sending state update");
+        match self.get_ux_update_sender().send(state).await {
             Ok(_) => (), // Success
             Err(_) => {
                 error!("Failed to send state update. Application must have hung up. Closing.");

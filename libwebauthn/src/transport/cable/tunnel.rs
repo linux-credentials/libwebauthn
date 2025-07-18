@@ -24,10 +24,10 @@ use super::known_devices::ClientPayload;
 use super::known_devices::{CableKnownDeviceInfo, CableKnownDeviceInfoStore};
 use crate::proto::ctap2::cbor::{self, CborRequest, CborResponse, Value};
 use crate::proto::ctap2::{Ctap2CommandCode, Ctap2GetInfoResponse};
+use crate::transport::cable::channel::CableUxUpdate;
 use crate::transport::cable::known_devices::CableKnownDeviceId;
 use crate::transport::error::TransportError;
 use crate::webauthn::error::Error;
-use crate::UxUpdate;
 
 fn ensure_rustls_crypto_provider() {
     use std::sync::Once;
@@ -355,7 +355,7 @@ pub(crate) async fn channel(
     tunnel_domain: &str,
     maybe_known_device_store: &Option<Arc<dyn CableKnownDeviceInfoStore>>,
     ws_stream: WebSocketStream<MaybeTlsStream<TcpStream>>,
-) -> Result<(CableChannel, mpsc::Receiver<UxUpdate>), Error> {
+) -> Result<(CableChannel, mpsc::Receiver<CableUxUpdate>), Error> {
     let (cbor_tx_send, cbor_tx_recv) = mpsc::channel(16);
     let (cbor_rx_send, cbor_rx_recv) = mpsc::channel(16);
 

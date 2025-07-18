@@ -16,7 +16,7 @@ use crate::proto::ctap2::{
 pub use crate::transport::error::TransportError;
 use crate::transport::Channel;
 pub use crate::webauthn::error::{CtapError, Error, PlatformError};
-use crate::UxUpdate;
+use crate::UvUpdate;
 
 use pin_uv_auth_token::{user_verification, UsedPinUvAuthToken};
 
@@ -38,7 +38,7 @@ macro_rules! handle_errors {
                     .ok() // It's optional, so soft-error here
                     .flatten();
                 $channel
-                    .send_state_update(UxUpdate::UvRetry { attempts_left })
+                    .send_ux_update(UvUpdate::UvRetry { attempts_left }.into())
                     .await;
                 break Err(Error::Ctap(CtapError::UVInvalid));
             }
@@ -120,7 +120,7 @@ where
             // We've already sent out this update, in case we used builtin UV
             // but if we used PIN, we need to touch the device now.
             if self.used_pin_for_auth() {
-                self.send_state_update(UxUpdate::PresenceRequired).await;
+                self.send_ux_update(UvUpdate::PresenceRequired.into()).await;
             }
             handle_errors!(
                 self,
@@ -139,7 +139,7 @@ where
     ) -> Result<MakeCredentialResponse, Error> {
         let register_request: RegisterRequest = op.try_downgrade()?;
 
-        self.send_state_update(UxUpdate::PresenceRequired).await;
+        self.send_ux_update(UvUpdate::PresenceRequired.into()).await;
         self.ctap1_register(&register_request)
             .await?
             .try_upgrade(op)
@@ -175,8 +175,8 @@ where
                 // But the spec requires some form of user interaction, so we run a
                 // dummy request, ignore the result and error out.
                 warn!("Preflight removed all credentials from the allow-list. Sending dummy request and erroring out.");
-                let dummy_request = Ctap2MakeCredentialRequest::dummy();
-                self.send_state_update(UxUpdate::PresenceRequired).await;
+                let dummy_request: Ctap2MakeCredentialRequest = Ctap2MakeCredentialRequest::dummy();
+                self.send_ux_update(UvUpdate::PresenceRequired.into()).await;
                 let _ = self.ctap2_make_credential(&dummy_request, op.timeout).await;
                 return Err(Error::Ctap(CtapError::NoCredentials));
             }
@@ -191,7 +191,7 @@ where
             // We've already sent out this update, in case we used builtin UV
             // but if we used PIN, we need to touch the device now.
             if self.used_pin_for_auth() {
-                self.send_state_update(UxUpdate::PresenceRequired).await;
+                self.send_ux_update(UvUpdate::PresenceRequired.into()).await;
             }
             if let Some(auth_data) = self.get_auth_data() {
                 if let Some(e) = ctap2_request.extensions.as_mut() {
@@ -224,7 +224,7 @@ where
         let sign_requests: Vec<SignRequest> = op.try_downgrade()?;
 
         for sign_request in sign_requests {
-            self.send_state_update(UxUpdate::PresenceRequired).await;
+            self.send_ux_update(UvUpdate::PresenceRequired.into()).await;
             match self.ctap1_sign(&sign_request).await {
                 Ok(response) => {
                     debug!("Found successful candidate in allowList");
