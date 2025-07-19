@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use libwebauthn::pin::PinRequestReason;
-use libwebauthn::transport::cable::channel::CableUxUpdate;
+use libwebauthn::transport::cable::channel::{CableUpdate, CableUxUpdate};
 use libwebauthn::transport::cable::known_devices::{
     CableKnownDevice, ClientPayloadHint, EphemeralDeviceInfoStore,
 };
@@ -74,6 +74,13 @@ async fn handle_updates(mut state_recv: Receiver<CableUxUpdate>) {
                         let _ = update.send_pin(&pin_raw);
                     }
                 }
+            },
+            CableUxUpdate::CableUpdate(cable_update) => match cable_update {
+                CableUpdate::ProximityCheck => println!("Proximity check in progress..."),
+                CableUpdate::Connecting => println!("Connecting to the device..."),
+                CableUpdate::Authenticating => println!("Authenticating with the device..."),
+                CableUpdate::Connected => println!("Tunnel established successfully!"),
+                CableUpdate::Failed => println!("Failed to establish tunnel."),
             },
         }
     }

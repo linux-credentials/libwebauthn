@@ -11,20 +11,18 @@ use serde_indexed::DeserializeIndexed;
 use sha2::{Digest, Sha256};
 use snow::{Builder, TransportState};
 use tokio::net::TcpStream;
-use tokio::sync::mpsc::{self, Receiver, Sender};
-use tokio::task;
+use tokio::sync::mpsc::Sender;
 use tokio_tungstenite::tungstenite::http::StatusCode;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 use tracing::{debug, error, trace, warn};
 use tungstenite::client::IntoClientRequest;
 
-use super::channel::CableChannel;
 use super::known_devices::ClientPayload;
 use super::known_devices::{CableKnownDeviceInfo, CableKnownDeviceInfoStore};
 use crate::proto::ctap2::cbor::{self, CborRequest, CborResponse, Value};
 use crate::proto::ctap2::{Ctap2CommandCode, Ctap2GetInfoResponse};
-use crate::transport::cable::channel::CableUxUpdate;
+use crate::transport::cable::connection_stages::TunnelConnectionInput;
 use crate::transport::cable::known_devices::CableKnownDeviceId;
 use crate::transport::error::TransportError;
 use crate::webauthn::error::Error;
@@ -172,6 +170,33 @@ pub(crate) enum CableTunnelConnectionType {
         authenticator_public_key: Vec<u8>,
         client_payload: ClientPayload,
     },
+}
+
+impl std::fmt::Debug for CableTunnelConnectionType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::QrCode {
+                routing_id,
+                tunnel_id,
+                private_key: _,
+            } => f
+                .debug_struct("QrCode")
+                .field("routing_id", routing_id)
+                .field("tunnel_id", tunnel_id)
+                .field("private_key", &"[REDACTED]")
+                .finish(),
+            Self::KnownDevice {
+                contact_id,
+                authenticator_public_key,
+                client_payload,
+            } => f
+                .debug_struct("KnownDevice")
+                .field("contact_id", contact_id)
+                .field("authenticator_public_key", authenticator_public_key)
+                .field("client_payload", client_payload)
+                .finish(),
+        }
+    }
 }
 
 pub(crate) async fn connect<'d>(
@@ -349,56 +374,10 @@ pub(crate) async fn do_handshake(
     })
 }
 
-pub(crate) async fn channel(
-    connection_type: &CableTunnelConnectionType,
-    noise_state: TunnelNoiseState,
-    tunnel_domain: &str,
-    maybe_known_device_store: &Option<Arc<dyn CableKnownDeviceInfoStore>>,
-    ws_stream: WebSocketStream<MaybeTlsStream<TcpStream>>,
-) -> Result<(CableChannel, mpsc::Receiver<CableUxUpdate>), Error> {
-    let (cbor_tx_send, cbor_tx_recv) = mpsc::channel(16);
-    let (cbor_rx_send, cbor_rx_recv) = mpsc::channel(16);
-
-    let tunnel_domain: String = tunnel_domain.to_string();
-    let maybe_known_device_store = maybe_known_device_store.clone();
-    let connection_type = connection_type.to_owned();
-    let handle_connection = task::spawn(async move {
-        connection(
-            &connection_type,
-            &tunnel_domain,
-            &maybe_known_device_store,
-            ws_stream,
-            noise_state,
-            cbor_tx_recv,
-            cbor_rx_send,
-        )
-        .await;
-    });
-
-    let (send, recv) = mpsc::channel(1);
-    Ok((
-        CableChannel {
-            handle_connection,
-            cbor_sender: cbor_tx_send,
-            cbor_receiver: cbor_rx_recv,
-            tx: send,
-        },
-        recv,
-    ))
-}
-
-async fn connection(
-    connection_type: &CableTunnelConnectionType,
-    tunnel_domain: &str,
-    known_device_store: &Option<Arc<dyn CableKnownDeviceInfoStore>>,
-    mut ws_stream: WebSocketStream<MaybeTlsStream<TcpStream>>,
-    mut noise_state: TunnelNoiseState,
-    mut cbor_tx_recv: Receiver<CborRequest>,
-    cbor_rx_send: Sender<CborResponse>,
-) {
+pub(crate) async fn connection(mut input: TunnelConnectionInput) {
     // Fetch the inital message
-    let get_info_response_serialized: Vec<u8> = match ws_stream.next().await {
-        Some(Ok(message)) => match connection_recv_initial(message, &mut noise_state).await {
+    let get_info_response_serialized: Vec<u8> = match input.ws_stream.next().await {
+        Some(Ok(message)) => match connection_recv_initial(message, &mut input.noise_state).await {
             Ok(initial) => initial,
             Err(e) => {
                 error!(?e, "Failed to process initial message");
@@ -419,7 +398,7 @@ async fn connection(
     loop {
         // Wait for a message on ws_stream, or a request to send on cbor_rx_send
         tokio::select! {
-            Some(message) = ws_stream.next() => {
+            Some(message) = input.ws_stream.next() => {
                 match message {
                     Err(e) => {
                         error!(?e, "Failed to read encrypted CBOR message");
@@ -428,21 +407,21 @@ async fn connection(
                     Ok(message) => {
                         debug!("Received WSS message");
                         trace!(?message);
-                        let _ = connection_recv(connection_type, tunnel_domain, known_device_store, message, &cbor_rx_send, &mut noise_state).await;
+                        let _ = connection_recv(&input.connection_type, &input.tunnel_domain, &input.known_device_store, message, &input.cbor_rx_send, &mut input.noise_state).await;
                     }
                 };
             }
-            Some(request) = cbor_tx_recv.recv() => {
+            Some(request) = input.cbor_tx_recv.recv() => {
                 match request.command {
                     // Optimisation: respond to GetInfo requests immediately with the cached response
                     Ctap2CommandCode::AuthenticatorGetInfo => {
                         debug!("Responding to GetInfo request with cached response");
                         let response = CborResponse::new_success_from_slice(&get_info_response_serialized);
-                        let _ = cbor_rx_send.send(response).await;
+                        let _ = input.cbor_rx_send.send(response).await;
                     }
                     _ => {
                         debug!(?request.command, "Sending CBOR request");
-                        let _ = connection_send(request, &mut ws_stream, &mut noise_state).await;
+                        let _ = connection_send(request, &mut input.ws_stream, &mut input.noise_state).await;
                     }
                 }
             }
