@@ -5,6 +5,7 @@ mod digit_encode;
 
 pub mod advertisement;
 pub mod channel;
+pub mod connection_stages;
 pub mod known_devices;
 pub mod qr_code_device;
 pub mod tunnel;

@@ -15,7 +15,7 @@ use crate::{
         handle_errors,
         pin_uv_auth_token::{user_verification, UsedPinUvAuthToken},
     },
-    UxUpdate,
+    UvUpdate,
 };
 use async_trait::async_trait;
 use serde_bytes::ByteBuf;

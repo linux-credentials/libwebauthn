@@ -9,7 +9,7 @@ use tracing::{info, instrument};
 use crate::transport::device::Device;
 use crate::transport::error::TransportError;
 use crate::webauthn::error::Error;
-use crate::UxUpdate;
+use crate::UvUpdate;
 
 use super::btleplug::manager::SupportedRevisions;
 use super::btleplug::{supported_fido_revisions, FidoDevice as BtleplugFidoDevice};
@@ -75,7 +75,7 @@ impl fmt::Display for BleDevice {
 
 #[async_trait]
 impl<'d> Device<'d, Ble, BleChannel<'d>> for BleDevice {
-    async fn channel(&'d mut self) -> Result<(BleChannel<'d>, mpsc::Receiver<UxUpdate>), Error> {
+    async fn channel(&'d mut self) -> Result<(BleChannel<'d>, mpsc::Receiver<UvUpdate>), Error> {
         let revisions = self.supported_revisions().await?;
         let (send, recv) = mpsc::channel(1);
         let channel = BleChannel::new(self, &revisions, send).await?;

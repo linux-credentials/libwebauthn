@@ -11,7 +11,7 @@ use crate::{
         Ctap2, Ctap2AuthTokenPermissionRole, Ctap2AuthenticatorConfigCommand,
         Ctap2AuthenticatorConfigRequest, Ctap2GetInfoResponse, Ctap2UserVerifiableRequest,
     },
-    UxUpdate,
+    UvUpdate,
 };
 use async_trait::async_trait;
 use serde_bytes::ByteBuf;

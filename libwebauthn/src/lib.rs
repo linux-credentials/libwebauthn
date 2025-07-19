@@ -6,6 +6,7 @@ pub mod proto;
 pub mod transport;
 pub mod u2f;
 pub mod webauthn;
+
 use tokio::sync::oneshot;
 
 #[macro_use]
@@ -37,7 +38,7 @@ pub enum Transport {
 }
 
 #[derive(Debug)]
-pub enum UxUpdate {
+pub enum UvUpdate {
     /// UV failed, but we can still retry. `attempts_left` optionally shows how many tries _in total_ are left.
     /// Builtin UV may still temporarily be blocked.
     UvRetry {

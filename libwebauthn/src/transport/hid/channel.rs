@@ -29,7 +29,7 @@ use crate::transport::hid::framing::{
     HidCommand, HidMessage, HidMessageParser, HidMessageParserState,
 };
 use crate::webauthn::error::{Error, PlatformError};
-use crate::UxUpdate;
+use crate::UvUpdate;
 
 use super::device::get_hidapi;
 use super::device::HidBackendDevice;
@@ -70,14 +70,14 @@ pub struct HidChannel<'d> {
     open_device: OpenHidDevice,
     init: InitResponse,
     auth_token_data: Option<AuthTokenData>,
-    tx: mpsc::Sender<UxUpdate>,
+    tx: mpsc::Sender<UvUpdate>,
     handle: HidChannelHandle,
 }
 
 impl<'d> HidChannel<'d> {
     pub async fn new(
         device: &'d HidDevice,
-        tx: mpsc::Sender<UxUpdate>,
+        tx: mpsc::Sender<UvUpdate>,
     ) -> Result<HidChannel<'d>, Error> {
         let (handle_tx, handle_rx) = mpsc::channel(1);
         let handle = HidChannelHandle { tx: handle_tx };
@@ -487,6 +487,8 @@ impl Display for HidChannel<'_> {
 
 #[async_trait]
 impl Channel for HidChannel<'_> {
+    type UxUpdate = UvUpdate;
+
     async fn supported_protocols(&self) -> Result<SupportedProtocols, Error> {
         let cbor_supported = self.init.caps.contains(Caps::CBOR);
         let apdu_supported = !self.init.caps.contains(Caps::NO_MSG);
@@ -554,7 +556,7 @@ impl Channel for HidChannel<'_> {
         Ok(cbor_response)
     }
 
-    fn get_state_sender(&self) -> &mpsc::Sender<UxUpdate> {
+    fn get_ux_update_sender(&self) -> &mpsc::Sender<UvUpdate> {
         &self.tx
     }
 }
