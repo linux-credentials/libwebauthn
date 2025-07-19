@@ -7,6 +7,8 @@ pub mod transport;
 pub mod u2f;
 pub mod webauthn;
 
+use std::sync::Arc;
+
 use tokio::sync::oneshot;
 
 #[macro_use]
@@ -37,7 +39,7 @@ pub enum Transport {
     Ble,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum UvUpdate {
     /// UV failed, but we can still retry. `attempts_left` optionally shows how many tries _in total_ are left.
     /// Builtin UV may still temporarily be blocked.
@@ -50,9 +52,9 @@ pub enum UvUpdate {
     PresenceRequired,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PinRequiredUpdate {
-    reply_to: oneshot::Sender<String>,
+    reply_to: Arc<oneshot::Sender<String>>,
     /// What caused the PIN request.
     pub reason: PinRequestReason,
     /// Optionally, how many PIN attempts are left _in total_.
@@ -62,7 +64,12 @@ pub struct PinRequiredUpdate {
 impl PinRequiredUpdate {
     /// This consumes `self`, because we should only ever send exactly one answer back.
     pub fn send_pin(self, pin: &str) -> Result<(), String> {
-        self.reply_to.send(pin.to_string())
+        match Arc::try_unwrap(self.reply_to) {
+            Ok(sender) => sender
+                .send(pin.to_string())
+                .map_err(|_| "Failed to send PIN".to_string()),
+            Err(_) => Err("Multiple references to reply_to exist; cannot send PIN".to_string()),
+        }
     }
 
     /// The user cancels the PIN entry, without making an attempt.

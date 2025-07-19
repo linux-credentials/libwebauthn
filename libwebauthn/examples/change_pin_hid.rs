@@ -3,9 +3,10 @@ use std::time::Duration;
 
 use libwebauthn::{
     pin::{PinManagement, PinRequestReason},
+    transport::Channel as _,
     UvUpdate,
 };
-use tokio::sync::mpsc::Receiver;
+use tokio::sync::broadcast::Receiver;
 use tracing_subscriber::{self, EnvFilter};
 
 use libwebauthn::transport::hid::list_devices;
@@ -24,7 +25,7 @@ fn setup_logging() {
 }
 
 async fn handle_updates(mut state_recv: Receiver<UvUpdate>) {
-    while let Some(update) = state_recv.recv().await {
+    while let Ok(update) = state_recv.recv().await {
         match update {
             UvUpdate::PresenceRequired => println!("Please touch your device!"),
             UvUpdate::UvRetry { attempts_left } => {
@@ -72,7 +73,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
 
     for mut device in devices {
         println!("Selected HID authenticator: {}", &device);
-        let (mut channel, state_recv) = device.channel().await?;
+        let mut channel = device.channel().await?;
         channel.wink(TIMEOUT).await?;
 
         print!("PIN: Please enter the _new_ PIN: ");
@@ -84,6 +85,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             return Ok(());
         }
 
+        let state_recv = channel.get_ux_update_receiver();
         tokio::spawn(handle_updates(state_recv));
 
         let response = loop {

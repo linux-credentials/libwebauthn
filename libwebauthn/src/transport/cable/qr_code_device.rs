@@ -10,8 +10,7 @@ use rand::RngCore;
 use serde::Serialize;
 use serde_bytes::ByteArray;
 use serde_indexed::SerializeIndexed;
-use tokio::sync::mpsc;
-use tokio::sync::watch;
+use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task;
 use tracing::instrument;
 
@@ -23,7 +22,6 @@ use super::known_devices::CableKnownDeviceInfoStore;
 use super::tunnel::{self, KNOWN_TUNNEL_DOMAINS};
 use super::{channel::CableChannel, channel::ConnectionState, Cable};
 use crate::proto::ctap2::cbor;
-use crate::transport::cable::channel::CableUxUpdate;
 use crate::transport::cable::digit_encode;
 use crate::transport::Device;
 use crate::webauthn::error::Error;
@@ -194,19 +192,19 @@ impl Display for CableQrCodeDevice {
 
 #[async_trait]
 impl<'d> Device<'d, Cable, CableChannel> for CableQrCodeDevice {
-    async fn channel(&'d mut self) -> Result<(CableChannel, mpsc::Receiver<CableUxUpdate>), Error> {
-        let (ux_update_send, ux_update_recv) = mpsc::channel(1);
+    async fn channel(&'d mut self) -> Result<CableChannel, Error> {
+        let (ux_update_sender, _) = broadcast::channel(1);
         let (cbor_tx_send, cbor_tx_recv) = mpsc::channel(16);
         let (cbor_rx_send, cbor_rx_recv) = mpsc::channel(16);
-        let (connection_state_tx, connection_state_rx) =
+        let (connection_state_sender, connection_state_receiver) =
             watch::channel(ConnectionState::Connecting);
 
-        let ux_update_send_clone = ux_update_send.clone();
+        let ux_update_sender_clone = ux_update_sender.clone();
         let qr_device = self.clone();
 
         let handle_connection = task::spawn(async move {
             let ux_sender =
-                MpscUxUpdateSender::new(ux_update_send_clone.clone(), connection_state_tx);
+                MpscUxUpdateSender::new(ux_update_sender_clone.clone(), connection_state_sender);
 
             let Ok(handshake_output) = Self::connection(&qr_device, &ux_sender).await else {
                 ux_sender.send_error().await;
@@ -226,16 +224,13 @@ impl<'d> Device<'d, Cable, CableChannel> for CableQrCodeDevice {
                 .await;
         });
 
-        Ok((
-            CableChannel {
-                handle_connection,
-                cbor_sender: cbor_tx_send,
-                cbor_receiver: cbor_rx_recv,
-                tx: ux_update_send,
-                connection_state_rx,
-            },
-            ux_update_recv,
-        ))
+        Ok(CableChannel {
+            handle_connection,
+            cbor_sender: cbor_tx_send,
+            cbor_receiver: cbor_rx_recv,
+            ux_update_sender,
+            connection_state_receiver,
+        })
     }
 
     // #[instrument(skip_all)]

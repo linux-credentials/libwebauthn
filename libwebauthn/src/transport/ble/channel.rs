@@ -19,7 +19,7 @@ use super::framing::{BleCommand, BleFrame};
 use super::BleDevice;
 
 use async_trait::async_trait;
-use tokio::sync::mpsc;
+use tokio::sync::broadcast;
 use tracing::{debug, instrument, trace, Level};
 
 #[derive(Debug)]
@@ -29,15 +29,16 @@ pub struct BleChannel<'a> {
     connection: Connection,
     revision: FidoRevision,
     auth_token_data: Option<AuthTokenData>,
-    tx: mpsc::Sender<UvUpdate>,
+    ux_update_sender: broadcast::Sender<UvUpdate>,
 }
 
 impl<'a> BleChannel<'a> {
     pub async fn new(
         device: &'a BleDevice,
         revisions: &SupportedRevisions,
-        tx: mpsc::Sender<UvUpdate>,
     ) -> Result<BleChannel<'a>, Error> {
+        let (ux_update_sender, _) = broadcast::channel(1);
+
         let revision = revisions
             .select_protocol(FidoProtocol::U2F)
             .ok_or(Error::Transport(TransportError::NegotiationFailed))?;
@@ -50,7 +51,7 @@ impl<'a> BleChannel<'a> {
             connection,
             revision,
             auth_token_data: None,
-            tx,
+            ux_update_sender,
         };
         channel
             .connection
@@ -164,8 +165,8 @@ impl<'a> Channel for BleChannel<'a> {
         Ok(cbor_response)
     }
 
-    fn get_ux_update_sender(&self) -> &mpsc::Sender<Self::UxUpdate> {
-        &self.tx
+    fn get_ux_update_sender(&self) -> &broadcast::Sender<Self::UxUpdate> {
+        &self.ux_update_sender
     }
 }
 

@@ -2,7 +2,7 @@ use std::fmt::{Display, Formatter};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{broadcast, mpsc, watch};
 use tokio::{task, time};
 use tracing::error;
 
@@ -39,22 +39,16 @@ pub enum CableChannelDevice<'d> {
 
 #[derive(Debug)]
 pub struct CableChannel {
-    /// The WebSocket stream used for communication.
-    // pub(crate) ws_stream: WebSocketStream<MaybeTlsStream<TcpStream>>,
-
-    /// The noise state used for encryption over the WebSocket stream.
-    // pub(crate) noise_state: TransportState,
     pub(crate) handle_connection: task::JoinHandle<()>,
     pub(crate) cbor_sender: mpsc::Sender<CborRequest>,
     pub(crate) cbor_receiver: mpsc::Receiver<CborResponse>,
-    pub(crate) tx: mpsc::Sender<CableUxUpdate>,
-    /// Watch receiver for connection state
-    pub(crate) connection_state_rx: watch::Receiver<ConnectionState>,
+    pub(crate) ux_update_sender: broadcast::Sender<CableUxUpdate>,
+    pub(crate) connection_state_receiver: watch::Receiver<ConnectionState>,
 }
 
 impl CableChannel {
     async fn wait_for_connection(&self) -> Result<(), Error> {
-        let mut rx = self.connection_state_rx.clone();
+        let mut rx = self.connection_state_receiver.clone();
 
         // If already connected, return immediately
         if *rx.borrow() == ConnectionState::Connected {
@@ -94,13 +88,13 @@ impl Drop for CableChannel {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum CableUxUpdate {
     UvUpdate(UvUpdate),
     CableUpdate(CableUpdate),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum CableUpdate {
     /// Waiting for proximity check user interaction (eg. scan a QR code, or confirm on the device).
     ProximityCheck,
@@ -182,8 +176,8 @@ impl<'d> Channel for CableChannel {
         }
     }
 
-    fn get_ux_update_sender(&self) -> &mpsc::Sender<CableUxUpdate> {
-        &self.tx
+    fn get_ux_update_sender(&self) -> &broadcast::Sender<CableUxUpdate> {
+        &self.ux_update_sender
     }
 
     fn supports_preflight() -> bool {

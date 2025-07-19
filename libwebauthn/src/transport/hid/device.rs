@@ -2,7 +2,6 @@ use async_trait::async_trait;
 use hidapi::DeviceInfo;
 use hidapi::HidApi;
 use std::fmt;
-use tokio::sync::mpsc;
 #[allow(unused_imports)]
 use tracing::{debug, info, instrument};
 
@@ -15,7 +14,6 @@ use super::Hid;
 use crate::transport::error::TransportError;
 use crate::transport::Device;
 use crate::webauthn::error::Error;
-use crate::UvUpdate;
 
 #[derive(Debug)]
 // SoloVirtualKey is not clone-able, but in test-mode we don't care
@@ -94,10 +92,9 @@ impl HidDevice {
 
 #[async_trait]
 impl<'d> Device<'d, Hid, HidChannel<'d>> for HidDevice {
-    async fn channel(&'d mut self) -> Result<(HidChannel<'d>, mpsc::Receiver<UvUpdate>), Error> {
-        let (send, recv) = mpsc::channel(1);
-        let channel = HidChannel::new(self, send).await?;
-        Ok((channel, recv))
+    async fn channel(&'d mut self) -> Result<HidChannel<'d>, Error> {
+        let channel = HidChannel::new(self).await?;
+        Ok(channel)
     }
 
     // async fn supported_protocols(&mut self) -> Result<SupportedProtocols, Error> {
@@ -117,7 +114,7 @@ mod tests {
         use crate::transport::Device;
 
         let mut device = HidDevice::new_virtual();
-        let (channel, _) = device.channel().await.unwrap();
+        let channel = device.channel().await.unwrap();
 
         let protocols = channel.supported_protocols().await.unwrap();
 
