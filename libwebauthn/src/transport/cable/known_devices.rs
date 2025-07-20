@@ -162,7 +162,7 @@ impl CableKnownDevice {
     async fn connection(
         known_device: &CableKnownDevice,
         ux_sender: &super::connection_stages::MpscUxUpdateSender,
-    ) -> Result<HandshakeOutput, Error> {
+    ) -> Result<HandshakeOutput, TransportError> {
         let client_nonce = rand::random::<ClientNonce>();
 
         // Stage 1: Connection (no proximity check needed for known devices)
@@ -201,9 +201,12 @@ impl<'d> Device<'d, Cable, CableChannel> for CableKnownDevice {
             let ux_sender =
                 MpscUxUpdateSender::new(ux_update_sender_clone, connection_state_sender);
 
-            let Ok(handshake_output) = Self::connection(&known_device, &ux_sender).await else {
-                ux_sender.send_error().await;
-                return;
+            let handshake_output = match Self::connection(&known_device, &ux_sender).await {
+                Ok(handshake_output) => handshake_output,
+                Err(e) => {
+                    ux_sender.send_error(e).await;
+                    return;
+                }
             };
 
             let tunnel_input = TunnelConnectionInput::from_handshake_output(

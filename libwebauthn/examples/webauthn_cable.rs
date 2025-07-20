@@ -80,7 +80,7 @@ async fn handle_updates(mut state_recv: Receiver<CableUxUpdate>) {
                 CableUpdate::Connecting => println!("Connecting to the device..."),
                 CableUpdate::Authenticating => println!("Authenticating with the device..."),
                 CableUpdate::Connected => println!("Tunnel established successfully!"),
-                CableUpdate::Failed => println!("Failed to establish tunnel."),
+                CableUpdate::Error(err) => println!("Error during connection: {}", err),
             },
         }
     }

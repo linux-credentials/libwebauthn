@@ -57,7 +57,7 @@ impl CableChannel {
 
         // If already terminated, return error immediately
         if *rx.borrow() == ConnectionState::Terminated {
-            return Err(Error::Transport(TransportError::ConnectionFailed));
+            return Err(Error::Transport(TransportError::ConnectionLost));
         }
 
         // Wait for state change
@@ -72,7 +72,7 @@ impl CableChannel {
         }
 
         // If the sender was dropped, consider it a failure
-        Err(Error::Transport(TransportError::ConnectionFailed))
+        Err(Error::Transport(TransportError::ConnectionLost))
     }
 }
 
@@ -105,7 +105,7 @@ pub enum CableUpdate {
     /// Connected to the authenticator device via the tunnel server.
     Connected,
     /// The connection to the authenticator device has failed.
-    Failed,
+    Error(TransportError),
 }
 
 impl From<UvUpdate> for CableUxUpdate {

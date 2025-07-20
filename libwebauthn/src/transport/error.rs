@@ -1,4 +1,4 @@
-#[derive(thiserror::Error, Debug, PartialEq)]
+#[derive(thiserror::Error, Debug, PartialEq, Clone)]
 pub enum TransportError {
     #[error("connection failed")]
     ConnectionFailed,
@@ -22,4 +22,10 @@ pub enum TransportError {
     InvalidSignature,
     #[error("input/output error: {0}")]
     IoError(std::io::ErrorKind),
+}
+
+impl From<snow::Error> for TransportError {
+    fn from(_error: snow::Error) -> Self {
+        TransportError::NegotiationFailed
+    }
 }
