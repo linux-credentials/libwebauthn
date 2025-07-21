@@ -25,6 +25,7 @@ use crate::proto::ctap2::cbor;
 use crate::transport::cable::digit_encode;
 use crate::transport::Device;
 use crate::webauthn::error::Error;
+use crate::webauthn::TransportError;
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq)]
 pub enum QrCodeOperationHint {
@@ -162,7 +163,7 @@ impl CableQrCodeDevice {
     async fn connection(
         qr_device: &CableQrCodeDevice,
         ux_sender: &MpscUxUpdateSender,
-    ) -> Result<super::connection_stages::HandshakeOutput, Error> {
+    ) -> Result<super::connection_stages::HandshakeOutput, TransportError> {
         // Stage 1: Proximity check
         let proximity_input = ProximityCheckInput::new_for_qr_code(qr_device);
         let proximity_output = proximity_check_stage(proximity_input, ux_sender).await?;
@@ -206,9 +207,12 @@ impl<'d> Device<'d, Cable, CableChannel> for CableQrCodeDevice {
             let ux_sender =
                 MpscUxUpdateSender::new(ux_update_sender_clone.clone(), connection_state_sender);
 
-            let Ok(handshake_output) = Self::connection(&qr_device, &ux_sender).await else {
-                ux_sender.send_error().await;
-                return;
+            let handshake_output = match Self::connection(&qr_device, &ux_sender).await {
+                Ok(handshake_output) => handshake_output,
+                Err(e) => {
+                    ux_sender.send_error(e).await;
+                    return;
+                }
             };
 
             let tunnel_input = TunnelConnectionInput::from_handshake_output(

@@ -12,7 +12,6 @@ use super::tunnel::{self, CableTunnelConnectionType, TunnelNoiseState};
 use crate::proto::ctap2::cbor::{CborRequest, CborResponse};
 use crate::transport::ble::btleplug::FidoDevice;
 use crate::transport::error::TransportError;
-use crate::webauthn::error::Error;
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -60,7 +59,7 @@ impl ConnectionInput {
     pub fn new_for_qr_code(
         qr_device: &CableQrCodeDevice,
         proximity_output: &ProximityCheckOutput,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, TransportError> {
         let tunnel_domain = decode_tunnel_domain_from_advert(&proximity_output.advert)?;
 
         let routing_id_str = hex::encode(&proximity_output.advert.routing_id);
@@ -194,7 +193,7 @@ impl TunnelConnectionInput {
 #[async_trait]
 pub(crate) trait UxUpdateSender: Send + Sync {
     async fn send_update(&self, update: CableUxUpdate);
-    async fn send_error(&self);
+    async fn send_error(&self, error: TransportError);
     async fn set_connection_state(&self, state: ConnectionState);
 }
 
@@ -225,8 +224,8 @@ impl UxUpdateSender for MpscUxUpdateSender {
         }
     }
 
-    async fn send_error(&self) {
-        self.send_update(CableUxUpdate::CableUpdate(CableUpdate::Failed))
+    async fn send_error(&self, error: TransportError) {
+        self.send_update(CableUxUpdate::CableUpdate(CableUpdate::Error(error)))
             .await;
         let _ = self.connection_state_tx.send(ConnectionState::Terminated);
     }
@@ -240,7 +239,7 @@ impl UxUpdateSender for MpscUxUpdateSender {
 pub(crate) async fn proximity_check_stage(
     input: ProximityCheckInput,
     ux_sender: &dyn UxUpdateSender,
-) -> Result<ProximityCheckOutput, Error> {
+) -> Result<ProximityCheckOutput, TransportError> {
     debug!("Starting proximity check stage");
 
     ux_sender
@@ -260,7 +259,7 @@ pub(crate) async fn proximity_check_stage(
 pub(crate) async fn connection_stage(
     input: ConnectionInput,
     ux_sender: &dyn UxUpdateSender,
-) -> Result<ConnectionOutput, Error> {
+) -> Result<ConnectionOutput, TransportError> {
     debug!(?input.tunnel_domain, "Starting connection stage");
 
     ux_sender
@@ -281,7 +280,7 @@ pub(crate) async fn connection_stage(
 pub(crate) async fn handshake_stage(
     input: HandshakeInput,
     ux_sender: &dyn UxUpdateSender,
-) -> Result<HandshakeOutput, Error> {
+) -> Result<HandshakeOutput, TransportError> {
     debug!("Starting handshake stage");
 
     ux_sender
@@ -315,10 +314,12 @@ fn derive_psk(secret: &[u8], advert_plaintext: &[u8]) -> [u8; 32] {
     psk
 }
 
-pub(crate) fn decode_tunnel_domain_from_advert(advert: &DecryptedAdvert) -> Result<String, Error> {
+pub(crate) fn decode_tunnel_domain_from_advert(
+    advert: &DecryptedAdvert,
+) -> Result<String, TransportError> {
     tunnel::decode_tunnel_server_domain(advert.encoded_tunnel_server_domain)
         .ok_or_else(|| {
             error!({ encoded = %advert.encoded_tunnel_server_domain }, "Failed to decode tunnel server domain");
-            Error::Transport(TransportError::InvalidFraming)
+            TransportError::InvalidFraming
         })
 }
