@@ -193,7 +193,7 @@ impl Display for CableQrCodeDevice {
 #[async_trait]
 impl<'d> Device<'d, Cable, CableChannel> for CableQrCodeDevice {
     async fn channel(&'d mut self) -> Result<CableChannel, Error> {
-        let (ux_update_sender, _) = broadcast::channel(1);
+        let (ux_update_sender, _) = broadcast::channel(16);
         let (cbor_tx_send, cbor_tx_recv) = mpsc::channel(16);
         let (cbor_rx_send, cbor_rx_recv) = mpsc::channel(16);
         let (connection_state_sender, connection_state_receiver) =

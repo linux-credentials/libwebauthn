@@ -37,7 +37,7 @@ impl<'a> BleChannel<'a> {
         device: &'a BleDevice,
         revisions: &SupportedRevisions,
     ) -> Result<BleChannel<'a>, Error> {
-        let (ux_update_sender, _) = broadcast::channel(1);
+        let (ux_update_sender, _) = broadcast::channel(16);
 
         let revision = revisions
             .select_protocol(FidoProtocol::U2F)

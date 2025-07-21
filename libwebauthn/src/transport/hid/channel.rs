@@ -77,7 +77,7 @@ pub struct HidChannel<'d> {
 
 impl<'d> HidChannel<'d> {
     pub async fn new(device: &'d HidDevice) -> Result<HidChannel<'d>, Error> {
-        let (ux_update_sender, _) = broadcast::channel(1);
+        let (ux_update_sender, _) = broadcast::channel(16);
         let (handle_tx, handle_rx) = mpsc::channel(1);
         let handle = HidChannelHandle { tx: handle_tx };
 

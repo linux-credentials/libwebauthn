@@ -188,7 +188,7 @@ impl<'d> Device<'d, Cable, CableChannel> for CableKnownDevice {
     async fn channel(&'d mut self) -> Result<CableChannel, Error> {
         debug!(?self.device_info.tunnel_domain, "Creating channel to tunnel server");
 
-        let (ux_update_sender, _) = broadcast::channel(1);
+        let (ux_update_sender, _) = broadcast::channel(16);
         let (cbor_tx_send, cbor_tx_recv) = mpsc::channel(16);
         let (cbor_rx_send, cbor_rx_recv) = mpsc::channel(16);
         let (connection_state_sender, connection_state_receiver) =
