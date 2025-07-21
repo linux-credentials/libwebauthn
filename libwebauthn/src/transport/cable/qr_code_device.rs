@@ -11,19 +11,22 @@ use serde::Serialize;
 use serde_bytes::ByteArray;
 use serde_indexed::SerializeIndexed;
 use tokio::sync::mpsc;
-use tracing::{debug, error};
+use tokio::sync::watch;
+use tokio::task;
+use tracing::instrument;
 
+use super::connection_stages::{
+    connection_stage, handshake_stage, proximity_check_stage, ConnectionInput, HandshakeInput,
+    MpscUxUpdateSender, ProximityCheckInput, TunnelConnectionInput, UxUpdateSender,
+};
 use super::known_devices::CableKnownDeviceInfoStore;
 use super::tunnel::{self, KNOWN_TUNNEL_DOMAINS};
-use super::{channel::CableChannel, Cable};
+use super::{channel::CableChannel, channel::ConnectionState, Cable};
 use crate::proto::ctap2::cbor;
-use crate::transport::cable::advertisement::await_advertisement;
-use crate::transport::cable::crypto::{derive, KeyPurpose};
+use crate::transport::cable::channel::CableUxUpdate;
 use crate::transport::cable::digit_encode;
-use crate::transport::error::TransportError;
 use crate::transport::Device;
 use crate::webauthn::error::Error;
-use crate::UxUpdate;
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq)]
 pub enum QrCodeOperationHint {
@@ -33,7 +36,7 @@ pub enum QrCodeOperationHint {
     MakeCredential,
 }
 
-#[derive(Debug, SerializeIndexed)]
+#[derive(Debug, Clone, SerializeIndexed)]
 pub struct CableQrCode {
     // Key 0: a 33-byte, P-256, X9.62, compressed public key.
     #[serde(index = 0x00)]
@@ -80,6 +83,7 @@ impl ToString for CableQrCode {
 
 /// Represents a new device which will connect by scanning a QR code.
 /// This could be a new device, or an ephmemeral device whose details were not stored.
+#[derive(Clone)]
 pub struct CableQrCodeDevice {
     /// The QR code to be scanned by the new authenticator.
     pub qr_code: CableQrCode,
@@ -155,6 +159,27 @@ impl CableQrCodeDevice {
     pub fn new_transient(hint: QrCodeOperationHint) -> Self {
         Self::new(hint, false, None)
     }
+
+    #[instrument(skip_all, err)]
+    async fn connection(
+        qr_device: &CableQrCodeDevice,
+        ux_sender: &MpscUxUpdateSender,
+    ) -> Result<super::connection_stages::HandshakeOutput, Error> {
+        // Stage 1: Proximity check
+        let proximity_input = ProximityCheckInput::new_for_qr_code(qr_device);
+        let proximity_output = proximity_check_stage(proximity_input, ux_sender).await?;
+
+        // Stage 2: Connection
+        let connection_input = ConnectionInput::new_for_qr_code(qr_device, &proximity_output)?;
+        let connection_output = connection_stage(connection_input, ux_sender).await?;
+
+        // Stage 3: Handshake
+        let handshake_input =
+            HandshakeInput::new_for_qr_code(qr_device, connection_output, proximity_output);
+        let handshake_output = handshake_stage(handshake_input, ux_sender).await?;
+
+        Ok(handshake_output)
+    }
 }
 
 unsafe impl Send for CableQrCodeDevice {}
@@ -169,48 +194,48 @@ impl Display for CableQrCodeDevice {
 
 #[async_trait]
 impl<'d> Device<'d, Cable, CableChannel> for CableQrCodeDevice {
-    async fn channel(&'d mut self) -> Result<(CableChannel, mpsc::Receiver<UxUpdate>), Error> {
-        let eid_key: [u8; 64] = derive(self.qr_code.qr_secret.as_ref(), None, KeyPurpose::EIDKey);
-        let (_device, advert) = await_advertisement(&eid_key).await?;
+    async fn channel(&'d mut self) -> Result<(CableChannel, mpsc::Receiver<CableUxUpdate>), Error> {
+        let (ux_update_send, ux_update_recv) = mpsc::channel(1);
+        let (cbor_tx_send, cbor_tx_recv) = mpsc::channel(16);
+        let (cbor_rx_send, cbor_rx_recv) = mpsc::channel(16);
+        let (connection_state_tx, connection_state_rx) =
+            watch::channel(ConnectionState::Connecting);
 
-        let Some(tunnel_domain) =
-            tunnel::decode_tunnel_server_domain(advert.encoded_tunnel_server_domain)
-        else {
-            error!({ encoded = %advert.encoded_tunnel_server_domain }, "Failed to decode tunnel server domain");
-            return Err(Error::Transport(TransportError::InvalidEndpoint));
-        };
+        let ux_update_send_clone = ux_update_send.clone();
+        let qr_device = self.clone();
 
-        debug!(?tunnel_domain, "Creating channel to tunnel server");
-        let routing_id_str = hex::encode(&advert.routing_id);
-        let _nonce_str = hex::encode(&advert.nonce);
+        let handle_connection = task::spawn(async move {
+            let ux_sender =
+                MpscUxUpdateSender::new(ux_update_send_clone.clone(), connection_state_tx);
 
-        let tunnel_id = &derive(self.qr_code.qr_secret.as_ref(), None, KeyPurpose::TunnelID)[..16];
-        let tunnel_id_str = hex::encode(&tunnel_id);
+            let Ok(handshake_output) = Self::connection(&qr_device, &ux_sender).await else {
+                ux_sender.send_error().await;
+                return;
+            };
 
-        let mut psk: [u8; 32] = [0u8; 32];
-        psk.copy_from_slice(
-            &derive(
-                self.qr_code.qr_secret.as_ref(),
-                Some(&advert.plaintext),
-                KeyPurpose::PSK,
-            )[..32],
-        );
+            let tunnel_input = TunnelConnectionInput::from_handshake_output(
+                handshake_output,
+                qr_device.store,
+                cbor_tx_recv,
+                cbor_rx_send,
+            );
+            tunnel::connection(tunnel_input).await;
 
-        let connection_type = tunnel::CableTunnelConnectionType::QrCode {
-            routing_id: routing_id_str,
-            tunnel_id: tunnel_id_str.clone(),
-            private_key: self.private_key,
-        };
-        let mut ws_stream = tunnel::connect(&tunnel_domain, &connection_type).await?;
-        let noise_state = tunnel::do_handshake(&mut ws_stream, psk, &connection_type).await?;
-        tunnel::channel(
-            &connection_type,
-            noise_state,
-            &tunnel_domain,
-            &self.store,
-            ws_stream,
-        )
-        .await
+            ux_sender
+                .set_connection_state(ConnectionState::Terminated)
+                .await;
+        });
+
+        Ok((
+            CableChannel {
+                handle_connection,
+                cbor_sender: cbor_tx_send,
+                cbor_receiver: cbor_rx_recv,
+                tx: ux_update_send,
+                connection_state_rx,
+            },
+            ux_update_recv,
+        ))
     }
 
     // #[instrument(skip_all)]

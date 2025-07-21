@@ -1,7 +1,7 @@
 use ::btleplug::api::Central;
 use futures::StreamExt;
 use std::pin::pin;
-use tracing::{debug, trace, warn};
+use tracing::{debug, instrument, trace, warn};
 use uuid::Uuid;
 
 use crate::transport::ble::btleplug::{self, FidoDevice};
@@ -15,7 +15,7 @@ const CABLE_UUID_GOOGLE: &str = "0000fde2-0000-1000-8000-00805f9b34fb";
 #[derive(Debug)]
 pub(crate) struct DecryptedAdvert {
     pub plaintext: [u8; 16],
-    pub nonce: [u8; 10],
+    pub _nonce: [u8; 10],
     pub routing_id: [u8; 3],
     pub encoded_tunnel_server_domain: u16,
 }
@@ -31,13 +31,14 @@ impl From<[u8; 16]> for DecryptedAdvert {
         plaintext_fixed.copy_from_slice(&plaintext[..16]);
         Self {
             plaintext: plaintext_fixed,
-            nonce,
+            _nonce: nonce,
             routing_id,
             encoded_tunnel_server_domain,
         }
     }
 }
 
+#[instrument(skip_all, err)]
 pub(crate) async fn await_advertisement(
     eid_key: &[u8],
 ) -> Result<(FidoDevice, DecryptedAdvert), Error> {

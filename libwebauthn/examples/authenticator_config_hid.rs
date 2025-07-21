@@ -8,7 +8,7 @@ use libwebauthn::proto::ctap2::{Ctap2, Ctap2GetInfoResponse};
 use libwebauthn::transport::hid::list_devices;
 use libwebauthn::transport::Device;
 use libwebauthn::webauthn::Error as WebAuthnError;
-use libwebauthn::UxUpdate;
+use libwebauthn::UvUpdate;
 use std::io::{self, Write};
 use text_io::read;
 use tokio::sync::mpsc::Receiver;
@@ -23,17 +23,17 @@ fn setup_logging() {
         .init();
 }
 
-async fn handle_updates(mut state_recv: Receiver<UxUpdate>) {
+async fn handle_updates(mut state_recv: Receiver<UvUpdate>) {
     while let Some(update) = state_recv.recv().await {
         match update {
-            UxUpdate::PresenceRequired => println!("Please touch your device!"),
-            UxUpdate::UvRetry { attempts_left } => {
+            UvUpdate::PresenceRequired => println!("Please touch your device!"),
+            UvUpdate::UvRetry { attempts_left } => {
                 print!("UV failed.");
                 if let Some(attempts_left) = attempts_left {
                     print!(" You have {attempts_left} attempts left.");
                 }
             }
-            UxUpdate::PinRequired(update) => {
+            UvUpdate::PinRequired(update) => {
                 let mut attempts_str = String::new();
                 if let Some(attempts) = update.attempts_left {
                     attempts_str = format!(". You have {attempts} attempts left!");

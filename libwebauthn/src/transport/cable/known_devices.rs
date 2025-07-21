@@ -2,12 +2,17 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::sync::Arc;
 
-use crate::transport::cable::advertisement::await_advertisement;
-use crate::transport::cable::crypto::{derive, KeyPurpose};
+use crate::transport::cable::channel::CableUxUpdate;
+use crate::transport::cable::channel::ConnectionState;
+use crate::transport::cable::connection_stages::{
+    connection_stage, handshake_stage, proximity_check_stage, ConnectionInput, HandshakeInput,
+    HandshakeOutput, MpscUxUpdateSender, ProximityCheckInput, TunnelConnectionInput,
+    UxUpdateSender,
+};
+
 use crate::transport::error::TransportError;
 use crate::transport::Device;
 use crate::webauthn::error::Error;
-use crate::UxUpdate;
 
 use async_trait::async_trait;
 use futures::lock::Mutex;
@@ -15,7 +20,9 @@ use serde::Serialize;
 use serde_bytes::ByteBuf;
 use serde_indexed::SerializeIndexed;
 use tokio::sync::mpsc;
-use tracing::{debug, trace};
+use tokio::sync::watch;
+use tokio::task;
+use tracing::{debug, instrument, trace};
 
 use super::channel::CableChannel;
 use super::tunnel::{self, CableLinkingInfo};
@@ -118,7 +125,7 @@ impl CableKnownDeviceInfo {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CableKnownDevice {
     pub hint: ClientPayloadHint,
     pub device_info: CableKnownDeviceInfo,
@@ -152,56 +159,81 @@ impl CableKnownDevice {
         };
         Ok(device)
     }
+
+    #[instrument(skip_all, err)]
+    async fn connection(
+        known_device: &CableKnownDevice,
+        ux_sender: &super::connection_stages::MpscUxUpdateSender,
+    ) -> Result<HandshakeOutput, Error> {
+        let client_nonce = rand::random::<ClientNonce>();
+
+        // Stage 1: Connection (no proximity check needed for known devices)
+        let connection_input = ConnectionInput::new_for_known_device(known_device, &client_nonce);
+        let connection_output = connection_stage(connection_input.clone(), ux_sender).await?;
+
+        // Stage 2: Proximity check (after connection for known devices)
+        let proximity_input =
+            ProximityCheckInput::new_for_known_device(known_device, &client_nonce);
+        let proximity_output = proximity_check_stage(proximity_input, ux_sender).await?;
+
+        // Stage 3: Handshake
+        let handshake_input =
+            HandshakeInput::new_for_known_device(known_device, connection_output, proximity_output);
+        let handshake_output = handshake_stage(handshake_input, ux_sender).await?;
+
+        Ok(handshake_output)
+    }
 }
 
 #[async_trait]
 impl<'d> Device<'d, Cable, CableChannel> for CableKnownDevice {
-    async fn channel(&'d mut self) -> Result<(CableChannel, mpsc::Receiver<UxUpdate>), Error> {
+    async fn channel(&'d mut self) -> Result<(CableChannel, mpsc::Receiver<CableUxUpdate>), Error> {
         debug!(?self.device_info.tunnel_domain, "Creating channel to tunnel server");
 
-        let (client_nonce, client_payload) =
-            construct_client_payload(self.hint, self.device_info.link_id);
-        let contact_id = base64_url::encode(&self.device_info.contact_id);
+        let (ux_update_send, ux_update_recv) = mpsc::channel(1);
+        let (cbor_tx_send, cbor_tx_recv) = mpsc::channel(16);
+        let (cbor_rx_send, cbor_rx_recv) = mpsc::channel(16);
+        let (connection_state_tx, connection_state_rx) =
+            watch::channel(ConnectionState::Connecting);
+        let ux_update_send_clone = ux_update_send.clone();
 
-        let connection_type = tunnel::CableTunnelConnectionType::KnownDevice {
-            contact_id: contact_id,
-            authenticator_public_key: self.device_info.public_key.to_vec(),
-            client_payload,
-        };
-        let mut ws_stream =
-            tunnel::connect(&self.device_info.tunnel_domain, &connection_type).await?;
+        let known_device = self.clone();
 
-        let eid_key: [u8; 64] = derive(
-            &self.device_info.link_secret,
-            Some(&client_nonce),
-            KeyPurpose::EIDKey,
-        );
+        let handle_connection = task::spawn(async move {
+            let ux_sender = MpscUxUpdateSender::new(ux_update_send_clone, connection_state_tx);
 
-        let (_device, advert) = await_advertisement(&eid_key).await?;
+            let Ok(handshake_output) = Self::connection(&known_device, &ux_sender).await else {
+                ux_sender.send_error().await;
+                return;
+            };
 
-        let mut psk: [u8; 32] = [0u8; 32];
-        psk.copy_from_slice(
-            &derive(
-                &self.device_info.link_secret,
-                Some(&advert.plaintext),
-                KeyPurpose::PSK,
-            )[..32],
-        );
+            let tunnel_input = TunnelConnectionInput::from_handshake_output(
+                handshake_output,
+                Some(known_device.store),
+                cbor_tx_recv,
+                cbor_rx_send,
+            );
 
-        let noise_state = tunnel::do_handshake(&mut ws_stream, psk, &connection_type).await?;
+            tunnel::connection(tunnel_input).await;
+            ux_sender
+                .set_connection_state(ConnectionState::Terminated)
+                .await;
+        });
 
-        tunnel::channel(
-            &connection_type,
-            noise_state,
-            &self.device_info.tunnel_domain,
-            &Some(self.store.clone()),
-            ws_stream,
-        )
-        .await
+        Ok((
+            CableChannel {
+                handle_connection,
+                cbor_sender: cbor_tx_send,
+                cbor_receiver: cbor_rx_recv,
+                tx: ux_update_send,
+                connection_state_rx,
+            },
+            ux_update_recv,
+        ))
     }
 }
 
-type ClientNonce = [u8; 16];
+pub(crate) type ClientNonce = [u8; 16];
 
 // Key 3: either the string “ga” to hint that a getAssertion will follow, or “mc” to hint that a makeCredential will follow.
 #[derive(Clone, Debug, SerializeIndexed)]
@@ -222,21 +254,6 @@ pub enum ClientPayloadHint {
     GetAssertion,
     #[serde(rename = "mc")]
     MakeCredential,
-}
-
-fn construct_client_payload(
-    hint: ClientPayloadHint,
-    link_id: [u8; 8],
-) -> (ClientNonce, ClientPayload) {
-    let client_nonce = rand::random::<ClientNonce>();
-    let client_payload = {
-        ClientPayload {
-            link_id: ByteBuf::from(link_id),
-            client_nonce: ByteBuf::from(client_nonce),
-            hint,
-        }
-    };
-    (client_nonce, client_payload)
 }
 
 #[cfg(test)]
