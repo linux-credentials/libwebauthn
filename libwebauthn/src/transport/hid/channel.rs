@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use byteorder::{BigEndian, ReadBytesExt};
 use hidapi::HidDevice as HidApiDevice;
 use rand::{thread_rng, Rng};
+use tokio::sync::broadcast;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::time::sleep;
@@ -70,15 +71,13 @@ pub struct HidChannel<'d> {
     open_device: OpenHidDevice,
     init: InitResponse,
     auth_token_data: Option<AuthTokenData>,
-    tx: mpsc::Sender<UvUpdate>,
+    ux_update_sender: broadcast::Sender<UvUpdate>,
     handle: HidChannelHandle,
 }
 
 impl<'d> HidChannel<'d> {
-    pub async fn new(
-        device: &'d HidDevice,
-        tx: mpsc::Sender<UvUpdate>,
-    ) -> Result<HidChannel<'d>, Error> {
+    pub async fn new(device: &'d HidDevice) -> Result<HidChannel<'d>, Error> {
+        let (ux_update_sender, _) = broadcast::channel(16);
         let (handle_tx, handle_rx) = mpsc::channel(1);
         let handle = HidChannelHandle { tx: handle_tx };
 
@@ -95,7 +94,7 @@ impl<'d> HidChannel<'d> {
             },
             init: InitResponse::default(),
             auth_token_data: None,
-            tx,
+            ux_update_sender,
             handle,
         };
         channel.init = channel.init(INIT_TIMEOUT).await?;
@@ -556,8 +555,8 @@ impl Channel for HidChannel<'_> {
         Ok(cbor_response)
     }
 
-    fn get_ux_update_sender(&self) -> &mpsc::Sender<UvUpdate> {
-        &self.tx
+    fn get_ux_update_sender(&self) -> &broadcast::Sender<UvUpdate> {
+        &self.ux_update_sender
     }
 }
 

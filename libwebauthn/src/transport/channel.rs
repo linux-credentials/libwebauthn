@@ -13,8 +13,8 @@ use crate::UvUpdate;
 
 use async_trait::async_trait;
 use cosey::PublicKey;
-use tokio::sync::mpsc;
-use tracing::{debug, error};
+use tokio::sync::broadcast;
+use tracing::{instrument, trace, warn};
 
 use super::device::SupportedProtocols;
 
@@ -30,17 +30,23 @@ pub trait Channel: Send + Sync + Display + Ctap2AuthTokenStore {
     /// UX updates for this channel, must include UV updates.
     type UxUpdate: Send + Sync + Debug + From<UvUpdate>;
 
-    fn get_ux_update_sender(&self) -> &mpsc::Sender<Self::UxUpdate>;
+    fn get_ux_update_sender(&self) -> &broadcast::Sender<Self::UxUpdate>;
+
+    fn get_ux_update_receiver(&self) -> broadcast::Receiver<Self::UxUpdate> {
+        self.get_ux_update_sender().subscribe()
+    }
+
+    #[instrument(skip(self))]
     async fn send_ux_update(&mut self, state: Self::UxUpdate) {
-        debug!(?state, "Sending state update");
-        match self.get_ux_update_sender().send(state).await {
-            Ok(_) => (), // Success
+        trace!("Sending UX update");
+        match self.get_ux_update_sender().send(state) {
+            Ok(_) => (),
             Err(_) => {
-                error!("Failed to send state update. Application must have hung up. Closing.");
-                self.close().await;
+                warn!("No receivers for UX update.");
             }
         };
     }
+
     async fn supported_protocols(&self) -> Result<SupportedProtocols, Error>;
     async fn status(&self) -> ChannelStatus;
     async fn close(&mut self);

@@ -9,7 +9,7 @@ use libwebauthn::UvUpdate;
 use rand::{thread_rng, Rng};
 use serde_bytes::ByteBuf;
 use text_io::read;
-use tokio::sync::mpsc::Receiver;
+use tokio::sync::broadcast::Receiver;
 use tracing_subscriber::{self, EnvFilter};
 
 use libwebauthn::ops::webauthn::{
@@ -19,7 +19,7 @@ use libwebauthn::ops::webauthn::{
 use libwebauthn::pin::PinRequestReason;
 use libwebauthn::proto::ctap2::{Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialType};
 use libwebauthn::transport::hid::list_devices;
-use libwebauthn::transport::Device;
+use libwebauthn::transport::{Channel as _, Device};
 use libwebauthn::webauthn::{Error as WebAuthnError, WebAuthn};
 
 const TIMEOUT: Duration = Duration::from_secs(10);
@@ -32,7 +32,7 @@ fn setup_logging() {
 }
 
 async fn handle_updates(mut state_recv: Receiver<UvUpdate>) {
-    while let Some(update) = state_recv.recv().await {
+    while let Ok(update) = state_recv.recv().await {
         match update {
             UvUpdate::PresenceRequired => println!("Please touch your device!"),
             UvUpdate::UvRetry { attempts_left } => {
@@ -107,9 +107,10 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
 
     for mut device in devices {
         println!("Selected HID authenticator: {}", &device);
-        let (mut channel, state_recv) = device.channel().await?;
+        let mut channel = device.channel().await?;
         channel.wink(TIMEOUT).await?;
 
+        let state_recv = channel.get_ux_update_receiver();
         tokio::spawn(handle_updates(state_recv));
 
         let credential = Ctap2PublicKeyCredentialDescriptor {

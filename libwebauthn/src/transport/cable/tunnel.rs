@@ -203,7 +203,7 @@ impl std::fmt::Debug for CableTunnelConnectionType {
 pub(crate) async fn connect<'d>(
     tunnel_domain: &str,
     connection_type: &CableTunnelConnectionType,
-) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>, Error> {
+) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>, TransportError> {
     ensure_rustls_crypto_provider();
 
     let connect_url = match connection_type {
@@ -222,22 +222,22 @@ pub(crate) async fn connect<'d>(
     debug!(?connect_url, "Connecting to tunnel server");
     let mut request = connect_url
         .into_client_request()
-        .or(Err(Error::Transport(TransportError::InvalidEndpoint)))?;
+        .or(Err(TransportError::InvalidEndpoint))?;
     request.headers_mut().insert(
         "Sec-WebSocket-Protocol",
         "fido.cable"
             .parse()
-            .or(Err(Error::Transport(TransportError::InvalidEndpoint)))?,
+            .or(Err(TransportError::InvalidEndpoint))?,
     );
 
     if let CableTunnelConnectionType::KnownDevice { client_payload, .. } = connection_type {
-        let client_payload = cbor::to_vec(client_payload)
-            .or(Err(Error::Transport(TransportError::InvalidEndpoint)))?;
+        let client_payload =
+            cbor::to_vec(client_payload).or(Err(TransportError::InvalidEndpoint))?;
         request.headers_mut().insert(
             "X-caBLE-Client-Payload",
             hex::encode(&client_payload)
                 .parse()
-                .or(Err(Error::Transport(TransportError::InvalidEndpoint)))?,
+                .or(Err(TransportError::InvalidEndpoint))?,
         );
     }
     trace!(?request);
@@ -246,14 +246,14 @@ pub(crate) async fn connect<'d>(
         Ok((ws_stream, response)) => (ws_stream, response),
         Err(e) => {
             error!(?e, "Failed to connect to tunnel server");
-            return Err(Error::Transport(TransportError::ConnectionFailed));
+            return Err(TransportError::ConnectionFailed);
         }
     };
     debug!(?response, "Connected to tunnel server");
 
     if response.status() != StatusCode::SWITCHING_PROTOCOLS {
         error!(?response, "Failed to switch to websocket protocol");
-        return Err(Error::Transport(TransportError::ConnectionFailed));
+        return Err(TransportError::ConnectionFailed);
     }
     debug!("Tunnel server returned success");
 
@@ -270,7 +270,7 @@ pub(crate) async fn do_handshake(
     ws_stream: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
     psk: [u8; 32],
     connection_type: &CableTunnelConnectionType,
-) -> Result<TunnelNoiseState, Error> {
+) -> Result<TunnelNoiseState, TransportError> {
     let noise_handshake = match connection_type {
         CableTunnelConnectionType::QrCode { private_key, .. } => {
             let local_private_key = private_key.to_owned().to_bytes();
@@ -295,7 +295,7 @@ pub(crate) async fn do_handshake(
         Ok(handshake) => handshake,
         Err(e) => {
             error!(?e, "Failed to build Noise handshake");
-            return Err(Error::Transport(TransportError::ConnectionFailed));
+            return Err(TransportError::ConnectionFailed);
         }
     };
 
@@ -304,7 +304,7 @@ pub(crate) async fn do_handshake(
         Ok(msg_len) => msg_len,
         Err(e) => {
             error!(?e, "Failed to write initial handshake message");
-            return Err(Error::Transport(TransportError::ConnectionFailed));
+            return Err(TransportError::ConnectionFailed);
         }
     };
 
@@ -316,7 +316,7 @@ pub(crate) async fn do_handshake(
 
     if let Err(e) = ws_stream.send(Message::Binary(initial_msg.into())).await {
         error!(?e, "Failed to send initial handshake message");
-        return Err(Error::Transport(TransportError::ConnectionFailed));
+        return Err(TransportError::ConnectionFailed);
     }
     debug!("Sent initial handshake message");
 
@@ -330,15 +330,15 @@ pub(crate) async fn do_handshake(
 
         Some(Ok(msg)) => {
             error!(?msg, "Unexpected message type received");
-            return Err(Error::Transport(TransportError::ConnectionFailed));
+            return Err(TransportError::ConnectionFailed);
         }
         Some(Err(e)) => {
             error!(?e, "Failed to read handshake response");
-            return Err(Error::Transport(TransportError::ConnectionFailed));
+            return Err(TransportError::ConnectionFailed);
         }
         None => {
             error!("Connection was closed before handshake was complete");
-            return Err(Error::Transport(TransportError::ConnectionFailed));
+            return Err(TransportError::ConnectionFailed);
         }
     };
 
@@ -351,7 +351,7 @@ pub(crate) async fn do_handshake(
             { len = response.len() },
             "Peer handshake message is too short"
         );
-        return Err(Error::Transport(TransportError::ConnectionFailed));
+        return Err(TransportError::ConnectionFailed);
     }
 
     let mut payload = [0u8; 1024];
@@ -366,7 +366,7 @@ pub(crate) async fn do_handshake(
 
     if !noise_handshake.is_handshake_finished() {
         error!("Handshake did not complete");
-        return Err(Error::Transport(TransportError::ConnectionFailed));
+        return Err(TransportError::ConnectionFailed);
     }
 
     Ok(TunnelNoiseState {

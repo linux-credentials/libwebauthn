@@ -1,7 +1,7 @@
 use async_trait::async_trait;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{broadcast, mpsc, watch};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
-use tracing::{debug, error, instrument};
+use tracing::{debug, error, instrument, trace, warn};
 
 use super::advertisement::{await_advertisement, DecryptedAdvert};
 use super::channel::{CableUpdate, CableUxUpdate, ConnectionState};
@@ -12,7 +12,6 @@ use super::tunnel::{self, CableTunnelConnectionType, TunnelNoiseState};
 use crate::proto::ctap2::cbor::{CborRequest, CborResponse};
 use crate::transport::ble::btleplug::FidoDevice;
 use crate::transport::error::TransportError;
-use crate::webauthn::error::Error;
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -60,7 +59,7 @@ impl ConnectionInput {
     pub fn new_for_qr_code(
         qr_device: &CableQrCodeDevice,
         proximity_output: &ProximityCheckOutput,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, TransportError> {
         let tunnel_domain = decode_tunnel_domain_from_advert(&proximity_output.advert)?;
 
         let routing_id_str = hex::encode(&proximity_output.advert.routing_id);
@@ -168,16 +167,16 @@ pub(crate) struct TunnelConnectionInput {
     pub known_device_store: Option<Arc<dyn CableKnownDeviceInfoStore>>,
     pub ws_stream: WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
     pub noise_state: TunnelNoiseState,
-    pub cbor_tx_recv: tokio::sync::mpsc::Receiver<CborRequest>,
-    pub cbor_rx_send: tokio::sync::mpsc::Sender<CborResponse>,
+    pub cbor_tx_recv: mpsc::Receiver<CborRequest>,
+    pub cbor_rx_send: mpsc::Sender<CborResponse>,
 }
 
 impl TunnelConnectionInput {
     pub fn from_handshake_output(
         handshake_output: HandshakeOutput,
         known_device_store: Option<Arc<dyn CableKnownDeviceInfoStore>>,
-        cbor_tx_recv: tokio::sync::mpsc::Receiver<CborRequest>,
-        cbor_rx_send: tokio::sync::mpsc::Sender<CborResponse>,
+        cbor_tx_recv: mpsc::Receiver<CborRequest>,
+        cbor_rx_send: mpsc::Sender<CborResponse>,
     ) -> Self {
         Self {
             connection_type: handshake_output.connection_type,
@@ -194,18 +193,18 @@ impl TunnelConnectionInput {
 #[async_trait]
 pub(crate) trait UxUpdateSender: Send + Sync {
     async fn send_update(&self, update: CableUxUpdate);
-    async fn send_error(&self);
+    async fn send_error(&self, error: TransportError);
     async fn set_connection_state(&self, state: ConnectionState);
 }
 
 pub(crate) struct MpscUxUpdateSender {
-    sender: mpsc::Sender<CableUxUpdate>,
+    sender: broadcast::Sender<CableUxUpdate>,
     connection_state_tx: watch::Sender<ConnectionState>,
 }
 
 impl MpscUxUpdateSender {
     pub fn new(
-        sender: mpsc::Sender<CableUxUpdate>,
+        sender: broadcast::Sender<CableUxUpdate>,
         connection_state_tx: watch::Sender<ConnectionState>,
     ) -> Self {
         Self {
@@ -217,14 +216,16 @@ impl MpscUxUpdateSender {
 
 #[async_trait]
 impl UxUpdateSender for MpscUxUpdateSender {
+    #[instrument(skip(self))]
     async fn send_update(&self, update: CableUxUpdate) {
-        let _ = self.sender.send(update).await;
+        trace!("Sending UX update");
+        if let Err(err) = self.sender.send(update) {
+            warn!(?err, "No receivers found for UX update.");
+        }
     }
 
-    async fn send_error(&self) {
-        let _ = self
-            .sender
-            .send(CableUxUpdate::CableUpdate(CableUpdate::Failed))
+    async fn send_error(&self, error: TransportError) {
+        self.send_update(CableUxUpdate::CableUpdate(CableUpdate::Error(error)))
             .await;
         let _ = self.connection_state_tx.send(ConnectionState::Terminated);
     }
@@ -238,7 +239,7 @@ impl UxUpdateSender for MpscUxUpdateSender {
 pub(crate) async fn proximity_check_stage(
     input: ProximityCheckInput,
     ux_sender: &dyn UxUpdateSender,
-) -> Result<ProximityCheckOutput, Error> {
+) -> Result<ProximityCheckOutput, TransportError> {
     debug!("Starting proximity check stage");
 
     ux_sender
@@ -258,7 +259,7 @@ pub(crate) async fn proximity_check_stage(
 pub(crate) async fn connection_stage(
     input: ConnectionInput,
     ux_sender: &dyn UxUpdateSender,
-) -> Result<ConnectionOutput, Error> {
+) -> Result<ConnectionOutput, TransportError> {
     debug!(?input.tunnel_domain, "Starting connection stage");
 
     ux_sender
@@ -279,7 +280,7 @@ pub(crate) async fn connection_stage(
 pub(crate) async fn handshake_stage(
     input: HandshakeInput,
     ux_sender: &dyn UxUpdateSender,
-) -> Result<HandshakeOutput, Error> {
+) -> Result<HandshakeOutput, TransportError> {
     debug!("Starting handshake stage");
 
     ux_sender
@@ -313,10 +314,12 @@ fn derive_psk(secret: &[u8], advert_plaintext: &[u8]) -> [u8; 32] {
     psk
 }
 
-pub(crate) fn decode_tunnel_domain_from_advert(advert: &DecryptedAdvert) -> Result<String, Error> {
+pub(crate) fn decode_tunnel_domain_from_advert(
+    advert: &DecryptedAdvert,
+) -> Result<String, TransportError> {
     tunnel::decode_tunnel_server_domain(advert.encoded_tunnel_server_domain)
         .ok_or_else(|| {
             error!({ encoded = %advert.encoded_tunnel_server_domain }, "Failed to decode tunnel server domain");
-            Error::Transport(TransportError::InvalidFraming)
+            TransportError::InvalidFraming
         })
 }

@@ -2,12 +2,12 @@ use std::error::Error;
 use std::time::Duration;
 
 use libwebauthn::UvUpdate;
-use tokio::sync::mpsc::Receiver;
+use tokio::sync::broadcast::Receiver;
 use tracing_subscriber::{self, EnvFilter};
 
 use libwebauthn::ops::u2f::{RegisterRequest, SignRequest};
 use libwebauthn::transport::hid::list_devices;
-use libwebauthn::transport::Device;
+use libwebauthn::transport::{Channel as _, Device};
 use libwebauthn::u2f::U2F;
 
 const TIMEOUT: Duration = Duration::from_secs(10);
@@ -21,7 +21,7 @@ fn setup_logging() {
 }
 
 async fn handle_updates(mut state_recv: Receiver<UvUpdate>) {
-    while let Some(update) = state_recv.recv().await {
+    while let Ok(update) = state_recv.recv().await {
         match update {
             UvUpdate::PresenceRequired => println!("Please touch your device!"),
             _ => { /* U2F doesn't use other state updates */ }
@@ -38,7 +38,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
     println!("Found {} devices.", devices.len());
     for mut device in devices {
         println!("Winking device: {}", device);
-        let (mut channel, state_recv) = device.channel().await?;
+        let mut channel = device.channel().await?;
         channel.wink(TIMEOUT).await?;
 
         const APP_ID: &str = "https://foo.example.org";
@@ -49,7 +49,9 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         let register_request =
             RegisterRequest::new_u2f_v2(&APP_ID, &challenge, vec![], TIMEOUT, false);
 
+        let state_recv = channel.get_ux_update_receiver();
         tokio::spawn(handle_updates(state_recv));
+
         let response = channel.u2f_register(&register_request).await?;
         println!("Response: {:?}", response);
 
