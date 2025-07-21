@@ -29,6 +29,14 @@ use crate::transport::error::TransportError;
 use crate::webauthn::error::Error;
 use crate::UxUpdate;
 
+fn ensure_rustls_crypto_provider() {
+    use std::sync::Once;
+    static RUSTLS_INIT: Once = Once::new();
+    RUSTLS_INIT.call_once(|| {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
+}
+
 pub(crate) const KNOWN_TUNNEL_DOMAINS: &[&str] = &["cable.ua5v.com", "cable.auth.com"];
 const SHA_INPUT: &[u8] = b"caBLEv2 tunnel server domain";
 const BASE32_CHARS: &[u8] = b"abcdefghijklmnopqrstuvwxyz234567";
@@ -170,6 +178,8 @@ pub(crate) async fn connect<'d>(
     tunnel_domain: &str,
     connection_type: &CableTunnelConnectionType,
 ) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>, Error> {
+    ensure_rustls_crypto_provider();
+
     let connect_url = match connection_type {
         CableTunnelConnectionType::QrCode {
             routing_id,
@@ -584,7 +594,7 @@ async fn connection_recv_initial(
         }
     };
 
-    Ok(cbor::to_vec(&initial_message.info)?)
+    Ok(initial_message.info.to_vec())
 }
 
 async fn connection_recv_update(message: &[u8]) -> Result<Option<CableLinkingInfo>, Error> {

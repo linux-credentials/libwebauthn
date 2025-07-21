@@ -60,6 +60,7 @@ tungstenite = { version = "0.26.2" }
 tokio-tungstenite = { version = "0.26", features = [
     "rustls-tls-native-roots",
 ] }
+rustls = { version = "0.23.27", features = ["ring"] }
 tokio-stream = "0.1"
 snow = { version = "0.10.0-beta.1", features = ["use-p256"] }
 ctap-types = { version = "0.4.0" }
