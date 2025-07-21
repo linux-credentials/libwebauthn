@@ -43,7 +43,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
 
         tokio::spawn(async move {
             let dev = device.clone();
-            let (mut channel, _state_rx) = device.channel().await.unwrap();
+            let mut channel = device.channel().await.unwrap();
             let handle = channel.get_handle();
             stx.send((idx, dev, handle)).await.unwrap();
             drop(stx);

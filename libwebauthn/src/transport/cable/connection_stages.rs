@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
-use tracing::{debug, error, instrument};
+use tracing::{debug, error, instrument, trace, warn};
 
 use super::advertisement::{await_advertisement, DecryptedAdvert};
 use super::channel::{CableUpdate, CableUxUpdate, ConnectionState};
@@ -217,14 +217,17 @@ impl MpscUxUpdateSender {
 
 #[async_trait]
 impl UxUpdateSender for MpscUxUpdateSender {
+    #[instrument(skip(self))]
     async fn send_update(&self, update: CableUxUpdate) {
-        let _ = self.sender.send(update);
+        trace!("Sending UX update");
+        if let Err(err) = self.sender.send(update) {
+            warn!(?err, "No receivers found for UX update.");
+        }
     }
 
     async fn send_error(&self) {
-        let _ = self
-            .sender
-            .send(CableUxUpdate::CableUpdate(CableUpdate::Failed));
+        self.send_update(CableUxUpdate::CableUpdate(CableUpdate::Failed))
+            .await;
         let _ = self.connection_state_tx.send(ConnectionState::Terminated);
     }
 
