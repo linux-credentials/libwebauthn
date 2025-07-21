@@ -1,4 +1,5 @@
 use serde::Serialize;
+use serde_cbor_2 as serde_cbor;
 
 #[derive(thiserror::Error, Debug)]
 pub enum CborError {
