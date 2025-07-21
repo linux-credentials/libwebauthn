@@ -7,6 +7,7 @@ use p256::{ecdh, NonZeroScalar};
 use p256::{PublicKey, SecretKey};
 use serde::Deserialize;
 use serde_bytes::ByteBuf;
+use serde_cbor_2 as serde_cbor;
 use serde_indexed::DeserializeIndexed;
 use sha2::{Digest, Sha256};
 use snow::{Builder, TransportState};

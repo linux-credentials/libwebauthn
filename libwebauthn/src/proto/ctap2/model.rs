@@ -1,5 +1,6 @@
 use crate::pin::PinUvAuthProtocol;
 use crate::proto::ctap1::Ctap1Transport;
+
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use serde_bytes::ByteBuf;
 use serde_derive::{Deserialize, Serialize};
@@ -226,6 +227,7 @@ mod tests {
     use super::{Ctap2COSEAlgorithmIdentifier, Ctap2CredentialType, Ctap2PublicKeyCredentialType};
     use hex;
     use serde_bytes::ByteBuf;
+    use serde_cbor_2 as serde_cbor;
 
     #[test]
     /// Verify CBOR serialization conforms to CTAP canonical standard, including ordering (see #95)
