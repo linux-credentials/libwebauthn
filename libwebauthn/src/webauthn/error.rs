@@ -11,12 +11,6 @@ pub enum Error {
     Platform(#[from] PlatformError),
 }
 
-impl From<snow::Error> for Error {
-    fn from(_error: snow::Error) -> Self {
-        Error::Transport(TransportError::NegotiationFailed)
-    }
-}
-
 impl From<CborError> for Error {
     fn from(error: CborError) -> Self {
         Error::Platform(PlatformError::CborError(error))

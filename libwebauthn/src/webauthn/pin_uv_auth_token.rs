@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use tracing::{debug, error, info, instrument, warn};
@@ -317,7 +318,7 @@ where
     channel
         .send_ux_update(
             UvUpdate::PinRequired(PinRequiredUpdate {
-                reply_to: tx,
+                reply_to: Arc::new(tx),
                 reason,
                 attempts_left,
             })

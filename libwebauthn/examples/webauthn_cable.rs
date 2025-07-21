@@ -14,7 +14,7 @@ use qrcode::render::unicode;
 use qrcode::QrCode;
 use rand::{thread_rng, Rng};
 use text_io::read;
-use tokio::sync::mpsc::Receiver;
+use tokio::sync::broadcast::Receiver;
 use tokio::time::sleep;
 use tracing_subscriber::{self, EnvFilter};
 
@@ -25,7 +25,7 @@ use libwebauthn::proto::ctap2::{
     Ctap2CredentialType, Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialRpEntity,
     Ctap2PublicKeyCredentialUserEntity,
 };
-use libwebauthn::transport::Device;
+use libwebauthn::transport::{Channel as _, Device};
 use libwebauthn::webauthn::{Error as WebAuthnError, WebAuthn};
 
 const TIMEOUT: Duration = Duration::from_secs(120);
@@ -38,7 +38,7 @@ fn setup_logging() {
 }
 
 async fn handle_updates(mut state_recv: Receiver<CableUxUpdate>) {
-    while let Some(update) = state_recv.recv().await {
+    while let Ok(update) = state_recv.recv().await {
         match update {
             CableUxUpdate::UvUpdate(uv_update) => match uv_update {
                 UvUpdate::PresenceRequired => println!("Please touch your device!"),
@@ -80,7 +80,7 @@ async fn handle_updates(mut state_recv: Receiver<CableUxUpdate>) {
                 CableUpdate::Connecting => println!("Connecting to the device..."),
                 CableUpdate::Authenticating => println!("Authenticating with the device..."),
                 CableUpdate::Connected => println!("Tunnel established successfully!"),
-                CableUpdate::Failed => println!("Failed to establish tunnel."),
+                CableUpdate::Error(err) => println!("Error during connection: {}", err),
             },
         }
     }
@@ -111,9 +111,10 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         println!("{}", image);
 
         // Connect to a known device
-        let (mut channel, state_recv) = device.channel().await.unwrap();
+        let mut channel = device.channel().await.unwrap();
         println!("Tunnel established {:?}", channel);
 
+        let state_recv = channel.get_ux_update_receiver();
         tokio::spawn(handle_updates(state_recv));
 
         // Make Credentials ceremony
@@ -177,9 +178,10 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
     .unwrap();
 
     // Connect to a known device
-    let (mut channel, state_recv) = known_device.channel().await.unwrap();
+    let mut channel = known_device.channel().await.unwrap();
     println!("Tunnel established {:?}", channel);
 
+    let state_recv = channel.get_ux_update_receiver();
     tokio::spawn(handle_updates(state_recv));
 
     let response = loop {
