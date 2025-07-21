@@ -64,11 +64,11 @@ pub struct PinRequiredUpdate {
 impl PinRequiredUpdate {
     /// This consumes `self`, because we should only ever send exactly one answer back.
     pub fn send_pin(self, pin: &str) -> Result<(), String> {
-        match Arc::try_unwrap(self.reply_to) {
-            Ok(sender) => sender
+        match Arc::into_inner(self.reply_to) {
+            Some(sender) => sender
                 .send(pin.to_string())
                 .map_err(|_| "Failed to send PIN".to_string()),
-            Err(_) => Err("Multiple references to reply_to exist; cannot send PIN".to_string()),
+            None => Err("Multiple references to reply_to exist; cannot send PIN".to_string()),
         }
     }
 
