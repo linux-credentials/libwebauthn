@@ -3,5 +3,5 @@
 resolver = "2"
 members = [
     "libwebauthn",
-    "solo",
+    "solo-virtual-key",
 ]

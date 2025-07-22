@@ -1384,7 +1384,7 @@ dependencies = [
 
 [[package]]
 name = "libwebauthn"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "aes",
  "async-trait",
@@ -1420,7 +1420,7 @@ dependencies = [
  "serde_repr",
  "sha2",
  "snow",
- "solo",
+ "solo-virtual-key",
  "text_io",
  "thiserror 2.0.12",
  "time",
@@ -2416,8 +2416,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "solo"
-version = "0.1.0"
+name = "solo-virtual-key"
+version = "0.2.0"
 dependencies = [
  "env_logger",
  "log",
