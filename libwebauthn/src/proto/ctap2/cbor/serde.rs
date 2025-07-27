@@ -34,6 +34,16 @@ where
     serde_cbor::de::from_reader(reader).map_err(CborError::from)
 }
 
+/// Decodes a value from CBOR data in a reader without checking that there is no trailing data
+pub(crate) fn from_cursor<T, R>(reader: R) -> Result<T, CborError>
+where
+    T: for<'de> serde::Deserialize<'de>,
+    R: std::io::Read,
+{
+    let mut deserializer = serde_cbor::Deserializer::from_reader(reader);
+    return T::deserialize(&mut deserializer).map_err(CborError::from);
+}
+
 pub(crate) fn from_slice<T>(slice: &[u8]) -> Result<T, CborError>
 where
     T: for<'de> serde::Deserialize<'de>,
