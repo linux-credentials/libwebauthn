@@ -5,6 +5,7 @@ use serde::{
     Deserialize, Deserializer, Serialize,
 };
 use serde_bytes::ByteBuf;
+use serde_cbor_2::{de::IoRead, Deserializer as Cbor_Deserializer};
 use std::{
     fmt,
     io::{Cursor, Read},
@@ -217,8 +218,9 @@ impl<'de, T: DeserializeOwned> Deserialize<'de> for AuthenticatorData<T> {
                     let mut credential_id = vec![0u8; credential_id_len];
                     cursor.read_exact(&mut credential_id).unwrap(); // We checked the length
 
+                    let mut deserializer = Cbor_Deserializer::new(IoRead::new(&mut cursor));
                     let credential_public_key: PublicKey =
-                        cbor::from_reader(&mut cursor).map_err(DesError::custom)?;
+                        Deserialize::deserialize(&mut deserializer).map_err(DesError::custom)?;
 
                     attested_credential = Some(AttestedCredentialData {
                         aaguid,
