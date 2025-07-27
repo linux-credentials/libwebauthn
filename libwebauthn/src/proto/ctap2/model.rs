@@ -1,3 +1,4 @@
+use crate::ops::webauthn::idl::Base64UrlString;
 use crate::pin::PinUvAuthProtocol;
 use crate::proto::ctap1::Ctap1Transport;
 
@@ -148,7 +149,7 @@ impl From<&Ctap1Transport> for Ctap2Transport {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Ctap2PublicKeyCredentialDescriptor {
-    pub id: ByteBuf,
+    pub id: Base64UrlString,
     pub r#type: Ctap2PublicKeyCredentialType,
 
     #[serde(skip_serializing_if = "Option::is_none")]

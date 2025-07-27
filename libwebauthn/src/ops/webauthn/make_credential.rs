@@ -7,6 +7,11 @@ use tracing::{debug, instrument, trace};
 
 use crate::{
     fido::AuthenticatorData,
+    ops::webauthn::{
+        create::{AuthenticatorSelectionCriteria, PublicKeyCredentialCreationOptionsJSON},
+        idl::{FromInnerModel, JsonError, WebAuthnIDL},
+        rpid::RelyingPartyId,
+    },
     proto::{
         ctap1::{Ctap1RegisteredKey, Ctap1Version},
         ctap2::{
@@ -149,10 +154,13 @@ impl MakeCredentialsResponseUnsignedExtensions {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Deserialize)]
 pub enum ResidentKeyRequirement {
+    #[serde(rename = "required")]
     Required,
+    #[serde(rename = "preferred")]
     Preferred,
+    #[serde(rename = "discouraged", other)]
     Discouraged,
 }
 
@@ -173,6 +181,68 @@ pub struct MakeCredentialRequest {
     /// extensions
     pub extensions: Option<MakeCredentialsRequestExtensions>,
     pub timeout: Duration,
+}
+
+impl FromInnerModel<PublicKeyCredentialCreationOptionsJSON, MakeCredentialRequestParsingError>
+    for MakeCredentialRequest
+{
+    fn from_inner_model(
+        rpid: &RelyingPartyId,
+        inner: PublicKeyCredentialCreationOptionsJSON,
+    ) -> Result<Self, MakeCredentialRequestParsingError> {
+        let resident_key = if inner
+            .authenticator_selection
+            .as_ref()
+            .and_then(|s| Some(s.require_resident_key))
+            == Some(true)
+        {
+            Some(ResidentKeyRequirement::Required)
+        } else {
+            inner.authenticator_selection.and_then(|s| s.resident_key)
+        };
+
+        let user_verification = inner
+            .authenticator_selection
+            .map_or(UserVerificationRequirement::Discouraged, |s| {
+                s.user_verification
+            });
+
+        let exclude = match inner.exclude_credentials[..] {
+            [] => None,
+            _ => Some(inner.exclude_credentials),
+        };
+
+        let extensions = serde_json::from_value(serde_json::Value::Object(inner.extensions))
+            .map_err(MakeCredentialRequestParsingError::ExtensionError)?;
+
+        Ok(Self {
+            hash: inner.challenge.into(),
+            origin: rpid.as_str().to_owned(),
+            relying_party: inner.rp,
+            user: inner.user,
+            resident_key,
+            user_verification,
+            algorithms: inner.params,
+            exclude,
+            extensions,
+            timeout: Duration::from_secs(inner.timeout),
+        })
+    }
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum MakeCredentialRequestParsingError {
+    /// The client must throw an "EncodingError" DOMException.
+    #[error("Invalid JSON format: {0}")]
+    EncodingError(#[from] JsonError),
+
+    #[error("Invalid extension: {0}")]
+    ExtensionError(JsonError),
+}
+
+impl WebAuthnIDL<MakeCredentialRequestParsingError> for MakeCredentialRequest {
+    type Error = MakeCredentialRequestParsingError;
+    type InnerModel = PublicKeyCredentialCreationOptionsJSON;
 }
 
 #[derive(Debug, Default, Clone)]
