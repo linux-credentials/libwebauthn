@@ -1,3 +1,4 @@
+use crate::ops::webauthn::idl::Base64UrlString;
 use crate::pin::PinUvAuthProtocol;
 use crate::proto::ctap1::Ctap1Transport;
 
@@ -145,7 +146,7 @@ impl From<&Ctap1Transport> for Ctap2Transport {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Ctap2PublicKeyCredentialDescriptor {
-    pub id: ByteBuf,
+    pub id: Base64UrlString,
     pub r#type: Ctap2PublicKeyCredentialType,
 
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -221,12 +222,12 @@ pub enum Ctap2UserVerificationOperation {
 
 #[cfg(test)]
 mod tests {
+    use crate::ops::webauthn::idl::Base64UrlString;
     use crate::proto::ctap2::cbor;
     use crate::proto::ctap2::Ctap2PublicKeyCredentialDescriptor;
 
     use super::{Ctap2COSEAlgorithmIdentifier, Ctap2CredentialType, Ctap2PublicKeyCredentialType};
     use hex;
-    use serde_bytes::ByteBuf;
     use serde_cbor_2 as serde_cbor;
 
     #[test]
@@ -246,7 +247,7 @@ mod tests {
     /// Verify CBOR serialization conforms to CTAP canonical standard, including ordering (see #95)
     pub fn credential_descriptor_serialization() {
         let credential_descriptor = Ctap2PublicKeyCredentialDescriptor {
-            id: ByteBuf::from(vec![0x42]),
+            id: Base64UrlString::from(vec![0x42]),
             r#type: Ctap2PublicKeyCredentialType::PublicKey,
             transports: None,
         };
