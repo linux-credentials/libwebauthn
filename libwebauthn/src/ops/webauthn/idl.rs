@@ -1,3 +1,5 @@
+use std::ops::Deref;
+
 use base64_url;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json;
@@ -33,8 +35,28 @@ where
 }
 
 // TODO(afresta): Move to ctap2 module.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Base64UrlString(pub Vec<u8>);
+
+impl From<Vec<u8>> for Base64UrlString {
+    fn from(bytes: Vec<u8>) -> Self {
+        Base64UrlString(bytes)
+    }
+}
+
+impl From<&[u8]> for Base64UrlString {
+    fn from(bytes: &[u8]) -> Self {
+        Base64UrlString(bytes.to_vec())
+    }
+}
+
+impl Deref for Base64UrlString {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        &self.0
+    }
+}
 
 impl<'de> Deserialize<'de> for Base64UrlString {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>

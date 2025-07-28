@@ -13,8 +13,8 @@ use tracing_subscriber::{self, EnvFilter};
 
 use libwebauthn::ops::webauthn::{
     GetAssertionHmacOrPrfInput, GetAssertionRequest, GetAssertionRequestExtensions,
-    MakeCredentialHmacOrPrfInput, MakeCredentialRequest, MakeCredentialsRequestExtensions,
-    PRFValue, ResidentKeyRequirement, UserVerificationRequirement,
+    MakeCredentialPrfInput, MakeCredentialRequest, MakeCredentialsRequestExtensions, PRFValue,
+    ResidentKeyRequirement, UserVerificationRequirement,
 };
 use libwebauthn::pin::PinRequestReason;
 use libwebauthn::proto::ctap2::{
@@ -85,7 +85,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
     let challenge: [u8; 32] = thread_rng().gen();
 
     let extensions = MakeCredentialsRequestExtensions {
-        hmac_or_prf: MakeCredentialHmacOrPrfInput::Prf,
+        prf: Some(MakeCredentialPrfInput { _eval: None }),
         ..Default::default()
     };
 

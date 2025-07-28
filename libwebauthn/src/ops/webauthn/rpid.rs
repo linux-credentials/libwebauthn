@@ -1,12 +1,14 @@
 use serde::Deserialize;
-use std::convert::TryFrom;
+use std::{convert::TryFrom, ops::Deref};
 
 #[derive(Clone, Debug)]
 pub struct RelyingPartyId(pub String);
 
-impl Into<&str> for &RelyingPartyId {
-    fn into(self) -> &str {
-        self.0.as_str()
+impl Deref for RelyingPartyId {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.0
     }
 }
 
