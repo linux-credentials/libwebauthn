@@ -218,7 +218,7 @@ impl<'de, T: DeserializeOwned> Deserialize<'de> for AuthenticatorData<T> {
                     cursor.read_exact(&mut credential_id).unwrap(); // We checked the length
 
                     let credential_public_key: PublicKey =
-                        cbor::from_reader(&mut cursor).map_err(DesError::custom)?;
+                        cbor::from_cursor(&mut cursor).map_err(DesError::custom)?;
 
                     attested_credential = Some(AttestedCredentialData {
                         aaguid,
