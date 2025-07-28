@@ -1,5 +1,3 @@
-use super::idl::WebAuthnIDL;
-
 use std::{collections::HashMap, time::Duration};
 
 use serde::{Deserialize, Serialize};
@@ -8,11 +6,6 @@ use tracing::{debug, error, trace};
 
 use crate::{
     fido::AuthenticatorData,
-    ops::webauthn::{
-        create::PublicKeyCredentialCreationOptionsJSON,
-        idl::{FromInnerModel, JsonError},
-        rpid::RelyingPartyId,
-    },
     pin::PinUvAuthProtocol,
     proto::ctap2::{
         Ctap2AttestationStatement, Ctap2GetAssertionResponseExtensions,
