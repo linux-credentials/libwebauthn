@@ -13,11 +13,12 @@ pub use get_assertion::{
     GetAssertionResponseExtensions, GetAssertionResponseUnsignedExtensions, HMACGetSecretInput,
     HMACGetSecretOutput, PRFValue,
 };
+pub use idl::Base64UrlString;
 pub use make_credential::{
     CredentialPropsExtension, CredentialProtectionExtension, CredentialProtectionPolicy,
-    MakeCredentialHmacOrPrfInput, MakeCredentialLargeBlobExtension,
-    MakeCredentialLargeBlobExtensionOutput, MakeCredentialPrfOutput, MakeCredentialRequest,
-    MakeCredentialResponse, MakeCredentialsRequestExtensions, MakeCredentialsResponseExtensions,
+    MakeCredentialLargeBlobExtension, MakeCredentialLargeBlobExtensionOutput,
+    MakeCredentialPrfInput, MakeCredentialPrfOutput, MakeCredentialRequest, MakeCredentialResponse,
+    MakeCredentialsRequestExtensions, MakeCredentialsResponseExtensions,
     MakeCredentialsResponseUnsignedExtensions, ResidentKeyRequirement,
 };
 use serde::Deserialize;

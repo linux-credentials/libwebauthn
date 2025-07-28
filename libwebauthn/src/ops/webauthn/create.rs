@@ -1,6 +1,8 @@
 use super::idl::Base64UrlString;
 use crate::{
-    ops::webauthn::{ResidentKeyRequirement, UserVerificationRequirement},
+    ops::webauthn::{
+        MakeCredentialsRequestExtensions, ResidentKeyRequirement, UserVerificationRequirement,
+    },
     proto::ctap2::{
         Ctap2CredentialType, Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialRpEntity,
         Ctap2PublicKeyCredentialUserEntity,
@@ -63,5 +65,5 @@ pub struct PublicKeyCredentialCreationOptionsJSON {
     pub attestation: String,
     #[serde(rename = "attestationFormats")]
     pub attestation_formats: Vec<String>,
-    pub extensions: JsonObject,
+    pub extensions: MakeCredentialsRequestExtensions,
 }

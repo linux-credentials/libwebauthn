@@ -11,8 +11,7 @@ use tracing_subscriber::{self, EnvFilter};
 
 use libwebauthn::ops::webauthn::{
     CredentialProtectionExtension, CredentialProtectionPolicy, GetAssertionHmacOrPrfInput,
-    GetAssertionRequest, GetAssertionRequestExtensions, HMACGetSecretInput,
-    MakeCredentialHmacOrPrfInput, MakeCredentialLargeBlobExtension, MakeCredentialRequest,
+    GetAssertionRequest, GetAssertionRequestExtensions, HMACGetSecretInput, MakeCredentialRequest,
     MakeCredentialsRequestExtensions, ResidentKeyRequirement, UserVerificationRequirement,
 };
 use libwebauthn::pin::PinRequestReason;
@@ -88,10 +87,11 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             policy: CredentialProtectionPolicy::UserVerificationRequired,
             enforce_policy: true,
         }),
-        cred_blob: Some(r"My own little blob".into()),
-        large_blob: MakeCredentialLargeBlobExtension::None,
+        cred_blob: Some("My own little blob".as_bytes().into()),
+        large_blob: None,
         min_pin_length: Some(true),
-        hmac_or_prf: MakeCredentialHmacOrPrfInput::HmacGetSecret,
+        hmac_create_secret: Some(true),
+        prf: None,
         cred_props: Some(true),
     };
 

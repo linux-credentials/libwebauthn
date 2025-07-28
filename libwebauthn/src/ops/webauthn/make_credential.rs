@@ -2,14 +2,15 @@ use std::time::Duration;
 
 use ctap_types::ctap2::credential_management::CredentialProtectionPolicy as Ctap2CredentialProtectionPolicy;
 use serde::{Deserialize, Serialize};
+use serde_json::{self, Value as JsonValue};
 use sha2::{Digest, Sha256};
 use tracing::{debug, instrument, trace};
 
 use crate::{
     fido::AuthenticatorData,
     ops::webauthn::{
-        create::{AuthenticatorSelectionCriteria, PublicKeyCredentialCreationOptionsJSON},
-        idl::{FromInnerModel, JsonError, WebAuthnIDL},
+        create::PublicKeyCredentialCreationOptionsJSON,
+        idl::{Base64UrlString, FromInnerModel, JsonError, WebAuthnIDL},
         rpid::RelyingPartyId,
     },
     proto::{
@@ -68,17 +69,17 @@ impl MakeCredentialsResponseUnsignedExtensions {
         let mut prf = None;
         if let Some(signed_extensions) = signed_extensions {
             (hmac_create_secret, prf) = if let Some(incoming_ext) = &request.extensions {
-                match &incoming_ext.hmac_or_prf {
-                    MakeCredentialHmacOrPrfInput::None => (None, None),
-                    MakeCredentialHmacOrPrfInput::HmacGetSecret => {
-                        (signed_extensions.hmac_secret, None)
-                    }
-                    MakeCredentialHmacOrPrfInput::Prf => (
+                if let Some(hmac_create_secret) = incoming_ext.hmac_create_secret {
+                    (signed_extensions.hmac_secret, None)
+                } else if let Some(prf) = &incoming_ext.prf {
+                    (
                         None,
                         Some(MakeCredentialPrfOutput {
                             enabled: signed_extensions.hmac_secret,
                         }),
-                    ),
+                    )
+                } else {
+                    (None, None)
                 }
             } else {
                 (None, None)
@@ -131,7 +132,12 @@ impl MakeCredentialsResponseUnsignedExtensions {
 
         // largeBlob extension
         // https://www.w3.org/TR/webauthn-3/#sctn-large-blob-extension
-        let large_blob = match &request.extensions.as_ref().map(|x| &x.large_blob) {
+        let large_blob = match &request
+            .extensions
+            .as_ref()
+            .and_then(|x| x.large_blob.as_ref())
+            .map(|x| x.support)
+        {
             None | Some(MakeCredentialLargeBlobExtension::None) => None, // Not requested, so we don't give an answer
             Some(MakeCredentialLargeBlobExtension::Preferred)
             | Some(MakeCredentialLargeBlobExtension::Required) => {
@@ -198,11 +204,15 @@ impl FromInnerModel<PublicKeyCredentialCreationOptionsJSON, MakeCredentialReques
         {
             Some(ResidentKeyRequirement::Required)
         } else {
-            inner.authenticator_selection.and_then(|s| s.resident_key)
+            inner
+                .authenticator_selection
+                .as_ref()
+                .and_then(|s| s.resident_key)
         };
 
         let user_verification = inner
             .authenticator_selection
+            .as_ref()
             .map_or(UserVerificationRequirement::Discouraged, |s| {
                 s.user_verification
             });
@@ -212,20 +222,17 @@ impl FromInnerModel<PublicKeyCredentialCreationOptionsJSON, MakeCredentialReques
             _ => Some(inner.exclude_credentials),
         };
 
-        let extensions = serde_json::from_value(serde_json::Value::Object(inner.extensions))
-            .map_err(MakeCredentialRequestParsingError::ExtensionError)?;
-
         Ok(Self {
             hash: inner.challenge.into(),
-            origin: rpid.as_str().to_owned(),
+            origin: rpid.to_owned().into(),
             relying_party: inner.rp,
             user: inner.user,
             resident_key,
             user_verification,
             algorithms: inner.params,
             exclude,
-            extensions,
-            timeout: Duration::from_secs(inner.timeout),
+            extensions: Some(inner.extensions),
+            timeout: Duration::from_secs(inner.timeout.into()),
         })
     }
 }
@@ -245,22 +252,10 @@ impl WebAuthnIDL<MakeCredentialRequestParsingError> for MakeCredentialRequest {
     type InnerModel = PublicKeyCredentialCreationOptionsJSON;
 }
 
-#[derive(Debug, Default, Clone)]
-pub enum MakeCredentialHmacOrPrfInput {
-    #[default]
-    None,
-    HmacGetSecret,
-    Prf,
-    // The spec tells us that in theory, we could hand in
-    // an `eval` here, IF the CTAP2 would get an additional
-    // extension to handle that. There is no such CTAP-extension
-    // right now, so we don't expose it for now, as it would just
-    // be ignored anyways.
-    // https://w3c.github.io/webauthn/#prf
-    // "If eval is present and a future extension to [FIDO-CTAP] permits evaluation of the PRF at creation time, configure hmac-secret inputs accordingly: .."
-    // Prf {
-    //     eval: Option<PRFValue>,
-    // },
+#[derive(Debug, Clone, Deserialize)]
+pub struct MakeCredentialPrfInput {
+    #[serde(rename = "eval")]
+    pub _eval: Option<JsonValue>,
 }
 
 #[derive(Debug, Default, Clone, Serialize, PartialEq)]
@@ -269,9 +264,11 @@ pub struct MakeCredentialPrfOutput {
     pub enabled: Option<bool>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct CredentialProtectionExtension {
+    #[serde(rename = "credentialProtectionPolicy")]
     pub policy: CredentialProtectionPolicy,
+    #[serde(rename = "enforceCredentialProtectionPolicy")]
     pub enforce_policy: bool,
 }
 
@@ -324,13 +321,20 @@ pub struct CredentialPropsExtension {
     pub rk: Option<bool>,
 }
 
-#[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Default, Clone, Deserialize)]
+pub struct MakeCredentialLargeBlobExtensionInput {
+    pub support: MakeCredentialLargeBlobExtension,
+}
+
+#[derive(Debug, Default, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 pub enum MakeCredentialLargeBlobExtension {
-    #[default]
-    None,
+    #[serde(rename = "preferred")]
     Preferred,
+    #[serde(rename = "required")]
     Required,
+    #[default]
+    #[serde(other)]
+    None,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize)]
@@ -339,14 +343,22 @@ pub struct MakeCredentialLargeBlobExtensionOutput {
     pub supported: Option<bool>,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Deserialize)]
 pub struct MakeCredentialsRequestExtensions {
+    #[serde(rename = "credProps")]
     pub cred_props: Option<bool>,
+    #[serde(rename = "credProtect")]
     pub cred_protect: Option<CredentialProtectionExtension>,
-    pub cred_blob: Option<Vec<u8>>,
-    pub large_blob: MakeCredentialLargeBlobExtension,
+    #[serde(rename = "credBlob")]
+    pub cred_blob: Option<Base64UrlString>,
+    #[serde(rename = "largeBlob")]
+    pub large_blob: Option<MakeCredentialLargeBlobExtensionInput>,
+    #[serde(rename = "minPinLength")]
     pub min_pin_length: Option<bool>,
-    pub hmac_or_prf: MakeCredentialHmacOrPrfInput,
+    #[serde(rename = "hmacCreateSecret")]
+    pub hmac_create_secret: Option<bool>,
+    #[serde(rename = "prf")]
+    pub prf: Option<MakeCredentialPrfInput>,
 }
 
 pub type MakeCredentialsResponseExtensions = Ctap2MakeCredentialsResponseExtensions;
