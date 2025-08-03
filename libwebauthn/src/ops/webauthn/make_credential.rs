@@ -231,7 +231,7 @@ impl FromInnerModel<PublicKeyCredentialCreationOptionsJSON, MakeCredentialReques
             user_verification,
             algorithms: inner.params,
             exclude,
-            extensions: Some(inner.extensions),
+            extensions: inner.extensions,
             timeout: Duration::from_secs(inner.timeout.into()),
         })
     }
@@ -242,9 +242,6 @@ pub enum MakeCredentialRequestParsingError {
     /// The client must throw an "EncodingError" DOMException.
     #[error("Invalid JSON format: {0}")]
     EncodingError(#[from] JsonError),
-
-    #[error("Invalid extension: {0}")]
-    ExtensionError(JsonError),
 }
 
 impl WebAuthnIDL<MakeCredentialRequestParsingError> for MakeCredentialRequest {
