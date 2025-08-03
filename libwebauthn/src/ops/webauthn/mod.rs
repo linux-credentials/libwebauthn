@@ -13,7 +13,7 @@ pub use get_assertion::{
     GetAssertionResponseExtensions, GetAssertionResponseUnsignedExtensions, HMACGetSecretInput,
     HMACGetSecretOutput, PRFValue,
 };
-pub use idl::Base64UrlString;
+pub use idl::{Base64UrlString, WebAuthnIDL};
 pub use make_credential::{
     CredentialPropsExtension, CredentialProtectionExtension, CredentialProtectionPolicy,
     MakeCredentialLargeBlobExtension, MakeCredentialLargeBlobExtensionOutput,
@@ -21,6 +21,7 @@ pub use make_credential::{
     MakeCredentialsRequestExtensions, MakeCredentialsResponseExtensions,
     MakeCredentialsResponseUnsignedExtensions, ResidentKeyRequirement,
 };
+pub use rpid::RelyingPartyId;
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Copy, Deserialize)]

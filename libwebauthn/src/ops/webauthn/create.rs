@@ -17,19 +17,6 @@ use serde_json::{Map as JsonMap, Value as JsonValue};
  */
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct PublicKeyCredentialDescriptorJSON {
-    pub r#type: String,
-    pub id: Base64UrlString,
-    pub transports: Vec<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct PublicKeyCredentialParameters {
-    pub r#type: String,
-    pub alg: i32,
-}
-
-#[derive(Debug, Clone, Deserialize)]
 pub struct AuthenticatorSelectionCriteria {
     #[serde(rename = "authenticatorAttachment")]
     pub authenticator_attachment: Option<String>,
@@ -61,9 +48,9 @@ pub struct PublicKeyCredentialCreationOptionsJSON {
     pub exclude_credentials: Vec<Ctap2PublicKeyCredentialDescriptor>,
     #[serde(rename = "authenticatorSelection")]
     pub authenticator_selection: Option<AuthenticatorSelectionCriteria>,
-    pub hints: Vec<String>,
-    pub attestation: String,
+    pub hints: Option<Vec<String>>,
+    pub attestation: Option<String>,
     #[serde(rename = "attestationFormats")]
-    pub attestation_formats: Vec<String>,
-    pub extensions: MakeCredentialsRequestExtensions,
+    pub attestation_formats: Option<Vec<String>>,
+    pub extensions: Option<MakeCredentialsRequestExtensions>,
 }
