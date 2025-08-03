@@ -58,6 +58,12 @@ impl Deref for Base64UrlString {
     }
 }
 
+impl AsRef<[u8]> for Base64UrlString {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
 impl<'de> Deserialize<'de> for Base64UrlString {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
