@@ -229,10 +229,15 @@ impl<'de, T: DeserializeOwned> Deserialize<'de> for AuthenticatorData<T> {
 
                 let extensions: Option<T> =
                     if flags.contains(AuthenticatorDataFlags::EXTENSION_DATA) {
-                        cbor::from_reader(&mut cursor).map_err(DesError::custom)?
+                        cbor::from_cursor(&mut cursor).map_err(DesError::custom)?
                     } else {
                         Default::default()
                     };
+
+                // Check if we have trailing data
+                if !&data[cursor.position() as usize..].is_empty() {
+                    return Err(DesError::invalid_length(data.len(), &"trailing data"));
+                }
 
                 Ok(AuthenticatorData {
                     rp_id_hash,
@@ -251,6 +256,9 @@ impl<'de, T: DeserializeOwned> Deserialize<'de> for AuthenticatorData<T> {
 #[cfg(test)]
 mod tests {
     use cosey::{Bytes, Ed25519PublicKey};
+    use serde_bytes::ByteBuf;
+
+    use crate::proto::ctap2::cbor;
 
     use super::{AttestedCredentialData, AuthenticatorData, AuthenticatorDataFlags};
 
@@ -262,7 +270,7 @@ mod tests {
             0xe2, 0x75, 0x1e, 0x68, 0x2f, 0xab, 0x9f, 0x2d, 0x30, 0xab, 0x13, 0xd2, 0x12, 0x55,
             0x86, 0xce, 0x19, 0x47,
         ];
-        let flag_bits = 0b0100_0101;
+        let flag_bits = 0b1100_0101;
         let flags = AuthenticatorDataFlags::from_bits(flag_bits).unwrap();
         let signature_count = 0;
         let aaguid = [
@@ -293,12 +301,15 @@ mod tests {
             credential_id: credential_id.clone(),
             credential_public_key,
         });
-        let auth_data: AuthenticatorData<()> = AuthenticatorData {
+        type T = String; 
+        let extensions: Option<T> = Some("test cbor serializable thing".to_string());
+
+        let auth_data: AuthenticatorData<T> = AuthenticatorData {
             rp_id_hash,
             flags,
             signature_count,
             attested_credential,
-            extensions: None,
+            extensions: extensions.clone(),
         };
         let webauthn_auth_data = auth_data.to_response_bytes().unwrap();
         assert_eq!(rp_id_hash, &webauthn_auth_data[..32]);
@@ -312,6 +323,13 @@ mod tests {
             &credential_id,
             &webauthn_auth_data[55..55 + &credential_id.len()]
         );
-        assert_eq!(cose_bytes, &webauthn_auth_data[55 + credential_id.len()..]);
+        let extensions_bytes = cbor::to_vec(&extensions).unwrap();
+        assert_eq!(cose_bytes, &webauthn_auth_data[55 + credential_id.len()..webauthn_auth_data.len() - extensions_bytes.len()]);
+
+        let authdata_wrapped = cbor::to_vec(&ByteBuf::from(webauthn_auth_data)).unwrap();
+        let auth_data_reparsed: AuthenticatorData<String> =
+            cbor::from_slice(authdata_wrapped.as_slice()).unwrap();
+        assert_eq!(extensions, auth_data_reparsed.extensions);
+
     }
 }
