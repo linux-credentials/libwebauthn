@@ -10,7 +10,6 @@ use crate::{
 };
 
 use serde::Deserialize;
-use serde_json::{Map as JsonMap, Value as JsonValue};
 
 /**
  * https://www.w3.org/TR/webauthn-3/#sctn-parseCreationOptionsFromJSON
@@ -33,8 +32,6 @@ pub struct AuthenticatorSelectionCriteria {
 fn default_user_verification() -> UserVerificationRequirement {
     UserVerificationRequirement::Preferred
 }
-
-type JsonObject = JsonMap<String, JsonValue>;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct PublicKeyCredentialCreationOptionsJSON {
