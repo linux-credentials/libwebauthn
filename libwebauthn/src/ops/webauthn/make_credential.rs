@@ -69,9 +69,9 @@ impl MakeCredentialsResponseUnsignedExtensions {
         let mut prf = None;
         if let Some(signed_extensions) = signed_extensions {
             (hmac_create_secret, prf) = if let Some(incoming_ext) = &request.extensions {
-                if let Some(hmac_create_secret) = incoming_ext.hmac_create_secret {
+                if let Some(_hmac_create_secret) = incoming_ext.hmac_create_secret {
                     (signed_extensions.hmac_secret, None)
-                } else if let Some(prf) = &incoming_ext.prf {
+                } else if let Some(_prf) = &incoming_ext.prf {
                     (
                         None,
                         Some(MakeCredentialPrfOutput {

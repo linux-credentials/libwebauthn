@@ -3,7 +3,6 @@ use std::error::Error;
 use std::io::{self, Write};
 use std::time::Duration;
 
-use ctap_types::ctap2::make_credential;
 use libwebauthn::UvUpdate;
 use rand::{thread_rng, Rng};
 use text_io::read;
@@ -11,14 +10,11 @@ use tokio::sync::broadcast::Receiver;
 use tracing_subscriber::{self, EnvFilter};
 
 use libwebauthn::ops::webauthn::{
-    GetAssertionRequest, MakeCredentialRequest, RelyingPartyId, ResidentKeyRequirement,
-    UserVerificationRequirement, WebAuthnIDL as _,
+    GetAssertionRequest, MakeCredentialRequest, RelyingPartyId, UserVerificationRequirement,
+    WebAuthnIDL as _,
 };
 use libwebauthn::pin::PinRequestReason;
-use libwebauthn::proto::ctap2::{
-    Ctap2CredentialType, Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialRpEntity,
-    Ctap2PublicKeyCredentialUserEntity,
-};
+use libwebauthn::proto::ctap2::Ctap2PublicKeyCredentialDescriptor;
 use libwebauthn::transport::hid::list_devices;
 use libwebauthn::transport::{Channel as _, Device};
 use libwebauthn::webauthn::{Error as WebAuthnError, WebAuthn};
@@ -78,9 +74,6 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
 
     let devices = list_devices().await.unwrap();
     println!("Devices found: {:?}", devices);
-
-    let user_id: [u8; 32] = thread_rng().gen();
-    let challenge: [u8; 32] = thread_rng().gen();
 
     for mut device in devices {
         println!("Selected HID authenticator: {}", &device);
@@ -143,6 +136,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         .unwrap();
         println!("WebAuthn MakeCredential response: {:?}", response);
 
+        let challenge: [u8; 32] = thread_rng().gen();
         let credential: Ctap2PublicKeyCredentialDescriptor =
             (&response.authenticator_data).try_into().unwrap();
         let get_assertion = GetAssertionRequest {
