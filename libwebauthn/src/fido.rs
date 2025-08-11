@@ -201,38 +201,45 @@ impl<'de, T: DeserializeOwned> Deserialize<'de> for AuthenticatorData<T> {
                 let flags = AuthenticatorDataFlags::from_bits_truncate(flags_raw);
                 let signature_count = cursor.read_u32::<BigEndian>().unwrap(); // We checked the length
 
-                let mut attested_credential = None;
-                if flags.contains(AuthenticatorDataFlags::ATTESTED_CREDENTIALS) {
-                    // -> 32 + 1 + 4 + 16 + 2 + X = 55
-                    if data.len() < 55 {
-                        return Err(DesError::invalid_length(data.len(), &"55"));
-                    }
+                let attested_credential =
+                    if flags.contains(AuthenticatorDataFlags::ATTESTED_CREDENTIALS) {
+                        // -> 32 + 1 + 4 + 16 + 2 + X = 55
+                        if data.len() < 55 {
+                            return Err(DesError::invalid_length(data.len(), &"55"));
+                        }
 
-                    let mut aaguid = [0u8; 16];
-                    cursor.read_exact(&mut aaguid).unwrap(); // We checked the length
-                    let credential_id_len = cursor.read_u16::<BigEndian>().unwrap() as usize; // We checked the length
-                    if data.len() < 55 + credential_id_len {
-                        return Err(DesError::invalid_length(data.len(), &"55+L"));
-                    }
-                    let mut credential_id = vec![0u8; credential_id_len];
-                    cursor.read_exact(&mut credential_id).unwrap(); // We checked the length
+                        let mut aaguid = [0u8; 16];
+                        cursor.read_exact(&mut aaguid).unwrap(); // We checked the length
+                        let credential_id_len = cursor.read_u16::<BigEndian>().unwrap() as usize; // We checked the length
+                        if data.len() < 55 + credential_id_len {
+                            return Err(DesError::invalid_length(data.len(), &"55+L"));
+                        }
+                        let mut credential_id = vec![0u8; credential_id_len];
+                        cursor.read_exact(&mut credential_id).unwrap(); // We checked the length
 
-                    let credential_public_key: PublicKey =
-                        cbor::from_cursor(&mut cursor).map_err(DesError::custom)?;
+                        let credential_public_key: PublicKey =
+                            cbor::from_cursor(&mut cursor).map_err(DesError::custom)?;
 
-                    attested_credential = Some(AttestedCredentialData {
-                        aaguid,
-                        credential_id,
-                        credential_public_key,
-                    });
-                }
-
-                let extensions: Option<T> =
-                    if flags.contains(AuthenticatorDataFlags::EXTENSION_DATA) {
-                        cbor::from_reader(&mut cursor).map_err(DesError::custom)?
+                        Some(AttestedCredentialData {
+                            aaguid,
+                            credential_id,
+                            credential_public_key,
+                        })
                     } else {
                         Default::default()
                     };
+
+                let extensions: Option<T> =
+                    if flags.contains(AuthenticatorDataFlags::EXTENSION_DATA) {
+                        cbor::from_cursor(&mut cursor).map_err(DesError::custom)?
+                    } else {
+                        Default::default()
+                    };
+
+                // Check if we have trailing data
+                if !&data[cursor.position() as usize..].is_empty() {
+                    return Err(DesError::invalid_length(data.len(), &"trailing data"));
+                }
 
                 Ok(AuthenticatorData {
                     rp_id_hash,
@@ -251,6 +258,9 @@ impl<'de, T: DeserializeOwned> Deserialize<'de> for AuthenticatorData<T> {
 #[cfg(test)]
 mod tests {
     use cosey::{Bytes, Ed25519PublicKey};
+    use serde_bytes::ByteBuf;
+
+    use crate::proto::ctap2::cbor;
 
     use super::{AttestedCredentialData, AuthenticatorData, AuthenticatorDataFlags};
 
@@ -262,8 +272,13 @@ mod tests {
             0xe2, 0x75, 0x1e, 0x68, 0x2f, 0xab, 0x9f, 0x2d, 0x30, 0xab, 0x13, 0xd2, 0x12, 0x55,
             0x86, 0xce, 0x19, 0x47,
         ];
-        let flag_bits = 0b0100_0101;
-        let flags = AuthenticatorDataFlags::from_bits(flag_bits).unwrap();
+        let flag_bits = 0b1100_0101;
+        let flags = 
+            AuthenticatorDataFlags::USER_PRESENT |
+            AuthenticatorDataFlags::USER_VERIFIED |
+            AuthenticatorDataFlags::ATTESTED_CREDENTIALS |
+            AuthenticatorDataFlags::EXTENSION_DATA;
+        assert_eq!(flag_bits, flags.bits());
         let signature_count = 0;
         let aaguid = [
             0x24, 0x38, 0x65, 0x2a, 0xbe, 0x9f, 0xbd, 0x84, 0x81, 0x0a, 0x84, 0x0d, 0x6f, 0xc4,
@@ -288,17 +303,20 @@ mod tests {
          */
         let mut cose_bytes = vec![0xa4, 0x01, 0x01, 0x03, 0x27, 0x20, 0x06, 0x21, 0x58, 0x20];
         cose_bytes.extend(pub_key_bytes);
-        let attested_credential = Some(AttestedCredentialData {
+        let attested_credential = AttestedCredentialData {
             aaguid,
             credential_id: credential_id.clone(),
             credential_public_key,
-        });
-        let auth_data: AuthenticatorData<()> = AuthenticatorData {
+        };
+        type T = String;
+        let extensions: T = "test cbor serializable thing".to_string();
+
+        let auth_data: AuthenticatorData<T> = AuthenticatorData {
             rp_id_hash,
             flags,
             signature_count,
-            attested_credential,
-            extensions: None,
+            attested_credential: Some(attested_credential.clone()),
+            extensions: Some(extensions.clone())
         };
         let webauthn_auth_data = auth_data.to_response_bytes().unwrap();
         assert_eq!(rp_id_hash, &webauthn_auth_data[..32]);
@@ -312,6 +330,45 @@ mod tests {
             &credential_id,
             &webauthn_auth_data[55..55 + &credential_id.len()]
         );
-        assert_eq!(cose_bytes, &webauthn_auth_data[55 + credential_id.len()..]);
+        let extensions_bytes = cbor::to_vec(&extensions).unwrap();
+        assert_eq!(
+            cose_bytes,
+            &webauthn_auth_data
+                [55 + credential_id.len()..webauthn_auth_data.len() - extensions_bytes.len()]
+        );
+
+        // Round-trip test: deserialize the serialized bytes and verify all fields match
+        let authdata_wrapped = cbor::to_vec(&ByteBuf::from(webauthn_auth_data)).unwrap();
+        let auth_data_reparsed: AuthenticatorData<T> =
+            cbor::from_slice(authdata_wrapped.as_slice()).unwrap();
+        assert_eq!(
+            auth_data.rp_id_hash,
+            auth_data_reparsed.rp_id_hash
+        );
+        assert_eq!(
+            auth_data.flags.bits(),
+            auth_data_reparsed.flags.bits()
+        );
+        assert_eq!(
+            auth_data.signature_count,
+            auth_data_reparsed.signature_count
+        );
+        let attested_credential_reparsed = auth_data_reparsed.attested_credential.unwrap();
+        assert_eq!(
+            attested_credential.aaguid,
+            attested_credential_reparsed.aaguid
+        );
+        assert_eq!(
+            attested_credential.credential_id,
+            attested_credential_reparsed.credential_id
+        );
+        assert_eq!(
+            attested_credential.credential_public_key,
+            attested_credential_reparsed.credential_public_key
+        );
+        assert_eq!(
+            extensions,
+            auth_data_reparsed.extensions.unwrap()
+        );
     }
 }
