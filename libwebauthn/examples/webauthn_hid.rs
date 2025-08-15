@@ -10,7 +10,8 @@ use tokio::sync::broadcast::Receiver;
 use tracing_subscriber::{self, EnvFilter};
 
 use libwebauthn::ops::webauthn::{
-    GetAssertionRequest, MakeCredentialRequest, ResidentKeyRequirement, UserVerificationRequirement,
+    GetAssertionRequest, GetAssertionRequestExtensions, MakeCredentialRequest,
+    ResidentKeyRequirement, UserVerificationRequirement,
 };
 use libwebauthn::pin::PinRequestReason;
 use libwebauthn::proto::ctap2::{
@@ -128,7 +129,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             hash: Vec::from(challenge),
             allow: vec![credential],
             user_verification: UserVerificationRequirement::Discouraged,
-            extensions: None,
+            extensions: GetAssertionRequestExtensions::default(),
             timeout: TIMEOUT,
         };
 
