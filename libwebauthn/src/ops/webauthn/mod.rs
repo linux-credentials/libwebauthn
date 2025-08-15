@@ -11,7 +11,7 @@ pub use get_assertion::{
     GetAssertionLargeBlobExtension, GetAssertionLargeBlobExtensionOutput, GetAssertionPrfOutput,
     GetAssertionRequest, GetAssertionRequestExtensions, GetAssertionResponse,
     GetAssertionResponseExtensions, GetAssertionResponseUnsignedExtensions, HMACGetSecretInput,
-    HMACGetSecretOutput, PRFValue,
+    HMACGetSecretOutput, PRFValue, PrfInput,
 };
 pub use idl::{Base64UrlString, WebAuthnIDL};
 pub use make_credential::{
