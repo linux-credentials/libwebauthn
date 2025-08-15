@@ -10,14 +10,11 @@ use tokio::sync::broadcast::Receiver;
 use tracing_subscriber::{self, EnvFilter};
 
 use libwebauthn::ops::webauthn::{
-    GetAssertionRequest, GetAssertionRequestExtensions, MakeCredentialRequest,
-    ResidentKeyRequirement, UserVerificationRequirement,
+    GetAssertionRequest, GetAssertionRequestExtensions, MakeCredentialRequest, RelyingPartyId,
+    UserVerificationRequirement, WebAuthnIDL as _,
 };
 use libwebauthn::pin::PinRequestReason;
-use libwebauthn::proto::ctap2::{
-    Ctap2CredentialType, Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialRpEntity,
-    Ctap2PublicKeyCredentialUserEntity,
-};
+use libwebauthn::proto::ctap2::Ctap2PublicKeyCredentialDescriptor;
 use libwebauthn::transport::hid::list_devices;
 use libwebauthn::transport::{Channel as _, Device};
 use libwebauthn::webauthn::{Error as WebAuthnError, WebAuthn};
@@ -78,27 +75,44 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
     let devices = list_devices().await.unwrap();
     println!("Devices found: {:?}", devices);
 
-    let user_id: [u8; 32] = thread_rng().gen();
-    let challenge: [u8; 32] = thread_rng().gen();
-
     for mut device in devices {
         println!("Selected HID authenticator: {}", &device);
         let mut channel = device.channel().await?;
         channel.wink(TIMEOUT).await?;
 
-        // Make Credentials ceremony
-        let make_credentials_request = MakeCredentialRequest {
-            origin: "example.org".to_owned(),
-            hash: Vec::from(challenge),
-            relying_party: Ctap2PublicKeyCredentialRpEntity::new("example.org", "example.org"),
-            user: Ctap2PublicKeyCredentialUserEntity::new(&user_id, "mario.rossi", "Mario Rossi"),
-            resident_key: Some(ResidentKeyRequirement::Discouraged),
-            user_verification: UserVerificationRequirement::Preferred,
-            algorithms: vec![Ctap2CredentialType::default()],
-            exclude: None,
-            extensions: None,
-            timeout: TIMEOUT,
-        };
+        // Relying
+        let rpid = RelyingPartyId("example.org".to_owned());
+        let request_json = r#"
+                {
+                    "rp": {
+                        "id": "example.org",
+                        "name": "Example Relying Party"
+                    },
+                    "user": {
+                        "id": "MTIzNDU2NzgxMjM0NTY3ODEyMzQ1Njc4MTIzNDU2Nzg",
+                        "name": "Mario Rossi",
+                        "displayName": "Mario Rossi"
+                    },
+                    "challenge": "MTIzNDU2NzgxMjM0NTY3ODEyMzQ1Njc4MTIzNDU2Nzg",
+                    "pubKeyCredParams": [
+                        {"type": "public-key", "alg": -7}
+                    ],
+                    "timeout": 60000,
+                    "excludeCredentials": [],
+                    "authenticatorSelection": {
+                        "residentKey": "discouraged",
+                        "userVerification": "preferred"
+                    },
+                    "attestation": "none"
+                }
+                "#;
+        let make_credentials_request: MakeCredentialRequest =
+            MakeCredentialRequest::from_json(&rpid, request_json)
+                .expect("Failed to parse request JSON");
+        println!(
+            "WebAuthn MakeCredential request: {:?}",
+            make_credentials_request
+        );
 
         let state_recv = channel.get_ux_update_receiver();
         tokio::spawn(handle_updates(state_recv));
@@ -122,6 +136,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         .unwrap();
         println!("WebAuthn MakeCredential response: {:?}", response);
 
+        let challenge: [u8; 32] = thread_rng().gen();
         let credential: Ctap2PublicKeyCredentialDescriptor =
             (&response.authenticator_data).try_into().unwrap();
         let get_assertion = GetAssertionRequest {
