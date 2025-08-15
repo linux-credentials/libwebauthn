@@ -40,7 +40,7 @@ pub struct PublicKeyCredentialCreationOptionsJSON {
     pub challenge: Base64UrlString,
     #[serde(rename = "pubKeyCredParams")]
     pub params: Vec<Ctap2CredentialType>,
-    pub timeout: u32,
+    pub timeout: Option<u32>,
     #[serde(rename = "excludeCredentials")]
     pub exclude_credentials: Vec<Ctap2PublicKeyCredentialDescriptor>,
     #[serde(rename = "authenticatorSelection")]

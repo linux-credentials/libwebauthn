@@ -13,7 +13,7 @@ use tracing_subscriber::{self, EnvFilter};
 
 use libwebauthn::ops::webauthn::{
     Base64UrlString, GetAssertionHmacOrPrfInput, GetAssertionRequest,
-    GetAssertionRequestExtensions, PRFValue, UserVerificationRequirement,
+    GetAssertionRequestExtensions, PRFValue, PrfInput, UserVerificationRequirement,
 };
 use libwebauthn::pin::PinRequestReason;
 use libwebauthn::proto::ctap2::{Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialType};
@@ -125,10 +125,11 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         });
 
         let eval_by_credential = HashMap::new();
-        let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf {
+        let hmac_or_prf: GetAssertionHmacOrPrfInput = GetAssertionHmacOrPrfInput::Prf(PrfInput {
             eval,
             eval_by_credential,
-        };
+        });
+
         run_success_test(
             &mut channel,
             &credential,
@@ -153,10 +154,10 @@ async fn run_success_test(
         hash: Vec::from(challenge),
         allow: vec![credential.clone()],
         user_verification: UserVerificationRequirement::Preferred,
-        extensions: Some(GetAssertionRequestExtensions {
-            hmac_or_prf,
+        extensions: GetAssertionRequestExtensions {
+            hmac_or_prf: Some(hmac_or_prf),
             ..Default::default()
-        }),
+        },
         timeout: TIMEOUT,
     };
 

@@ -26,6 +26,8 @@ use crate::{
 
 use super::{DowngradableRequest, RegisterRequest, UserVerificationRequirement};
 
+pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
+
 #[derive(Debug, Clone)]
 pub struct MakeCredentialResponse {
     pub format: String,
@@ -217,10 +219,10 @@ impl FromInnerModel<PublicKeyCredentialCreationOptionsJSON, MakeCredentialReques
                 s.user_verification
             });
 
-        let exclude = match inner.exclude_credentials[..] {
-            [] => None,
-            _ => Some(inner.exclude_credentials),
-        };
+        let timeout: Duration = inner
+            .timeout
+            .map(|s| Duration::from_secs(s.into()))
+            .unwrap_or(DEFAULT_TIMEOUT);
 
         Ok(Self {
             hash: inner.challenge.into(),
@@ -230,9 +232,13 @@ impl FromInnerModel<PublicKeyCredentialCreationOptionsJSON, MakeCredentialReques
             resident_key,
             user_verification,
             algorithms: inner.params,
-            exclude,
+            exclude: if inner.exclude_credentials.is_empty() {
+                None
+            } else {
+                Some(inner.exclude_credentials)
+            },
             extensions: inner.extensions,
-            timeout: Duration::from_secs(inner.timeout.into()),
+            timeout: timeout,
         })
     }
 }
