@@ -16,7 +16,7 @@ path = "src/lib.rs"
 default = []
 hid-device-tests = ["virtual-hid-device"]
 # virtual-hid-device = ["trussed", "trussed-staging"]
-virtual-hid-device = ["ctaphid-dispatch", "ctaphid", "littlefs2", "trussed", "trussed-staging", "fido-authenticator", "interchange"]
+virtual-hid-device = ["ctaphid-dispatch", "ctaphid", "littlefs2", "trussed", "trussed-staging", "fido-authenticator", "interchange", "tempfile"]
 # virtual-hid-device = ["ctaphid-dispatch", "ctaphid", "littlefs2", "trussed", "fido-authenticator", "dep:trussed-staging"]
 
 [dependencies]
@@ -75,6 +75,7 @@ littlefs2 = { version = "0.6.0", optional = true }
 trussed = { version = "0.1", features = ["virt"], optional = true }
 trussed-staging = { version = "0.3.0", features = ["chunked", "hkdf", "virt", "fs-info"], optional = true }
 interchange = { version = "0.3.0", optional = true }
+tempfile = { version = "3.21", optional = true }
 
 [dev-dependencies]
 tracing-subscriber = { version = "0.3.3", features = ["env-filter"] }

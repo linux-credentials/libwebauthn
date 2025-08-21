@@ -73,11 +73,9 @@ pub async fn list_devices() -> Result<Vec<HidDevice>, Error> {
 impl HidDevice {
     #[cfg(feature = "virtual-hid-device")]
     pub fn new_virtual() -> Self {
-        // let solo = SoloVirtualKey::default();
-        // Self {
-        //     backend: HidBackendDevice::VirtualDevice(solo),
-        // }
-        todo!()
+        Self {
+            backend: HidBackendDevice::VirtualDevice,
+        }
     }
 }
 

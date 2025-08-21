@@ -3,9 +3,10 @@ use std::{
     borrow::Cow,
     cell::RefCell,
     fmt::{self, Debug, Formatter},
+    path::Path,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Once,
+        Arc,
     },
     thread,
     time::{Duration, SystemTime},
@@ -22,32 +23,28 @@ use rand::{
     distributions::{Distribution, Uniform},
     RngCore as _,
 };
-use tracing::{debug, info, warn};
+use tracing::info;
 use trussed::{
     backend::BackendId,
     platform::Platform as _,
     store::Store as _,
-    virt::{self, StoreConfig},
+    virt::{self, StorageConfig, StoreConfig},
 };
 use trussed_staging::virt::{BackendIds, Client, Dispatcher};
-
-// use fido_authenticator::webauthn::Request;
 
 // see: https://github.com/Nitrokey/nitrokey-3-firmware/tree/main/utils/test-certificates/fido
 const ATTESTATION_CERT: &[u8] = include_bytes!("../../../../data/fido-cert.der");
 const ATTESTATION_KEY: &[u8] = include_bytes!("../../../../data/fido-key.trussed");
 
-static INIT_LOGGER: Once = Once::new();
-
-pub fn run_ctaphid<F, T>(f: F) -> T
+pub fn run_ctaphid<F, T>(storage_dir: &Path, f: F) -> T
 where
     F: FnOnce(ctaphid::Device<Device>) -> T + Send,
     T: Send,
 {
-    run_ctaphid_with_options(Default::default(), f)
+    run_ctaphid_with_options(storage_dir, Default::default(), f)
 }
 
-pub fn run_ctaphid_with_options<F, T>(options: Options, f: F) -> T
+pub fn run_ctaphid_with_options<F, T>(storage_dir: &Path, options: Options, f: F) -> T
 where
     F: FnOnce(ctaphid::Device<Device>) -> T + Send,
     T: Send,
@@ -56,6 +53,7 @@ where
     files.push((path!("fido/x5c/00").into(), ATTESTATION_CERT.into()));
     files.push((path!("fido/sec/00").into(), ATTESTATION_KEY.into()));
     with_client(
+        storage_dir,
         &files,
         |client| {
             let mut authenticator = Authenticator::new(
@@ -104,21 +102,21 @@ where
     )
 }
 
-pub fn run_ctap2<F, T>(f: F) -> T
-where
-    F: FnOnce(Ctap2) -> T + Send,
-    T: Send,
-{
-    run_ctaphid(|device| f(Ctap2(device)))
-}
+// pub fn run_ctap2<F, T>(f: F) -> T
+// where
+//     F: FnOnce(Ctap2) -> T + Send,
+//     T: Send,
+// {
+//     run_ctaphid(|device| f(Ctap2(device)))
+// }
 
-pub fn run_ctap2_with_options<F, T>(options: Options, f: F) -> T
-where
-    F: FnOnce(Ctap2) -> T + Send,
-    T: Send,
-{
-    run_ctaphid_with_options(options, |device| f(Ctap2(device)))
-}
+// pub fn run_ctap2_with_options<F, T>(options: Options, f: F) -> T
+// where
+//     F: FnOnce(Ctap2) -> T + Send,
+//     T: Send,
+// {
+//     run_ctaphid_with_options(options, |device| f(Ctap2(device)))
+// }
 
 pub type InspectFsFn = Box<dyn Fn(&dyn DynFilesystem)>;
 
@@ -129,20 +127,22 @@ pub struct Options {
     pub inspect_ifs: Option<InspectFsFn>,
 }
 
-pub struct Ctap2<'a>(ctaphid::Device<Device<'a>>);
+// pub struct Ctap2<'a>(ctaphid::Device<Device<'a>>);
 
-impl Ctap2<'_> {
-    pub fn exec(&self, serialized: &[u8]) -> Result<Vec<u8>, Ctap2Error> {
-        let reply = self.0.ctap2(&serialized).map_err(|err| match err {
-            ctaphid::error::Error::CommandError(ctaphid::error::CommandError::CborError(value)) => {
-                warn!("Received CTAP2 error {value:#x}");
-                Ctap2Error(value)
-            }
-            err => panic!("failed to execute CTAP2 command: {err:?}"),
-        })?;
-        Ok(reply)
-    }
-}
+// impl Ctap2<'_> {
+//     pub fn exec(&self, serialized: &[u8]) -> Result<Vec<u8>, crate::proto::CtapError> {
+//         match self.0.ctap2(serialized) {
+//             Ok(response) => Ok(response),
+//             Err(ctaphid::error::Error::CommandError(ctaphid::error::CommandError::CborError(
+//                 value,
+//             ))) => match crate::proto::CtapError::try_from_primitive(value) {
+//                 Ok(e) => Err(e),
+//                 Err(_) => panic!("Failed to parse CtapError from {value}"),
+//             },
+//             Err(err) => panic!("failed to execute CTAP2 command: {err:?}"),
+//         }
+//     }
+// }
 
 #[derive(PartialEq)]
 pub struct Ctap2Error(pub u8);
@@ -220,12 +220,26 @@ impl HidDevice for Device<'_> {
     }
 }
 
-fn with_client<F, F2, T>(files: &[(PathBuf, Vec<u8>)], f: F, inspect_ifs: F2) -> T
+fn with_client<F, F2, T>(
+    storage_dir: &Path,
+    files: &[(PathBuf, Vec<u8>)],
+    f: F,
+    inspect_ifs: F2,
+) -> T
 where
     F: FnOnce(Client) -> T,
     F2: FnOnce(&dyn DynFilesystem),
 {
-    virt::with_platform(StoreConfig::ram(), |mut platform| {
+    let store = StoreConfig {
+        internal: StorageConfig::filesystem(storage_dir.join("internal")),
+        external: StorageConfig::filesystem(storage_dir.join("external")),
+        volatile: StorageConfig::filesystem(storage_dir.join("volatile")),
+    };
+    // Since we want to run this repeatedly, RAM-storage sadly doesn't work,
+    // as it is wiped with each `with_platform()`-call. So we have to switch
+    // to using filesystem-storage
+    // virt::with_platform(StoreConfig::ram(), |mut platform| {
+    virt::with_platform(store, |mut platform| {
         // virt always uses the same seed -- request some random bytes to reach a somewhat random
         // state
         let uniform = Uniform::from(0..64);
