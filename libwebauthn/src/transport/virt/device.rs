@@ -10,7 +10,7 @@ use super::pipe::Pipe;
 use std::{
     borrow::Cow,
     cell::RefCell,
-    fmt::{self, Debug, Formatter},
+    fmt::Debug,
     path::Path,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -117,17 +117,6 @@ pub struct Options {
     pub files: Vec<(PathBuf, Vec<u8>)>,
     pub max_resident_credential_count: Option<u32>,
     pub inspect_ifs: Option<InspectFsFn>,
-}
-
-#[derive(PartialEq)]
-pub struct Ctap2Error(pub u8);
-
-impl Debug for Ctap2Error {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("Ctap2Error")
-            .field(&format_args!("{:#x}", self.0))
-            .finish()
-    }
 }
 
 #[derive(Debug)]
