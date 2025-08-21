@@ -51,13 +51,17 @@ impl VirtHidDevice {
                     Ok(payload)
                 }
                 HidCommand::Wink => device.wink().map(|_| Vec::new()),
-                HidCommand::Cbor => device.ctap2(&msg.payload).map(|payload| {
-                    // For CBOR, we have to put the status code in front.
-                    // If we get here, it was successful, so we add:
-                    let mut status_with_payload = vec![0]; // Status code: Ok
-                    status_with_payload.extend_from_slice(&payload);
-                    status_with_payload
-                }),
+                HidCommand::Cbor => {
+                    device
+                        .ctap2(msg.payload[0], &msg.payload[1..])
+                        .map(|payload| {
+                            // For CBOR, we have to put the status code in front.
+                            // If we get here, it was successful, so we add:
+                            let mut status_with_payload = vec![0]; // Status code: Ok
+                            status_with_payload.extend_from_slice(&payload);
+                            status_with_payload
+                        })
+                }
                 HidCommand::Cancel
                 | HidCommand::Lock
                 | HidCommand::Sync
