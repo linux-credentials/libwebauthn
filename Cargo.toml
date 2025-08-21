@@ -3,5 +3,9 @@
 resolver = "2"
 members = [
     "libwebauthn",
-    "solo-virtual-key",
+    # "solo-virtual-key",
 ]
+
+[patch.crates-io]
+trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "024e0eca5fb7dbd2457831f7c7bffe4341e08775" }
+trussed-staging = { git = "https://github.com/trussed-dev/trussed-staging.git", rev = "7922d67e9637a87e5625aaff9e5111f0d4ec0346" }

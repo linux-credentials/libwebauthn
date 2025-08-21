@@ -90,7 +90,7 @@ impl<'d> HidChannel<'d> {
                     OpenHidDevice::HidApiDevice(Arc::new(Mutex::new((hidapi_device, handle_rx))))
                 }
                 #[cfg(feature = "virtual-hid-device")]
-                HidBackendDevice::VirtualDevice => OpenHidDevice::VirtualDevice,
+                HidBackendDevice::VirtualDevice(_) => OpenHidDevice::VirtualDevice,
             },
             init: InitResponse::default(),
             auth_token_data: None,
@@ -212,7 +212,7 @@ impl<'d> HidChannel<'d> {
                 .open_device(&hidapi)
                 .or(Err(Error::Transport(TransportError::ConnectionFailed)))?),
             #[cfg(feature = "virtual-hid-device")]
-            HidBackendDevice::VirtualDevice => unreachable!(),
+            HidBackendDevice::VirtualDevice(_) => unreachable!(),
         }
     }
 
@@ -465,7 +465,7 @@ impl Drop for HidChannel<'_> {
     #[instrument(level = Level::DEBUG, skip_all, fields(dev = %self.device))]
     fn drop(&mut self) {
         #[cfg(feature = "virtual-hid-device")]
-        if let HidBackendDevice::VirtualDevice = self.device.backend {
+        if let HidBackendDevice::VirtualDevice(_) = self.device.backend {
             return;
         }
 
