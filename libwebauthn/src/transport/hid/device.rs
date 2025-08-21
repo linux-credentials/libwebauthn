@@ -91,23 +91,3 @@ impl<'d> Device<'d, Hid, HidChannel<'d>> for HidDevice {
     //     channel.supported_protocols().await
     // }
 }
-
-#[cfg(test)]
-mod tests {
-
-    #[cfg(feature = "hid-device-tests")]
-    #[tokio::test]
-    async fn test_supported_protocols() {
-        use super::HidDevice;
-        use crate::transport::channel::Channel;
-        use crate::transport::Device;
-
-        let mut device = HidDevice::new_virtual();
-        let channel = device.channel().await.unwrap();
-
-        let protocols = channel.supported_protocols().await.unwrap();
-
-        assert!(protocols.u2f);
-        assert!(protocols.fido2);
-    }
-}

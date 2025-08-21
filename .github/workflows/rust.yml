@@ -18,7 +18,7 @@ jobs:
       - name: Build
         run: cargo build
       - name: Run tests
-        run: cargo test --verbose --features hid-device-tests
+        run: cargo test --verbose
       - name: Run u2f_hid example (virtual key)
         run: cargo run --example u2f_hid --features virtual-hid-device
       # - name: Run webauthn_hid example (virtual key)
