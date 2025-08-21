@@ -1,3 +1,11 @@
+// Extracted (and slightly modified) from the fido-authenticator crate:
+//   https://github.com/Nitrokey/fido-authenticator/blob/main/tests/virt/mod.rs
+//
+// License: Apache-2.0 or MIT
+//
+// Authors:
+// - Robin Krahl <robin@nitrokey.com>
+
 use super::pipe::Pipe;
 use std::{
     borrow::Cow,
@@ -102,22 +110,6 @@ where
     )
 }
 
-// pub fn run_ctap2<F, T>(f: F) -> T
-// where
-//     F: FnOnce(Ctap2) -> T + Send,
-//     T: Send,
-// {
-//     run_ctaphid(|device| f(Ctap2(device)))
-// }
-
-// pub fn run_ctap2_with_options<F, T>(options: Options, f: F) -> T
-// where
-//     F: FnOnce(Ctap2) -> T + Send,
-//     T: Send,
-// {
-//     run_ctaphid_with_options(options, |device| f(Ctap2(device)))
-// }
-
 pub type InspectFsFn = Box<dyn Fn(&dyn DynFilesystem)>;
 
 #[derive(Default)]
@@ -126,23 +118,6 @@ pub struct Options {
     pub max_resident_credential_count: Option<u32>,
     pub inspect_ifs: Option<InspectFsFn>,
 }
-
-// pub struct Ctap2<'a>(ctaphid::Device<Device<'a>>);
-
-// impl Ctap2<'_> {
-//     pub fn exec(&self, serialized: &[u8]) -> Result<Vec<u8>, crate::proto::CtapError> {
-//         match self.0.ctap2(serialized) {
-//             Ok(response) => Ok(response),
-//             Err(ctaphid::error::Error::CommandError(ctaphid::error::CommandError::CborError(
-//                 value,
-//             ))) => match crate::proto::CtapError::try_from_primitive(value) {
-//                 Ok(e) => Err(e),
-//                 Err(_) => panic!("Failed to parse CtapError from {value}"),
-//             },
-//             Err(err) => panic!("failed to execute CTAP2 command: {err:?}"),
-//         }
-//     }
-// }
 
 #[derive(PartialEq)]
 pub struct Ctap2Error(pub u8);

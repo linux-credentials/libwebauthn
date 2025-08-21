@@ -54,7 +54,6 @@ aes = "0.8.2"
 hmac = "0.12.1"
 cbc = { version = "0.1", features = ["alloc"] }
 hkdf = "0.12"
-# solo-virtual-key = { version = "0.2", path = "../solo-virtual-key", optional = true }
 text_io = "0.1"
 tungstenite = { version = "0.26.2" }
 tokio-tungstenite = { version = "0.26", features = [
