@@ -7,6 +7,10 @@ jobs:
       RUST_LOG: debug
     name: Build and run tests
     runs-on: ubuntu-latest
+    # Set the default working directory for all 'run' steps in this job
+    defaults:
+      run:
+        working-directory: libwebauthn/
     steps:
       - uses: actions/checkout@v2
       - name: Checkout submodules
@@ -21,5 +25,5 @@ jobs:
         run: cargo test --verbose
       - name: Run u2f_hid example (virtual key)
         run: cargo run --example u2f_hid --features virtual-hid-device
-      # - name: Run webauthn_hid example (virtual key)
-      #   run: cargo run --example webauthn_hid --features virtual-hid-device
+      - name: Run webauthn_hid example (virtual key)
+        run: cargo run --example webauthn_hid --features virtual-hid-device

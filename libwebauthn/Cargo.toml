@@ -7,6 +7,7 @@ edition = "2021"
 license-file = "../COPYING"
 homepage = "https://github.com/linux-credentials"
 repository = "https://github.com/linux-credentials/libwebauthn"
+resolver = "2"
 
 [lib]
 name = "libwebauthn"
@@ -75,6 +76,10 @@ trussed = { version = "0.1", features = ["virt"], optional = true }
 trussed-staging = { version = "0.3.0", features = ["chunked", "hkdf", "virt", "fs-info"], optional = true }
 interchange = { version = "0.3.0", optional = true }
 tempfile = { version = "3.21", optional = true }
+
+[patch.crates-io]
+trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "024e0eca5fb7dbd2457831f7c7bffe4341e08775" }
+trussed-staging = { git = "https://github.com/trussed-dev/trussed-staging.git", rev = "7922d67e9637a87e5625aaff9e5111f0d4ec0346" }
 
 [dev-dependencies]
 tracing-subscriber = { version = "0.3.3", features = ["env-filter"] }
