@@ -5,12 +5,13 @@ use std::time::Duration;
 
 use libwebauthn::UvUpdate;
 use rand::{thread_rng, Rng};
+use serde_bytes::ByteBuf;
 use text_io::read;
 use tokio::sync::broadcast::Receiver;
 use tracing_subscriber::{self, EnvFilter};
 
 use libwebauthn::ops::webauthn::{
-    Base64UrlString, GetAssertionRequest, GetAssertionRequestExtensions, GetAssertionResponse,
+    GetAssertionRequest, GetAssertionRequestExtensions, GetAssertionResponse,
     MakeCredentialRequest, ResidentKeyRequirement, UserVerificationRequirement,
 };
 use libwebauthn::pin::PinRequestReason;
@@ -224,7 +225,7 @@ async fn get_assertion_call(
 fn create_credential(id: &[u8]) -> Ctap2PublicKeyCredentialDescriptor {
     Ctap2PublicKeyCredentialDescriptor {
         r#type: Ctap2PublicKeyCredentialType::PublicKey,
-        id: Base64UrlString::from(id),
+        id: ByteBuf::from(id),
         transports: None,
     }
 }

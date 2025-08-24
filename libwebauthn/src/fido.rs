@@ -4,6 +4,7 @@ use serde::{
     de::{DeserializeOwned, Error as DesError, Visitor},
     Deserialize, Deserializer, Serialize,
 };
+use serde_bytes::ByteBuf;
 use std::{
     fmt,
     io::{Cursor, Read},
@@ -11,7 +12,7 @@ use std::{
 };
 use tracing::{error, warn};
 
-use crate::{ops::webauthn::idl::Base64UrlString, proto::ctap2::cbor};
+use crate::proto::ctap2::cbor;
 use crate::{
     proto::{
         ctap2::{Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialType},
@@ -68,7 +69,7 @@ impl From<&AttestedCredentialData> for Ctap2PublicKeyCredentialDescriptor {
     fn from(data: &AttestedCredentialData) -> Self {
         Self {
             r#type: Ctap2PublicKeyCredentialType::PublicKey,
-            id: Base64UrlString::from(data.credential_id.clone()),
+            id: ByteBuf::from(data.credential_id.clone()),
             transports: None,
         }
     }
@@ -272,11 +273,10 @@ mod tests {
             0x86, 0xce, 0x19, 0x47,
         ];
         let flag_bits = 0b1100_0101;
-        let flags = 
-            AuthenticatorDataFlags::USER_PRESENT |
-            AuthenticatorDataFlags::USER_VERIFIED |
-            AuthenticatorDataFlags::ATTESTED_CREDENTIALS |
-            AuthenticatorDataFlags::EXTENSION_DATA;
+        let flags = AuthenticatorDataFlags::USER_PRESENT
+            | AuthenticatorDataFlags::USER_VERIFIED
+            | AuthenticatorDataFlags::ATTESTED_CREDENTIALS
+            | AuthenticatorDataFlags::EXTENSION_DATA;
         assert_eq!(flag_bits, flags.bits());
         let signature_count = 0;
         let aaguid = [
@@ -315,7 +315,7 @@ mod tests {
             flags,
             signature_count,
             attested_credential: Some(attested_credential.clone()),
-            extensions: Some(extensions.clone())
+            extensions: Some(extensions.clone()),
         };
         let webauthn_auth_data = auth_data.to_response_bytes().unwrap();
         assert_eq!(rp_id_hash, &webauthn_auth_data[..32]);
@@ -340,14 +340,8 @@ mod tests {
         let authdata_wrapped = cbor::to_vec(&ByteBuf::from(webauthn_auth_data)).unwrap();
         let auth_data_reparsed: AuthenticatorData<T> =
             cbor::from_slice(authdata_wrapped.as_slice()).unwrap();
-        assert_eq!(
-            auth_data.rp_id_hash,
-            auth_data_reparsed.rp_id_hash
-        );
-        assert_eq!(
-            auth_data.flags.bits(),
-            auth_data_reparsed.flags.bits()
-        );
+        assert_eq!(auth_data.rp_id_hash, auth_data_reparsed.rp_id_hash);
+        assert_eq!(auth_data.flags.bits(), auth_data_reparsed.flags.bits());
         assert_eq!(
             auth_data.signature_count,
             auth_data_reparsed.signature_count
@@ -365,9 +359,6 @@ mod tests {
             attested_credential.credential_public_key,
             attested_credential_reparsed.credential_public_key
         );
-        assert_eq!(
-            extensions,
-            auth_data_reparsed.extensions.unwrap()
-        );
+        assert_eq!(extensions, auth_data_reparsed.extensions.unwrap());
     }
 }

@@ -303,7 +303,7 @@ impl Ctap2GetAssertionRequestExtensions {
                 .map_err(|_| Error::Platform(PlatformError::SyntaxError))?;
 
             // 4.1 If evalByCredential is present and contains an entry whose key is the base64url encoding of the credential ID that will be returned, let ev be the value of that entry.
-            let found_cred_id = allow_list.iter().find(|x| x.id.0 == cred_id);
+            let found_cred_id = allow_list.iter().find(|x| x.id == cred_id);
             if found_cred_id.is_some() {
                 ev = Some(prf_value);
                 break;
