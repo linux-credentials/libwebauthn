@@ -4,6 +4,7 @@ use serde::{
     de::{DeserializeOwned, Error as DesError, Visitor},
     Deserialize, Deserializer, Serialize,
 };
+use serde_bytes::ByteBuf;
 use std::{
     fmt,
     io::{Cursor, Read},
@@ -11,7 +12,7 @@ use std::{
 };
 use tracing::{error, warn};
 
-use crate::{ops::webauthn::idl::Base64UrlString, proto::ctap2::cbor};
+use crate::proto::ctap2::cbor;
 use crate::{
     proto::{
         ctap2::{Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialType},
@@ -68,7 +69,7 @@ impl From<&AttestedCredentialData> for Ctap2PublicKeyCredentialDescriptor {
     fn from(data: &AttestedCredentialData) -> Self {
         Self {
             r#type: Ctap2PublicKeyCredentialType::PublicKey,
-            id: Base64UrlString::from(data.credential_id.clone()),
+            id: ByteBuf::from(data.credential_id.clone()),
             transports: None,
         }
     }
