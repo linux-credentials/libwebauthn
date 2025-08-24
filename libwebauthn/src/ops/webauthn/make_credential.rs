@@ -9,9 +9,12 @@ use tracing::{debug, instrument, trace};
 use crate::{
     fido::AuthenticatorData,
     ops::webauthn::{
-        create::PublicKeyCredentialCreationOptionsJSON,
-        idl::{Base64UrlString, FromInnerModel, JsonError, WebAuthnIDL},
-        rpid::RelyingPartyId,
+        client_data::ClientData,
+        idl::{
+            create::PublicKeyCredentialCreationOptionsJSON, Base64UrlString, FromInnerModel,
+            JsonError, WebAuthnIDL,
+        },
+        Operation, RelyingPartyId,
     },
     proto::{
         ctap1::{Ctap1RegisteredKey, Ctap1Version},
@@ -162,7 +165,7 @@ impl MakeCredentialsResponseUnsignedExtensions {
     }
 }
 
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq)]
 pub enum ResidentKeyRequirement {
     #[serde(rename = "required")]
     Required,
@@ -172,7 +175,7 @@ pub enum ResidentKeyRequirement {
     Discouraged,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MakeCredentialRequest {
     pub hash: Vec<u8>,
     pub origin: String,
@@ -221,14 +224,21 @@ impl FromInnerModel<PublicKeyCredentialCreationOptionsJSON, MakeCredentialReques
 
         let timeout: Duration = inner
             .timeout
-            .map(|s| Duration::from_secs(s.into()))
+            .map(|s| Duration::from_millis(s.into()))
             .unwrap_or(DEFAULT_TIMEOUT);
 
+        let client_data_json = ClientData {
+            operation: Operation::MakeCredential,
+            challenge: inner.challenge.to_vec(),
+            origin: rpid.to_string(),
+            cross_origin: None,
+        };
+
         Ok(Self {
-            hash: inner.challenge.into(),
+            hash: client_data_json.hash(),
             origin: rpid.to_owned().into(),
             relying_party: inner.rp,
-            user: inner.user,
+            user: inner.user.into(),
             resident_key,
             user_verification,
             algorithms: inner.params,
@@ -255,7 +265,7 @@ impl WebAuthnIDL<MakeCredentialRequestParsingError> for MakeCredentialRequest {
     type InnerModel = PublicKeyCredentialCreationOptionsJSON;
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct MakeCredentialPrfInput {
     #[serde(rename = "eval")]
     pub _eval: Option<JsonValue>,
@@ -267,7 +277,7 @@ pub struct MakeCredentialPrfOutput {
     pub enabled: Option<bool>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct CredentialProtectionExtension {
     #[serde(rename = "credentialProtectionPolicy")]
     pub policy: CredentialProtectionPolicy,
@@ -324,7 +334,7 @@ pub struct CredentialPropsExtension {
     pub rk: Option<bool>,
 }
 
-#[derive(Debug, Default, Clone, Deserialize)]
+#[derive(Debug, Default, Clone, Deserialize, PartialEq)]
 pub struct MakeCredentialLargeBlobExtensionInput {
     pub support: MakeCredentialLargeBlobExtension,
 }
@@ -346,7 +356,7 @@ pub struct MakeCredentialLargeBlobExtensionOutput {
     pub supported: Option<bool>,
 }
 
-#[derive(Debug, Default, Clone, Deserialize)]
+#[derive(Debug, Default, Clone, Deserialize, PartialEq)]
 pub struct MakeCredentialsRequestExtensions {
     #[serde(rename = "credProps")]
     pub cred_props: Option<bool>,
@@ -450,5 +460,88 @@ impl DowngradableRequest<RegisterRequest> for MakeCredentialRequest {
         };
         trace!(?downgraded);
         Ok(downgraded)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use crate::ops::webauthn::MakeCredentialRequest;
+    use crate::ops::webauthn::RelyingPartyId;
+
+    use super::*;
+
+    pub const REQUEST_BASE_JSON: &str = r#"
+    {
+        "rp": {
+            "id": "example.org",
+            "name": "example.org"
+        },
+        "user": {
+            "id": "dXNlcmlk",
+            "name": "mario.rossi",
+            "displayName": "Mario Rossi"
+        },
+        "challenge": "Y3JlZGVudGlhbHMtZm9yLWxpbnV4L2xpYndlYmF1dGhu",
+        "pubKeyCredParams": [
+            {
+                "type": "public-key",
+                "alg": -7
+            }
+        ],
+        "timeout": 30000,
+        "excludeCredentials": [],
+        "authenticatorSelection": {
+            "residentKey": "discouraged",
+            "userVerification": "preferred"
+        },
+        "attestation": "none",
+        "attestationFormats": ["packed", "fido-u2f"]
+    }
+    "#;
+
+    fn request_base() -> MakeCredentialRequest {
+        MakeCredentialRequest {
+            origin: "example.org".to_string(),
+            hash: ClientData {
+                operation: Operation::MakeCredential,
+                challenge: base64_url::decode("Y3JlZGVudGlhbHMtZm9yLWxpbnV4L2xpYndlYmF1dGhu")
+                    .unwrap(),
+                origin: "example.org".to_string(),
+                cross_origin: None,
+            }
+            .hash(),
+            relying_party: Ctap2PublicKeyCredentialRpEntity::new("example.org", "example.org"),
+            user: Ctap2PublicKeyCredentialUserEntity::new(b"userid", "mario.rossi", "Mario Rossi"),
+            resident_key: Some(ResidentKeyRequirement::Discouraged),
+            user_verification: UserVerificationRequirement::Preferred,
+            algorithms: vec![Ctap2CredentialType::default()],
+            exclude: None,
+            extensions: None,
+            timeout: Duration::from_secs(30),
+        }
+    }
+
+    fn json_field_add(str: &str, field: &str, value: &str) -> String {
+        let mut v: serde_json::Value = serde_json::from_str(str).unwrap();
+        v.as_object_mut()
+            .unwrap()
+            .insert(field.to_owned(), serde_json::from_str(value).unwrap());
+        serde_json::to_string(&v).unwrap()
+    }
+
+    fn json_field_rm(str: &str, field: &str) -> String {
+        let mut v: serde_json::Value = serde_json::from_str(str).unwrap();
+        v.as_object_mut().unwrap().remove(field);
+        serde_json::to_string(&v).unwrap()
+    }
+
+    #[test]
+    fn test_request_from_json_base() {
+        let rpid = RelyingPartyId::try_from("example.org").unwrap();
+        let req: MakeCredentialRequest =
+            MakeCredentialRequest::from_json(&rpid, REQUEST_BASE_JSON).unwrap();
+        assert_eq!(req, request_base());
     }
 }
