@@ -7,13 +7,14 @@ use std::time::Duration;
 use libwebauthn::transport::hid::channel::HidChannel;
 use libwebauthn::UvUpdate;
 use rand::{thread_rng, Rng};
+use serde_bytes::ByteBuf;
 use text_io::read;
 use tokio::sync::broadcast::Receiver;
 use tracing_subscriber::{self, EnvFilter};
 
 use libwebauthn::ops::webauthn::{
-    Base64UrlString, GetAssertionHmacOrPrfInput, GetAssertionRequest,
-    GetAssertionRequestExtensions, PRFValue, PrfInput, UserVerificationRequirement,
+    GetAssertionHmacOrPrfInput, GetAssertionRequest, GetAssertionRequestExtensions, PRFValue,
+    PrfInput, UserVerificationRequirement,
 };
 use libwebauthn::pin::PinRequestReason;
 use libwebauthn::proto::ctap2::{Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialType};
@@ -114,7 +115,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
 
         let credential = Ctap2PublicKeyCredentialDescriptor {
             r#type: Ctap2PublicKeyCredentialType::PublicKey,
-            id: Base64UrlString::from(credential_id.as_slice()),
+            id: ByteBuf::from(credential_id.as_slice()),
             transports: None,
         };
 
