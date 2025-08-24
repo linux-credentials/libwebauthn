@@ -8,7 +8,6 @@ use x509_parser::nom::AsBytes;
 
 use super::webauthn::MakeCredentialRequest;
 use crate::fido::{AttestedCredentialData, AuthenticatorData, AuthenticatorDataFlags};
-use crate::ops::webauthn::idl::Base64UrlString;
 use crate::ops::webauthn::{
     GetAssertionRequest, GetAssertionRequestExtensions, GetAssertionResponse,
     MakeCredentialResponse, UserVerificationRequirement,
@@ -185,7 +184,7 @@ impl UpgradableResponse<GetAssertionResponse, SignRequest> for SignResponse {
         let response = Ctap2GetAssertionResponse {
             credential_id: Some(Ctap2PublicKeyCredentialDescriptor {
                 r#type: Ctap2PublicKeyCredentialType::PublicKey,
-                id: Base64UrlString::from(request.key_handle.clone()),
+                id: ByteBuf::from(request.key_handle.clone()),
                 transports: None,
             }),
             authenticator_data,
