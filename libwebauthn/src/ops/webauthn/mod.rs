@@ -1,8 +1,7 @@
-mod create;
+mod client_data;
 mod get_assertion;
-pub(crate) mod idl;
+pub mod idl;
 mod make_credential;
-mod rpid;
 
 use super::u2f::{RegisterRequest, SignRequest};
 use crate::webauthn::CtapError;
@@ -13,7 +12,7 @@ pub use get_assertion::{
     GetAssertionResponseExtensions, GetAssertionResponseUnsignedExtensions, HMACGetSecretInput,
     HMACGetSecretOutput, PRFValue, PrfInput,
 };
-pub use idl::{Base64UrlString, WebAuthnIDL};
+pub use idl::{rpid::RelyingPartyId, Base64UrlString, WebAuthnIDL};
 pub use make_credential::{
     CredentialPropsExtension, CredentialProtectionExtension, CredentialProtectionPolicy,
     MakeCredentialLargeBlobExtension, MakeCredentialLargeBlobExtensionOutput,
@@ -21,10 +20,15 @@ pub use make_credential::{
     MakeCredentialsRequestExtensions, MakeCredentialsResponseExtensions,
     MakeCredentialsResponseUnsignedExtensions, ResidentKeyRequirement,
 };
-pub use rpid::RelyingPartyId;
 use serde::Deserialize;
 
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq)]
+pub enum Operation {
+    MakeCredential,
+    GetAssertion,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq)]
 pub enum UserVerificationRequirement {
     #[serde(rename = "required")]
     Required,
