@@ -1,11 +1,10 @@
-use super::idl::Base64UrlString;
+use super::Base64UrlString;
 use crate::{
     ops::webauthn::{
         MakeCredentialsRequestExtensions, ResidentKeyRequirement, UserVerificationRequirement,
     },
     proto::ctap2::{
         Ctap2CredentialType, Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialRpEntity,
-        Ctap2PublicKeyCredentialUserEntity,
     },
 };
 
@@ -33,10 +32,18 @@ fn default_user_verification() -> UserVerificationRequirement {
     UserVerificationRequirement::Preferred
 }
 
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct PublicKeyCredentialUserEntity {
+    pub id: Base64UrlString,
+    pub name: String,
+    #[serde(rename = "displayName")]
+    pub display_name: String,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct PublicKeyCredentialCreationOptionsJSON {
     pub rp: Ctap2PublicKeyCredentialRpEntity,
-    pub user: Ctap2PublicKeyCredentialUserEntity,
+    pub user: PublicKeyCredentialUserEntity,
     pub challenge: Base64UrlString,
     #[serde(rename = "pubKeyCredParams")]
     pub params: Vec<Ctap2CredentialType>,
