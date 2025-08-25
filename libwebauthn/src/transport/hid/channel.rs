@@ -15,9 +15,6 @@ use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::time::sleep;
 use tracing::{debug, info, instrument, trace, warn, Level};
 
-#[cfg(feature = "virtual-hid-device")]
-use tokio::net::UdpSocket;
-
 use crate::proto::ctap1::apdu::{ApduRequest, ApduResponse};
 use crate::proto::ctap1::{Ctap1, Ctap1RegisterRequest};
 use crate::proto::ctap2::cbor::{CborRequest, CborResponse};
@@ -29,6 +26,8 @@ use crate::transport::error::TransportError;
 use crate::transport::hid::framing::{
     HidCommand, HidMessage, HidMessageParser, HidMessageParserState,
 };
+#[cfg(test)]
+use crate::transport::virt;
 use crate::webauthn::error::{Error, PlatformError};
 use crate::UvUpdate;
 
@@ -50,8 +49,8 @@ const WINK_MIN_WAIT: Duration = Duration::from_secs(2);
 pub type CancelHidOperation = ();
 enum OpenHidDevice {
     HidApiDevice(Arc<Mutex<(HidApiDevice, mpsc::Receiver<CancelHidOperation>)>>),
-    #[cfg(feature = "virtual-hid-device")]
-    VirtualDevice,
+    #[cfg(test)]
+    VirtualDevice(Arc<Mutex<virt::VirtHidDevice>>),
 }
 
 #[derive(Debug, Clone)]
@@ -89,8 +88,10 @@ impl<'d> HidChannel<'d> {
                     let hidapi_device = Self::hid_open(device)?;
                     OpenHidDevice::HidApiDevice(Arc::new(Mutex::new((hidapi_device, handle_rx))))
                 }
-                #[cfg(feature = "virtual-hid-device")]
-                HidBackendDevice::VirtualDevice(_) => OpenHidDevice::VirtualDevice,
+                #[cfg(test)]
+                HidBackendDevice::VirtualDevice => {
+                    OpenHidDevice::VirtualDevice(Arc::new(Mutex::new(virt::VirtHidDevice::new())))
+                }
             },
             init: InitResponse::default(),
             auth_token_data: None,
@@ -115,9 +116,7 @@ impl<'d> HidChannel<'d> {
         self.hid_send(&HidMessage::new(self.init.cid, HidCommand::Wink, &[]))
             .await?;
         // Solokey does not seem to return an answer for wink and hangs here.
-        if cfg!(not(feature = "virtual-hid-device")) {
-            let _ = self.hid_recv(timeout).await?;
-        }
+        let _ = self.hid_recv(timeout).await?;
 
         sleep(WINK_MIN_WAIT).await;
         Ok(true)
@@ -211,8 +210,8 @@ impl<'d> HidChannel<'d> {
             HidBackendDevice::HidApiDevice(device) => Ok(device
                 .open_device(&hidapi)
                 .or(Err(Error::Transport(TransportError::ConnectionFailed)))?),
-            #[cfg(feature = "virtual-hid-device")]
-            HidBackendDevice::VirtualDevice(_) => unreachable!(),
+            #[cfg(test)]
+            HidBackendDevice::VirtualDevice => unreachable!(),
         }
     }
 
@@ -284,8 +283,14 @@ impl<'d> HidChannel<'d> {
                 }
                 response
             }
-            #[cfg(feature = "virtual-hid-device")]
-            OpenHidDevice::VirtualDevice => Self::hid_send_virtual(msg).await,
+            #[cfg(test)]
+            OpenHidDevice::VirtualDevice(virt_device) => {
+                let Ok(mut guard) = virt_device.lock() else {
+                    panic!("Poisoned lock on Virtual HID device");
+                };
+                let device = guard.deref_mut();
+                device.virt_send(msg)
+            }
         }
     }
 
@@ -314,39 +319,6 @@ impl<'d> HidChannel<'d> {
         Ok(())
     }
 
-    #[cfg(feature = "virtual-hid-device")]
-    async fn hid_send_virtual(msg: &HidMessage) -> Result<(), Error> {
-        // https://github.com/solokeys/python-fido2/commit/4964d98ca6d0cfc24cd49926521282b8e92c598d
-        let socket = UdpSocket::bind("127.0.0.1:7112")
-            .await
-            .or(Err(Error::Transport(TransportError::TransportUnavailable)))?;
-
-        debug!({ cmd = ?msg.cmd, payload_len = msg.payload.len() }, "U2F HID request to UDP virtual device");
-        trace!(?msg);
-
-        let packets = msg
-            .packets(PACKET_SIZE)
-            .or(Err(Error::Transport(TransportError::InvalidFraming)))?;
-        for (i, packet) in packets.iter().enumerate() {
-            let mut report: Vec<u8> = vec![];
-            report.extend(packet);
-            report.extend(vec![0; PACKET_SIZE - packet.len()]);
-
-            debug!(
-                { packet = i, len = report.len() },
-                "Sending packet as HID report",
-            );
-            trace!(?packet);
-
-            socket
-                .send_to(&report, "127.0.0.1:8111")
-                .await
-                .or(Err(Error::Transport(TransportError::ConnectionLost)))?;
-        }
-
-        Ok(())
-    }
-
     #[instrument(skip_all)]
     pub async fn hid_recv(&self, timeout: Duration) -> Result<HidMessage, Error> {
         loop {
@@ -369,8 +341,14 @@ impl<'d> HidChannel<'d> {
                     .await
                     .expect("HID read not to panic.")
                 }
-                #[cfg(feature = "virtual-hid-device")]
-                OpenHidDevice::VirtualDevice => Self::hid_recv_virtual(timeout).await,
+                #[cfg(test)]
+                OpenHidDevice::VirtualDevice(virt_device) => {
+                    let Ok(mut guard) = virt_device.lock() else {
+                        panic!("Poisoned lock on Virtual HID device");
+                    };
+                    let device = guard.deref_mut();
+                    device.virt_recv()
+                }
             };
 
             match response {
@@ -422,50 +400,13 @@ impl<'d> HidChannel<'d> {
         trace!(?response);
         Ok(response)
     }
-
-    #[cfg(feature = "virtual-hid-device")]
-    async fn hid_recv_virtual(_timeout: Duration) -> Result<HidMessage, Error> {
-        // https://github.com/solokeys/python-fido2/commit/4964d98ca6d0cfc24cd49926521282b8e92c598d
-        let socket = UdpSocket::bind("127.0.0.1:7112")
-            .await
-            .or(Err(Error::Transport(TransportError::TransportUnavailable)))?;
-
-        let mut parser = HidMessageParser::new();
-        loop {
-            let mut report = [0; PACKET_SIZE];
-            socket
-                .recv_from(&mut report)
-                .await
-                .or(Err(Error::Transport(TransportError::ConnectionLost)))?;
-            debug!(
-                { len = report.len() },
-                "Received HID report from UDP virtual device"
-            );
-            trace!(?report);
-
-            if let HidMessageParserState::Done = parser
-                .update(&report)
-                .or(Err(Error::Transport(TransportError::InvalidFraming)))?
-            {
-                break;
-            }
-        }
-
-        let response = parser
-            .message()
-            .or(Err(Error::Transport(TransportError::InvalidFraming)))?;
-        debug!({ cmd = ?response.cmd }, "Parsed U2F HID response from UDP virtual device");
-        trace!(?response);
-
-        Ok(response)
-    }
 }
 
 impl Drop for HidChannel<'_> {
     #[instrument(level = Level::DEBUG, skip_all, fields(dev = %self.device))]
     fn drop(&mut self) {
-        #[cfg(feature = "virtual-hid-device")]
-        if let HidBackendDevice::VirtualDevice(_) = self.device.backend {
+        #[cfg(test)]
+        if matches!(self.device.backend, HidBackendDevice::VirtualDevice) {
             return;
         }
 

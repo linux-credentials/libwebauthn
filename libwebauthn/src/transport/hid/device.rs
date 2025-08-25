@@ -1,3 +1,5 @@
+use super::channel::HidChannel;
+use super::Hid;
 use async_trait::async_trait;
 use hidapi::DeviceInfo;
 use hidapi::HidApi;
@@ -5,30 +7,20 @@ use std::fmt;
 #[allow(unused_imports)]
 use tracing::{debug, info, instrument};
 
-#[cfg(feature = "virtual-hid-device")]
-use solo::SoloVirtualKey;
-
-use super::channel::HidChannel;
-use super::Hid;
-
 use crate::transport::error::TransportError;
 use crate::transport::Device;
 use crate::webauthn::error::Error;
 
-#[derive(Debug)]
-// SoloVirtualKey is not clone-able, but in test-mode we don't care
-#[cfg_attr(not(feature = "virtual-hid-device"), derive(Clone))]
+#[derive(Debug, Clone)]
 pub struct HidDevice {
     pub backend: HidBackendDevice,
 }
 
-#[derive(Debug)]
-// SoloVirtualKey is not clone-able, but in test-mode we don't care
-#[cfg_attr(not(feature = "virtual-hid-device"), derive(Clone))]
+#[derive(Debug, Clone)]
 pub enum HidBackendDevice {
     HidApiDevice(DeviceInfo),
-    #[cfg(feature = "virtual-hid-device")]
-    VirtualDevice(SoloVirtualKey),
+    #[cfg(test)]
+    VirtualDevice,
 }
 
 impl From<&DeviceInfo> for HidDevice {
@@ -49,8 +41,8 @@ impl fmt::Display for HidDevice {
                 dev.product_string().unwrap(),
                 dev.release_number()
             ),
-            #[cfg(feature = "virtual-hid-device")]
-            HidBackendDevice::VirtualDevice(dev) => dev.fmt(f),
+            #[cfg(test)]
+            HidBackendDevice::VirtualDevice => write!(f, "virtual fido-authenticator"),
         }
     }
 }
@@ -59,14 +51,6 @@ pub(crate) fn get_hidapi() -> Result<HidApi, Error> {
     HidApi::new().or(Err(Error::Transport(TransportError::TransportUnavailable)))
 }
 
-#[cfg(feature = "virtual-hid-device")]
-#[instrument]
-pub async fn list_devices() -> Result<Vec<HidDevice>, Error> {
-    info!("Faking device list, returning virtual device");
-    Ok(vec![HidDevice::new_virtual()])
-}
-
-#[cfg(not(feature = "virtual-hid-device"))]
 #[instrument]
 pub async fn list_devices() -> Result<Vec<HidDevice>, Error> {
     let devices: Vec<_> = get_hidapi()?
@@ -80,12 +64,16 @@ pub async fn list_devices() -> Result<Vec<HidDevice>, Error> {
     Ok(devices)
 }
 
+#[cfg(test)]
+pub fn get_virtual_device() -> HidDevice {
+    HidDevice::new_virtual()
+}
+
+#[cfg(test)]
 impl HidDevice {
-    #[cfg(feature = "virtual-hid-device")]
     pub fn new_virtual() -> Self {
-        let solo = SoloVirtualKey::default();
         Self {
-            backend: HidBackendDevice::VirtualDevice(solo),
+            backend: HidBackendDevice::VirtualDevice,
         }
     }
 }
@@ -101,24 +89,4 @@ impl<'d> Device<'d, Hid, HidChannel<'d>> for HidDevice {
     //     let channel = self.channel().await?;
     //     channel.supported_protocols().await
     // }
-}
-
-#[cfg(test)]
-mod tests {
-
-    #[cfg(feature = "hid-device-tests")]
-    #[tokio::test]
-    async fn test_supported_protocols() {
-        use super::HidDevice;
-        use crate::transport::channel::Channel;
-        use crate::transport::Device;
-
-        let mut device = HidDevice::new_virtual();
-        let channel = device.channel().await.unwrap();
-
-        let protocols = channel.supported_protocols().await.unwrap();
-
-        assert!(protocols.u2f);
-        assert!(protocols.fido2);
-    }
 }

@@ -14,6 +14,7 @@ use crate::proto::ctap1::model::Preflight;
 use crate::proto::CtapError;
 use crate::transport::{error::TransportError, Channel};
 use crate::webauthn::error::Error;
+use crate::UvUpdate;
 
 const UP_SLEEP: Duration = Duration::from_millis(150);
 const VERSION_TIMEOUT: Duration = Duration::from_millis(500);
@@ -51,6 +52,7 @@ where
     ) -> Result<Ctap1RegisterResponse, Error> {
         debug!({ %request.require_user_presence }, "CTAP1 register request");
         trace!(?request);
+        self.send_ux_update(UvUpdate::PresenceRequired.into()).await;
 
         let (request, preflight_requests) = request.preflight()?;
         debug!({ count = preflight_requests.len() }, "Preflight requests");
@@ -89,6 +91,7 @@ where
     async fn ctap1_sign(&mut self, request: &Ctap1SignRequest) -> Result<Ctap1SignResponse, Error> {
         debug!({ %request.require_user_presence }, "CTAP1 sign request");
         trace!(?request);
+        self.send_ux_update(UvUpdate::PresenceRequired.into()).await;
 
         let apdu_request: ApduRequest = request.into();
         let apdu_response = send_apdu_request_wait_uv(self, &apdu_request, request.timeout).await?;

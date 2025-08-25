@@ -1,14 +1,5 @@
 use std::error::Error;
 
-#[cfg(feature = "virtual-hid-device")]
-#[tokio::main]
-pub async fn main() -> Result<(), Box<dyn Error>> {
-    // This example doesn't work for virtual devices, because
-    // solo devices are not clone-able.
-    Ok(())
-}
-
-#[cfg(not(feature = "virtual-hid-device"))]
 #[tokio::main]
 pub async fn main() -> Result<(), Box<dyn Error>> {
     use std::collections::HashMap;
