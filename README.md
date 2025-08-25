@@ -10,7 +10,7 @@ This repository is now part of the [Credentials for Linux][linux-credentials] pr
 
 The [Credentials for Linux][linux-credentials] project aims to offer FIDO2 platform functionality (FIDO U2F, and WebAuthn) on Linux, over a [D-Bus Portal interface][xdg-portal].
 
-_Looking for the D-Bus API proposal?_ Check out [platform-api][linux-credentials].
+_Looking for the D-Bus API proposal?_ Check out [credentialsd][credentialsd].
 
 ## Features
 
@@ -60,16 +60,19 @@ $ cargo run --example u2f_hid
 
 We welcome contributions!
 
-If you'd like to contribute but you don't know where to start, check out the _Issues_ tab.
+Join the discussion on Matrix at `#credentials-for-linux:matrix.org`.
+
+If you don't know where to start, check out the _Issues_ tab.
 
 [xdg-portal]: https://flatpak.github.io/xdg-desktop-portal/portal-docs.html
 [linux-credentials]: https://github.com/linux-credentials
+[credentialsd]: https://github.com/linux-credentials/credentialsd
 [webauthn]: https://www.w3.org/TR/webauthn/
 [passkeys]: https://fidoalliance.org/passkeys/
-[#10]: https://github.com/AlfioEmanueleFresta/xdg-credentials-portal/issues/10
-[#3]: https://github.com/AlfioEmanueleFresta/xdg-credentials-portal/issues/3
-[#4]: https://github.com/AlfioEmanueleFresta/xdg-credentials-portal/issues/4
-[#5]: https://github.com/AlfioEmanueleFresta/xdg-credentials-portal/issues/5
-[#17]: https://github.com/AlfioEmanueleFresta/xdg-credentials-portal/issues/17
-[#18]: https://github.com/AlfioEmanueleFresta/xdg-credentials-portal/issues/18
-[#31]: https://github.com/AlfioEmanueleFresta/xdg-credentials-portal/issues/31
+[#10]: https://github.com/linux-credentials/libwebauthn/issues/10
+[#3]: https://github.com/linux-credentials/libwebauthn/issues/3
+[#4]: https://github.com/linux-credentials/libwebauthn/issues/4
+[#5]: https://github.com/linux-credentials/libwebauthn/issues/5
+[#17]: https://github.com/linux-credentials/libwebauthn/issues/17
+[#18]: https://github.com/linux-credentials/libwebauthn/issues/18
+[#31]: https://github.com/linux-credentials/libwebauthn/issues/31
