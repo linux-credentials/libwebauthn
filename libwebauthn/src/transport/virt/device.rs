@@ -41,8 +41,8 @@ use trussed::{
 use trussed_staging::virt::{BackendIds, Client, Dispatcher};
 
 // see: https://github.com/Nitrokey/nitrokey-3-firmware/tree/main/utils/test-certificates/fido
-const ATTESTATION_CERT: &[u8] = include_bytes!("../../../../data/fido-cert.der");
-const ATTESTATION_KEY: &[u8] = include_bytes!("../../../../data/fido-key.trussed");
+const ATTESTATION_CERT: &[u8] = include_bytes!("./data/fido-cert.der");
+const ATTESTATION_KEY: &[u8] = include_bytes!("./data/fido-key.trussed");
 
 pub fn run_ctaphid<F, T>(storage_dir: &Path, f: F) -> T
 where
