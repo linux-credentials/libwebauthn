@@ -1,26 +1,18 @@
-#[cfg(feature = "virtual-hid-device")]
 mod device;
-#[cfg(feature = "virtual-hid-device")]
 mod pipe;
 
-#[cfg(feature = "virtual-hid-device")]
 use super::hid::framing::HidCommand;
 use super::hid::framing::HidMessage;
 use crate::webauthn::Error;
-#[cfg(feature = "virtual-hid-device")]
 use num_enum::TryFromPrimitive;
-#[cfg(feature = "virtual-hid-device")]
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub(crate) struct VirtHidDevice {
-    #[cfg(feature = "virtual-hid-device")]
     storage_dir: Arc<tempfile::TempDir>,
-    #[cfg(feature = "virtual-hid-device")]
     response: Option<HidMessage>,
 }
 
-#[cfg(feature = "virtual-hid-device")]
 impl VirtHidDevice {
     pub fn new() -> Self {
         let storage_dir =
@@ -97,20 +89,5 @@ impl VirtHidDevice {
     pub fn virt_recv(&mut self) -> Result<HidMessage, Error> {
         assert!(self.response.is_some());
         Ok(self.response.take().unwrap())
-    }
-}
-
-#[cfg(not(feature = "virtual-hid-device"))]
-impl VirtHidDevice {
-    pub fn new() -> Self {
-        unreachable!()
-    }
-
-    pub fn virt_send(&mut self, _msg: &HidMessage) -> Result<(), Error> {
-        unreachable!()
-    }
-
-    pub fn virt_recv(&mut self) -> Result<HidMessage, Error> {
-        unreachable!()
     }
 }

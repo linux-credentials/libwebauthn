@@ -75,6 +75,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
     setup_logging();
 
     let devices = list_devices().await.unwrap();
+
     println!("Devices found: {:?}", devices);
 
     let user_id: [u8; 32] = thread_rng().gen();

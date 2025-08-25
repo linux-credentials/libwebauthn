@@ -118,8 +118,8 @@ where
                     .await?;
 
             // We've already sent out this update, in case we used builtin UV
-            // but if we used PIN, we need to touch the device now.
-            if self.used_pin_for_auth() {
+            // but if we used PIN or None, we need to touch the device now.
+            if self.used_pin_for_auth() || uv_auth_used == UsedPinUvAuthToken::None {
                 self.send_ux_update(UvUpdate::PresenceRequired.into()).await;
             }
             handle_errors!(
@@ -139,7 +139,6 @@ where
     ) -> Result<MakeCredentialResponse, Error> {
         let register_request: RegisterRequest = op.try_downgrade()?;
 
-        self.send_ux_update(UvUpdate::PresenceRequired.into()).await;
         self.ctap1_register(&register_request)
             .await?
             .try_upgrade(op)
@@ -189,8 +188,8 @@ where
                     .await?;
 
             // We've already sent out this update, in case we used builtin UV
-            // but if we used PIN, we need to touch the device now.
-            if self.used_pin_for_auth() {
+            // but if we used PIN or None, we need to touch the device now.
+            if self.used_pin_for_auth() || uv_auth_used == UsedPinUvAuthToken::None {
                 self.send_ux_update(UvUpdate::PresenceRequired.into()).await;
             }
             if let Some(auth_data) = self.get_auth_data() {
@@ -224,7 +223,6 @@ where
         let sign_requests: Vec<SignRequest> = op.try_downgrade()?;
 
         for sign_request in sign_requests {
-            self.send_ux_update(UvUpdate::PresenceRequired.into()).await;
             match self.ctap1_sign(&sign_request).await {
                 Ok(response) => {
                     debug!("Found successful candidate in allowList");

@@ -19,6 +19,7 @@ pub struct HidDevice {
 #[derive(Debug, Clone)]
 pub enum HidBackendDevice {
     HidApiDevice(DeviceInfo),
+    #[cfg(test)]
     VirtualDevice,
 }
 
@@ -40,6 +41,7 @@ impl fmt::Display for HidDevice {
                 dev.product_string().unwrap(),
                 dev.release_number()
             ),
+            #[cfg(test)]
             HidBackendDevice::VirtualDevice => write!(f, "virtual fido-authenticator"),
         }
     }
@@ -49,14 +51,6 @@ pub(crate) fn get_hidapi() -> Result<HidApi, Error> {
     HidApi::new().or(Err(Error::Transport(TransportError::TransportUnavailable)))
 }
 
-#[cfg(feature = "virtual-hid-device")]
-#[instrument]
-pub async fn list_devices() -> Result<Vec<HidDevice>, Error> {
-    info!("Faking device list, returning virtual device");
-    Ok(vec![HidDevice::new_virtual()])
-}
-
-#[cfg(not(feature = "virtual-hid-device"))]
 #[instrument]
 pub async fn list_devices() -> Result<Vec<HidDevice>, Error> {
     let devices: Vec<_> = get_hidapi()?
@@ -70,8 +64,13 @@ pub async fn list_devices() -> Result<Vec<HidDevice>, Error> {
     Ok(devices)
 }
 
+#[cfg(test)]
+pub fn get_virtual_device() -> HidDevice {
+    HidDevice::new_virtual()
+}
+
+#[cfg(test)]
 impl HidDevice {
-    #[cfg(feature = "virtual-hid-device")]
     pub fn new_virtual() -> Self {
         Self {
             backend: HidBackendDevice::VirtualDevice,

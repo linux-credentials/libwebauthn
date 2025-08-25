@@ -15,7 +15,6 @@ path = "src/lib.rs"
 
 [features]
 default = []
-virtual-hid-device = ["ctaphid-dispatch", "ctaphid", "littlefs2", "trussed", "trussed-staging", "fido-authenticator", "interchange", "tempfile"]
 
 [dependencies]
 base64-url = "3.0.0"
@@ -66,20 +65,26 @@ ctap-types = { version = "0.4.0" }
 btleplug = "0.11.7"
 thiserror = "2.0.12"
 
-# For feature: "virtual-hid-device"
-ctaphid-dispatch = { version = "0.3", optional = true }
-ctaphid = { version = "0.3.1", default-features = false, optional = true }
-fido-authenticator = { git = "https://github.com/Nitrokey/fido-authenticator.git",tag = "v0.1.1-nitrokey.27", features = ["dispatch"], optional = true }
-littlefs2 = { version = "0.6.0", optional = true }
-trussed = { version = "0.1", features = ["virt"], optional = true }
-trussed-staging = { version = "0.3.0", features = ["chunked", "hkdf", "virt", "fs-info"], optional = true }
-interchange = { version = "0.3.0", optional = true }
-tempfile = { version = "3.21", optional = true }
-
-[patch.crates-io]
-trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "024e0eca5fb7dbd2457831f7c7bffe4341e08775" }
-trussed-staging = { git = "https://github.com/trussed-dev/trussed-staging.git", rev = "7922d67e9637a87e5625aaff9e5111f0d4ec0346" }
-
 [dev-dependencies]
 tracing-subscriber = { version = "0.3.3", features = ["env-filter"] }
 qrcode = "0.14.1"
+
+# We can't have "virtual-hid-device" a feature, because 
+# we need to be able to publish libwebauthn to crates.io
+# and trussted-staging has sadly not been published, so we have
+# to use it as dev-dependencies instead. And dev-features do not exist.
+# All of the below are for having a virtual HID device based
+# on fido-authenticator.
+ctaphid-dispatch = { version = "0.3" }
+ctaphid = { version = "0.3.1", default-features = false }
+fido-authenticator = { git = "https://github.com/Nitrokey/fido-authenticator.git",tag = "v0.1.1-nitrokey.27", features = ["dispatch"] }
+littlefs2 = { version = "0.6.0" }
+trussed = { version = "0.1", features = ["virt"] }
+trussed-staging = { version = "0.3.0", features = ["chunked", "hkdf", "virt", "fs-info"] }
+interchange = { version = "0.3.0" }
+tempfile = { version = "3.21" }
+
+# The trussed ecosystem is currently a bit messy, so we have to do some patching of the versions
+[patch.crates-io]
+trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "024e0eca5fb7dbd2457831f7c7bffe4341e08775" }
+trussed-staging = { git = "https://github.com/trussed-dev/trussed-staging.git", rev = "7922d67e9637a87e5625aaff9e5111f0d4ec0346" }

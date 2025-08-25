@@ -26,6 +26,7 @@ use crate::transport::error::TransportError;
 use crate::transport::hid::framing::{
     HidCommand, HidMessage, HidMessageParser, HidMessageParserState,
 };
+#[cfg(test)]
 use crate::transport::virt;
 use crate::webauthn::error::{Error, PlatformError};
 use crate::UvUpdate;
@@ -48,6 +49,7 @@ const WINK_MIN_WAIT: Duration = Duration::from_secs(2);
 pub type CancelHidOperation = ();
 enum OpenHidDevice {
     HidApiDevice(Arc<Mutex<(HidApiDevice, mpsc::Receiver<CancelHidOperation>)>>),
+    #[cfg(test)]
     VirtualDevice(Arc<Mutex<virt::VirtHidDevice>>),
 }
 
@@ -86,6 +88,7 @@ impl<'d> HidChannel<'d> {
                     let hidapi_device = Self::hid_open(device)?;
                     OpenHidDevice::HidApiDevice(Arc::new(Mutex::new((hidapi_device, handle_rx))))
                 }
+                #[cfg(test)]
                 HidBackendDevice::VirtualDevice => {
                     OpenHidDevice::VirtualDevice(Arc::new(Mutex::new(virt::VirtHidDevice::new())))
                 }
@@ -113,9 +116,7 @@ impl<'d> HidChannel<'d> {
         self.hid_send(&HidMessage::new(self.init.cid, HidCommand::Wink, &[]))
             .await?;
         // Solokey does not seem to return an answer for wink and hangs here.
-        if cfg!(not(feature = "virtual-hid-device")) {
-            let _ = self.hid_recv(timeout).await?;
-        }
+        let _ = self.hid_recv(timeout).await?;
 
         sleep(WINK_MIN_WAIT).await;
         Ok(true)
@@ -209,6 +210,7 @@ impl<'d> HidChannel<'d> {
             HidBackendDevice::HidApiDevice(device) => Ok(device
                 .open_device(&hidapi)
                 .or(Err(Error::Transport(TransportError::ConnectionFailed)))?),
+            #[cfg(test)]
             HidBackendDevice::VirtualDevice => unreachable!(),
         }
     }
@@ -281,6 +283,7 @@ impl<'d> HidChannel<'d> {
                 }
                 response
             }
+            #[cfg(test)]
             OpenHidDevice::VirtualDevice(virt_device) => {
                 let Ok(mut guard) = virt_device.lock() else {
                     panic!("Poisoned lock on Virtual HID device");
@@ -338,6 +341,7 @@ impl<'d> HidChannel<'d> {
                     .await
                     .expect("HID read not to panic.")
                 }
+                #[cfg(test)]
                 OpenHidDevice::VirtualDevice(virt_device) => {
                     let Ok(mut guard) = virt_device.lock() else {
                         panic!("Poisoned lock on Virtual HID device");
@@ -401,8 +405,8 @@ impl<'d> HidChannel<'d> {
 impl Drop for HidChannel<'_> {
     #[instrument(level = Level::DEBUG, skip_all, fields(dev = %self.device))]
     fn drop(&mut self) {
-        #[cfg(feature = "virtual-hid-device")]
-        if let HidBackendDevice::VirtualDevice = self.device.backend {
+        #[cfg(test)]
+        if matches!(self.device.backend, HidBackendDevice::VirtualDevice) {
             return;
         }
 
