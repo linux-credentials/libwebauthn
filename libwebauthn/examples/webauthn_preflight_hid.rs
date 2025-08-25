@@ -12,8 +12,8 @@ use tokio::sync::broadcast::Receiver;
 use tracing_subscriber::{self, EnvFilter};
 
 use libwebauthn::ops::webauthn::{
-    GetAssertionRequest, GetAssertionResponse, MakeCredentialRequest, ResidentKeyRequirement,
-    UserVerificationRequirement,
+    GetAssertionRequest, GetAssertionRequestExtensions, GetAssertionResponse,
+    MakeCredentialRequest, ResidentKeyRequirement, UserVerificationRequirement,
 };
 use libwebauthn::pin::PinRequestReason;
 use libwebauthn::proto::ctap2::{
@@ -203,7 +203,7 @@ async fn get_assertion_call(
         hash: Vec::from(challenge),
         allow: allow_list,
         user_verification: UserVerificationRequirement::Discouraged,
-        extensions: None,
+        extensions: GetAssertionRequestExtensions::default(),
         timeout: TIMEOUT,
     };
 
