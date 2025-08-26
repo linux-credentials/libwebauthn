@@ -4,6 +4,8 @@ pub mod ble;
 pub mod cable;
 pub mod device;
 pub mod hid;
+#[cfg(test)]
+pub mod virt;
 
 mod channel;
 mod transport;
