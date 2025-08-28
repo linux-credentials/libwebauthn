@@ -7,10 +7,9 @@ use super::{
 use crate::{
     fido::AuthenticatorData,
     ops::webauthn::{
-        CredentialProtectionPolicy, ResidentKeyRequirement,
-        MakeCredentialHmacOrPrfInput, MakeCredentialLargeBlobExtension, MakeCredentialRequest,
-        MakeCredentialResponse, MakeCredentialsRequestExtensions,
-        MakeCredentialsResponseUnsignedExtensions,
+        CredentialProtectionPolicy, MakeCredentialHmacOrPrfInput, MakeCredentialLargeBlobExtension,
+        MakeCredentialRequest, MakeCredentialResponse, MakeCredentialsRequestExtensions,
+        MakeCredentialsResponseUnsignedExtensions, ResidentKeyRequirement,
     },
     pin::PinUvAuthProtocol,
     proto::CtapError,
@@ -349,6 +348,10 @@ impl Ctap2UserVerifiableRequest for Ctap2MakeCredentialRequest {
 
     fn handle_legacy_preview(&mut self, _info: &Ctap2GetInfoResponse) {
         // No-op
+    }
+
+    fn needs_shared_secret(&self, _get_info_response: &Ctap2GetInfoResponse) -> bool {
+        false
     }
 }
 

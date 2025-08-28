@@ -153,11 +153,21 @@ pub struct Ctap2GetInfoResponse {
 }
 
 impl Ctap2GetInfoResponse {
-    pub fn option_enabled(&self, name: &str) -> bool {
-        if self.options.is_none() {
+    /// Only checks if the option exists, i.e. is not None
+    /// but does not check if the option is enabled (true)
+    /// or disabled (false)
+    pub fn option_exists(&self, name: &str) -> bool {
+        let Some(options) = self.options.as_ref() else {
             return false;
-        }
-        let options = self.options.as_ref().unwrap();
+        };
+        options.get(name).is_some()
+    }
+
+    /// Checks if the option exists and is set to true
+    pub fn option_enabled(&self, name: &str) -> bool {
+        let Some(options) = self.options.as_ref() else {
+            return false;
+        };
         options.get(name) == Some(&true)
     }
 
@@ -195,32 +205,43 @@ impl Ctap2GetInfoResponse {
             (self.option_enabled("pinUvAuthToken") && self.option_enabled("uv"))
     }
 
+    pub fn can_establish_shared_secret(&self) -> bool {
+        // clientPin exists: clientPin command is supported, so we can establish a shared secret
+        // uv exists and pinUvAuthToken is enabled: clientPin command partially supported. Enough to establish shared secret
+        self.option_exists("clientPin")
+            || (self.option_exists("uv") && self.option_enabled("pinUvAuthToken"))
+    }
+
     pub fn uv_operation(&self, uv_blocked: bool) -> Option<Ctap2UserVerificationOperation> {
         if self.option_enabled("uv") && !uv_blocked {
             if self.option_enabled("pinUvAuthToken") {
                 debug!("getPinUvAuthTokenUsingUvWithPermissions");
-                return Some(
-                    Ctap2UserVerificationOperation::GetPinUvAuthTokenUsingUvWithPermissions,
-                );
+                Some(Ctap2UserVerificationOperation::GetPinUvAuthTokenUsingUvWithPermissions)
             } else {
                 debug!("Deprecated FIDO 2.0 behaviour: populating 'uv' flag");
-                return Some(Ctap2UserVerificationOperation::None);
+                Some(Ctap2UserVerificationOperation::LegacyUv)
             }
         } else {
             // !uv
+
+            // clientPIN exists, but is not enabled, aka PIN is not yet set on the device
+            // We can use it for establishing a shared secret, but not for creating a pinUvAuthToken
+            if self.option_exists("clientPin") && !self.option_enabled("clientPin") {
+                return Some(Ctap2UserVerificationOperation::ClientPinOnlyForSharedSecret);
+            }
+
+            // If we do have a PIN, check if we need to use legacy getPinToken or new getPinUvAuthToken..-command
             if self.option_enabled("pinUvAuthToken") {
                 assert!(self.option_enabled("clientPin"));
                 debug!("getPinUvAuthTokenUsingPinWithPermissions");
-                return Some(
-                    Ctap2UserVerificationOperation::GetPinUvAuthTokenUsingPinWithPermissions,
-                );
+                Some(Ctap2UserVerificationOperation::GetPinUvAuthTokenUsingPinWithPermissions)
             } else if self.option_enabled("clientPin") {
                 // !pinUvAuthToken
                 debug!("getPinToken");
-                return Some(Ctap2UserVerificationOperation::GetPinToken);
+                Some(Ctap2UserVerificationOperation::GetPinToken)
             } else {
                 debug!("No UV and no PIN (e.g. maybe UV was blocked and no PIN available)");
-                return None;
+                None
             }
         }
     }
