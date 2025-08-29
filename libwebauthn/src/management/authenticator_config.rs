@@ -199,4 +199,8 @@ impl Ctap2UserVerifiableRequest for Ctap2AuthenticatorConfigRequest {
     fn handle_legacy_preview(&mut self, _info: &Ctap2GetInfoResponse) {
         // No-op
     }
+
+    fn needs_shared_secret(&self, _get_info_response: &Ctap2GetInfoResponse) -> bool {
+        false
+    }
 }

@@ -318,4 +318,8 @@ impl Ctap2UserVerifiableRequest for Ctap2CredentialManagementRequest {
             }
         }
     }
+
+    fn needs_shared_secret(&self, _get_info_response: &Ctap2GetInfoResponse) -> bool {
+        false
+    }
 }

@@ -193,7 +193,7 @@ pub enum MakeCredentialHmacOrPrfInput {
     // },
 }
 
-#[derive(Debug, Default, Clone, Serialize)]
+#[derive(Debug, Default, Clone, Serialize, PartialEq)]
 pub struct MakeCredentialPrfOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
@@ -315,10 +315,7 @@ impl DowngradableRequest<RegisterRequest> for MakeCredentialRequest {
         }
 
         // Options must not include "rk" set to true.
-        if matches!(
-            self.resident_key,
-            Some(ResidentKeyRequirement::Required)
-        ) {
+        if matches!(self.resident_key, Some(ResidentKeyRequirement::Required)) {
             debug!("Not downgradable: request requires resident key");
             return false;
         }

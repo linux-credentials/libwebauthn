@@ -96,12 +96,39 @@ impl Ctap2AuthTokenPermission {
 
 #[derive(Debug, Clone)]
 pub struct AuthTokenData {
-    pub shared_secret: Vec<u8>,
-    pub permission: Ctap2AuthTokenPermission,
-    pub pin_uv_auth_token: Vec<u8>,
     pub protocol_version: Ctap2PinUvAuthProtocol,
     pub key_agreement: PublicKey,
+    pub shared_secret: Vec<u8>,
     pub uv_operation: Ctap2UserVerificationOperation,
+    pub permission: Option<Ctap2AuthTokenPermission>,
+    pub pin_uv_auth_token: Option<Vec<u8>>,
+}
+
+impl AuthTokenData {
+    pub fn new(
+        shared_secret: Vec<u8>,
+        protocol_version: Ctap2PinUvAuthProtocol,
+        key_agreement: PublicKey,
+        uv_operation: Ctap2UserVerificationOperation,
+    ) -> Self {
+        Self {
+            protocol_version,
+            key_agreement,
+            shared_secret,
+            uv_operation,
+            permission: None,
+            pin_uv_auth_token: None,
+        }
+    }
+
+    pub fn store_auth_token(
+        &mut self,
+        permission: Ctap2AuthTokenPermission,
+        pin_uv_auth_token: Vec<u8>,
+    ) {
+        self.permission = Some(permission);
+        self.pin_uv_auth_token = Some(pin_uv_auth_token);
+    }
 }
 
 #[async_trait]
@@ -111,8 +138,10 @@ pub trait Ctap2AuthTokenStore {
     fn clear_uv_auth_token_store(&mut self);
     fn get_uv_auth_token(&self, requested_permission: &Ctap2AuthTokenPermission) -> Option<&[u8]> {
         if let Some(stored_data) = self.get_auth_data() {
-            if stored_data.permission.contains(requested_permission) {
-                return Some(&stored_data.pin_uv_auth_token);
+            if let Some(permission) = &stored_data.permission {
+                if permission.contains(requested_permission) {
+                    return stored_data.pin_uv_auth_token.as_deref();
+                }
             }
         }
         None
