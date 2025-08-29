@@ -6,7 +6,7 @@ use tracing::debug;
 
 use super::{Ctap2CredentialType, Ctap2UserVerificationOperation};
 
-#[derive(Debug, Clone, DeserializeIndexed)]
+#[derive(Debug, Clone, DeserializeIndexed, Default)]
 pub struct Ctap2GetInfoResponse {
     /// versions (0x01)
     #[serde(index = 0x01)]
@@ -230,6 +230,17 @@ impl Ctap2GetInfoResponse {
                 return Some(Ctap2UserVerificationOperation::ClientPinOnlyForSharedSecret);
             }
 
+            // clientPin is not enabled (not supported or Pin not set) and
+            // UV + pinUvAuthToken is supported, but UV is blocked (maybe too many retries)
+            // or it is not set yet.
+            // We can still use it for establishing a shared secret, but not for creating a pinUvAuthToken
+            if !self.option_enabled("clientPin")
+                && self.option_exists("uv")
+                && self.option_enabled("pinUvAuthToken")
+            {
+                return Some(Ctap2UserVerificationOperation::ClientPinOnlyForSharedSecret);
+            }
+
             // If we do have a PIN, check if we need to use legacy getPinToken or new getPinUvAuthToken..-command
             if self.option_enabled("pinUvAuthToken") {
                 assert!(self.option_enabled("clientPin"));
@@ -244,5 +255,320 @@ impl Ctap2GetInfoResponse {
                 None
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::collections::HashMap;
+
+    use crate::proto::ctap2::Ctap2UserVerificationOperation;
+
+    use super::Ctap2GetInfoResponse;
+
+    fn create_info(options: &[(&str, bool)]) -> Ctap2GetInfoResponse {
+        let mut info = Ctap2GetInfoResponse::default();
+        let mut input = HashMap::new();
+        for (key, val) in options {
+            input.insert(key.to_string(), *val);
+        }
+        info.options = Some(input);
+        info
+    }
+
+    #[test]
+    fn device_no_options() {
+        let info = Ctap2GetInfoResponse::default();
+        assert!(!info.supports_fido_2_1());
+        assert!(!info.supports_credential_management());
+        assert!(!info.supports_bio_enrollment());
+        assert!(!info.is_uv_protected());
+        assert!(!info.can_establish_shared_secret());
+        assert_eq!(info.uv_operation(false), None);
+        assert_eq!(info.uv_operation(true), None);
+    }
+
+    #[test]
+    fn device_empty_options() {
+        let info = create_info(&[]);
+        assert!(!info.supports_fido_2_1());
+        assert!(!info.supports_credential_management());
+        assert!(!info.supports_bio_enrollment());
+        assert!(!info.is_uv_protected());
+        assert!(!info.can_establish_shared_secret());
+        assert_eq!(info.uv_operation(false), None);
+        assert_eq!(info.uv_operation(true), None);
+    }
+
+    #[test]
+    fn device_legacy_uv() {
+        // Support legacy UV of CTAP2.0
+        // Meaning: "uv" option is supported, but not clientPin or pinUvAuthToken
+        // So, it supports built in UV, but no way to establish a pinUvAuthToken or shared secret
+        let info = create_info(&[("uv", true)]);
+        assert!(info.is_uv_protected());
+        assert!(!info.can_establish_shared_secret());
+        assert_eq!(
+            info.uv_operation(false),
+            Some(Ctap2UserVerificationOperation::LegacyUv)
+        );
+        // If UV is blocked, no other option is available
+        assert_eq!(info.uv_operation(true), None);
+    }
+
+    #[test]
+    fn device_legacy_uv_but_not_set() {
+        // Support legacy UV of CTAP2.0, but not activated yet
+        let info = create_info(&[("uv", false)]);
+        // We are currently NOT protected
+        assert!(!info.is_uv_protected());
+        assert!(!info.can_establish_shared_secret());
+        assert_eq!(info.uv_operation(false), None);
+        assert_eq!(info.uv_operation(true), None);
+    }
+
+    #[test]
+    fn device_ctap20_pin_only() {
+        // Support CTAP 2.0 PIN operation
+        // Meaning: "clientPin", but not "pinUvAuthToken"
+        let info = create_info(&[("clientPin", true)]);
+        assert!(info.is_uv_protected());
+        assert!(info.can_establish_shared_secret());
+        assert_eq!(
+            info.uv_operation(false),
+            Some(Ctap2UserVerificationOperation::GetPinToken)
+        );
+        assert_eq!(
+            info.uv_operation(true),
+            Some(Ctap2UserVerificationOperation::GetPinToken)
+        );
+    }
+
+    #[test]
+    fn device_ctap20_pin_only_but_not_set() {
+        // Support CTAP 2.0 PIN operation
+        // Meaning: "clientPin", but not "pinUvAuthToken", but the Pin is not set
+        let info = create_info(&[("clientPin", false)]);
+        // We are currently NOT protected
+        assert!(!info.is_uv_protected());
+        // We CAN establish a shared secret this way
+        assert!(info.can_establish_shared_secret());
+        assert_eq!(
+            info.uv_operation(false),
+            Some(Ctap2UserVerificationOperation::ClientPinOnlyForSharedSecret)
+        );
+        assert_eq!(
+            info.uv_operation(true),
+            Some(Ctap2UserVerificationOperation::ClientPinOnlyForSharedSecret)
+        );
+    }
+
+    #[test]
+    fn device_ctap20_pin_and_uv() {
+        // Support CTAP 2.0 PIN operation and CTAP 2.0 UV
+        // Meaning: "clientPin" and "uv"
+        let info = create_info(&[("clientPin", true), ("uv", true)]);
+        assert!(info.is_uv_protected());
+        assert!(info.can_establish_shared_secret());
+        assert_eq!(
+            info.uv_operation(false),
+            Some(Ctap2UserVerificationOperation::LegacyUv)
+        );
+        assert_eq!(
+            info.uv_operation(true),
+            Some(Ctap2UserVerificationOperation::GetPinToken)
+        );
+    }
+
+    #[test]
+    fn device_ctap20_pin_and_uv_but_only_pin_set() {
+        // Support CTAP 2.0 PIN operation and CTAP 2.0 UV
+        // Meaning: "clientPin" and "uv"
+        let info = create_info(&[("clientPin", true), ("uv", false)]);
+        assert!(info.is_uv_protected());
+        assert!(info.can_establish_shared_secret());
+        assert_eq!(
+            info.uv_operation(false),
+            Some(Ctap2UserVerificationOperation::GetPinToken)
+        );
+        assert_eq!(
+            info.uv_operation(true),
+            Some(Ctap2UserVerificationOperation::GetPinToken)
+        );
+    }
+
+    #[test]
+    fn device_ctap20_pin_and_uv_but_only_uv_set() {
+        // Support CTAP 2.0 PIN operation and CTAP 2.0 UV
+        // Meaning: "clientPin" and "uv"
+        let info = create_info(&[("clientPin", false), ("uv", true)]);
+        assert!(info.is_uv_protected());
+        assert!(info.can_establish_shared_secret());
+        assert_eq!(
+            info.uv_operation(false),
+            Some(Ctap2UserVerificationOperation::LegacyUv)
+        );
+        assert_eq!(
+            info.uv_operation(true),
+            Some(Ctap2UserVerificationOperation::ClientPinOnlyForSharedSecret)
+        );
+    }
+
+    #[test]
+    fn device_ctap20_pin_and_uv_but_neither_set() {
+        // Support CTAP 2.0 PIN operation and CTAP 2.0 UV
+        // Meaning: "clientPin" and "uv"
+        let info = create_info(&[("clientPin", false), ("uv", false)]);
+        // We are currently NOT protected
+        assert!(!info.is_uv_protected());
+        // But we should be able to establish a shared secret
+        assert!(info.can_establish_shared_secret());
+        assert_eq!(
+            info.uv_operation(false),
+            Some(Ctap2UserVerificationOperation::ClientPinOnlyForSharedSecret)
+        );
+        assert_eq!(
+            info.uv_operation(true),
+            Some(Ctap2UserVerificationOperation::ClientPinOnlyForSharedSecret)
+        );
+    }
+
+    #[test]
+    fn device_ctap21_pin_only() {
+        // Support CTAP 2.1 PIN operation
+        // Meaning: "clientPin" and "pinUvAuthToken"
+        let info = create_info(&[("clientPin", true), ("pinUvAuthToken", true)]);
+        assert!(info.is_uv_protected());
+        assert!(info.can_establish_shared_secret());
+        assert_eq!(
+            info.uv_operation(false),
+            Some(Ctap2UserVerificationOperation::GetPinUvAuthTokenUsingPinWithPermissions)
+        );
+        assert_eq!(
+            info.uv_operation(true),
+            Some(Ctap2UserVerificationOperation::GetPinUvAuthTokenUsingPinWithPermissions)
+        );
+    }
+
+    #[test]
+    fn device_ctap21_uv_only() {
+        // Support CTAP 2.1 UV operation
+        // Meaning: "uv" and "pinUvAuthToken"
+        let info = create_info(&[("uv", true), ("pinUvAuthToken", true)]);
+        assert!(info.is_uv_protected());
+        assert!(info.can_establish_shared_secret());
+        assert_eq!(
+            info.uv_operation(false),
+            Some(Ctap2UserVerificationOperation::GetPinUvAuthTokenUsingUvWithPermissions)
+        );
+        assert_eq!(
+            info.uv_operation(true),
+            Some(Ctap2UserVerificationOperation::ClientPinOnlyForSharedSecret)
+        );
+    }
+
+    #[test]
+    fn device_ctap21_pin_and_uv() {
+        // Support CTAP 2.1 PIN+UV operation
+        // Meaning: "clientPin", "uv" and "pinUvAuthToken"
+        let info = create_info(&[("clientPin", true), ("uv", true), ("pinUvAuthToken", true)]);
+        assert!(info.is_uv_protected());
+        assert!(info.can_establish_shared_secret());
+        assert_eq!(
+            info.uv_operation(false),
+            Some(Ctap2UserVerificationOperation::GetPinUvAuthTokenUsingUvWithPermissions)
+        );
+        assert_eq!(
+            info.uv_operation(true),
+            Some(Ctap2UserVerificationOperation::GetPinUvAuthTokenUsingPinWithPermissions)
+        );
+    }
+
+    #[test]
+    fn device_ctap21_pin_only_but_not_set() {
+        // Support CTAP 2.1 PIN operation
+        // Meaning: "clientPin" and "pinUvAuthToken", but Pin not set
+        let info = create_info(&[("clientPin", false), ("pinUvAuthToken", true)]);
+        // We are currently NOT protected
+        assert!(!info.is_uv_protected());
+        // But we should be able to establish a shared secret
+        assert!(info.can_establish_shared_secret());
+        assert_eq!(
+            info.uv_operation(false),
+            Some(Ctap2UserVerificationOperation::ClientPinOnlyForSharedSecret)
+        );
+        assert_eq!(
+            info.uv_operation(true),
+            Some(Ctap2UserVerificationOperation::ClientPinOnlyForSharedSecret)
+        );
+    }
+
+    #[test]
+    fn device_ctap21_uv_only_but_not_set() {
+        // Support CTAP 2.1 UV operation
+        let info = create_info(&[("uv", false), ("pinUvAuthToken", true)]);
+        // We are currently NOT protected
+        assert!(!info.is_uv_protected());
+        // But we should be able to establish a shared secret
+        assert!(info.can_establish_shared_secret());
+        assert_eq!(
+            info.uv_operation(false),
+            Some(Ctap2UserVerificationOperation::ClientPinOnlyForSharedSecret)
+        );
+        assert_eq!(
+            info.uv_operation(true),
+            Some(Ctap2UserVerificationOperation::ClientPinOnlyForSharedSecret)
+        );
+    }
+
+    #[test]
+    fn device_ctap21_pin_and_uv_but_only_pin_set() {
+        let info = create_info(&[("clientPin", true), ("uv", false), ("pinUvAuthToken", true)]);
+        assert!(info.is_uv_protected());
+        assert!(info.can_establish_shared_secret());
+        assert_eq!(
+            info.uv_operation(false),
+            Some(Ctap2UserVerificationOperation::GetPinUvAuthTokenUsingPinWithPermissions)
+        );
+        assert_eq!(
+            info.uv_operation(true),
+            Some(Ctap2UserVerificationOperation::GetPinUvAuthTokenUsingPinWithPermissions)
+        );
+    }
+
+    #[test]
+    fn device_ctap21_pin_and_uv_but_only_uv_set() {
+        let info = create_info(&[("clientPin", false), ("uv", true), ("pinUvAuthToken", true)]);
+        assert!(info.is_uv_protected());
+        assert!(info.can_establish_shared_secret());
+        assert_eq!(
+            info.uv_operation(false),
+            Some(Ctap2UserVerificationOperation::GetPinUvAuthTokenUsingUvWithPermissions)
+        );
+        assert_eq!(
+            info.uv_operation(true),
+            Some(Ctap2UserVerificationOperation::ClientPinOnlyForSharedSecret)
+        );
+    }
+
+    #[test]
+    fn device_ctap21_pin_and_uv_but_neither_set() {
+        let info = create_info(&[
+            ("clientPin", false),
+            ("uv", false),
+            ("pinUvAuthToken", true),
+        ]);
+        // We are currently NOT protected
+        assert!(!info.is_uv_protected());
+        // But we should be able to establish a shared secret
+        assert!(info.can_establish_shared_secret());
+        assert_eq!(
+            info.uv_operation(false),
+            Some(Ctap2UserVerificationOperation::ClientPinOnlyForSharedSecret)
+        );
+        assert_eq!(
+            info.uv_operation(true),
+            Some(Ctap2UserVerificationOperation::ClientPinOnlyForSharedSecret)
+        );
     }
 }
