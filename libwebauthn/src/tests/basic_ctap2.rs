@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crate::ops::webauthn::GetAssertionRequest;
+use crate::ops::webauthn::{GetAssertionRequest, GetAssertionRequestExtensions};
 use crate::proto::ctap2::Ctap2PublicKeyCredentialDescriptor;
 use crate::transport::hid::get_virtual_device;
 use crate::transport::{Channel, Device};
@@ -66,7 +66,7 @@ async fn test_webauthn_basic_ctap2() {
         hash: Vec::from(challenge),
         allow: vec![credential],
         user_verification: UserVerificationRequirement::Discouraged,
-        extensions: None,
+        extensions: GetAssertionRequestExtensions::default(),
         timeout: TIMEOUT,
     };
 
