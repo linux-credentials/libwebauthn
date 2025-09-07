@@ -209,6 +209,8 @@ pub trait Ctap2UserVerifiableRequest {
     fn permissions_rpid(&self) -> Option<&str>;
     fn can_use_uv(&self, info: &Ctap2GetInfoResponse) -> bool;
     fn handle_legacy_preview(&mut self, info: &Ctap2GetInfoResponse);
+    /// We need to establish a shared secret, even if no PIN or UV is set on the device
+    fn needs_shared_secret(&self, info: &Ctap2GetInfoResponse) -> bool;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -216,7 +218,8 @@ pub enum Ctap2UserVerificationOperation {
     GetPinUvAuthTokenUsingUvWithPermissions,
     GetPinUvAuthTokenUsingPinWithPermissions,
     GetPinToken,
-    None,
+    ClientPinOnlyForSharedSecret,
+    LegacyUv,
 }
 
 #[cfg(test)]

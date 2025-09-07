@@ -24,6 +24,7 @@ pub(crate) enum UsedPinUvAuthToken {
     FromStorage,
     NewlyCalculated,
     LegacyUV,
+    SharedSecretOnly,
     None,
 }
 
@@ -87,30 +88,46 @@ where
 
     let rp_uv_preferred = user_verification.is_preferred();
     let dev_uv_protected = get_info_response.is_uv_protected();
+    let can_establish_shared_secret = get_info_response.can_establish_shared_secret();
+    let needs_shared_secret = ctap2_request.needs_shared_secret(&get_info_response);
     let uv = rp_uv_preferred || dev_uv_protected;
-    debug!(%rp_uv_preferred, %dev_uv_protected, %uv, "Checking if user verification is required");
 
-    if !uv {
-        debug!("User verification not requested by either RP nor authenticator. Ignoring.");
-        return Ok(UsedPinUvAuthToken::None);
-    }
+    debug!(%rp_uv_preferred, %dev_uv_protected, %uv, %needs_shared_secret, %can_establish_shared_secret, "Checking if user verification is required");
+    // If we do not need to create a shared secret, we can error out here early
+    if !needs_shared_secret {
+        if !uv {
+            debug!("User verification not requested by either RP nor authenticator. Ignoring.");
+            return Ok(UsedPinUvAuthToken::None);
+        }
 
-    if !dev_uv_protected && user_verification.is_required() {
-        error!(
-            "Request requires user verification, but device user verification is not available."
-        );
-        return Err(Error::Ctap(CtapError::PINNotSet));
-    };
+        if !dev_uv_protected && user_verification.is_required() {
+            error!(
+                "Request requires user verification, but device user verification is not available."
+            );
+            return Err(Error::Ctap(CtapError::PINNotSet));
+        };
 
-    if !dev_uv_protected && user_verification.is_preferred() {
-        warn!("User verification is preferred, but not device user verification is not available. Ignoring.");
-        return Ok(UsedPinUvAuthToken::None);
+        if !dev_uv_protected && user_verification.is_preferred() {
+            warn!("User verification is preferred, but device user verification is not available. Ignoring.");
+            return Ok(UsedPinUvAuthToken::None);
+        }
+    } else {
+        // We need a shared secret, but the device does not support any form of query-able UV, so we can't establish a
+        // shared secret that is needed
+        if !can_establish_shared_secret {
+            warn!(
+                "Request requires a shared secret, but device is not capable of establishing one. Skipping UV."
+            );
+            // We treat this currently as a non-fatal error as this is only for HMAC-calculations, which
+            // we can drop
+            return Ok(UsedPinUvAuthToken::None);
+        }
     }
 
     let skip_uv = !ctap2_request.can_use_uv(&get_info_response);
 
     let mut uv_blocked = false;
-    let (uv_proto, token_response, shared_secret, public_key, uv_operation) = loop {
+    let (uv_proto, shared_secret, public_key, uv_operation, token_response) = loop {
         let uv_operation = get_info_response
             .uv_operation(uv_blocked || skip_uv)
             .ok_or({
@@ -120,10 +137,14 @@ where
                     Error::Platform(PlatformError::NoUvAvailable)
                 }
             })?;
-        if let Ctap2UserVerificationOperation::None = uv_operation {
+        if let Ctap2UserVerificationOperation::LegacyUv = uv_operation {
             debug!("No client operation. Setting deprecated request options.uv flag to true.");
             ctap2_request.ensure_uv_set();
-            return Ok(UsedPinUvAuthToken::LegacyUV);
+            // If the device is UV protected, but has no fitting operation, we have to use the legacy UV option.
+            // If we don't have to establish a shared secret, we can return right here
+            if !needs_shared_secret {
+                return Ok(UsedPinUvAuthToken::LegacyUV);
+            }
         }
 
         let Some(uv_proto) = select_uv_proto(&get_info_response).await else {
@@ -134,7 +155,8 @@ where
         // For operations that include a PIN, we want to fetch one before obtaining a shared secret.
         // This prevents the shared secret from expiring whilst we wait for the user to enter a PIN.
         let pin = match uv_operation {
-            Ctap2UserVerificationOperation::None => unreachable!(),
+            Ctap2UserVerificationOperation::LegacyUv
+            | Ctap2UserVerificationOperation::ClientPinOnlyForSharedSecret => None,
             Ctap2UserVerificationOperation::GetPinToken
             | Ctap2UserVerificationOperation::GetPinUvAuthTokenUsingPinWithPermissions => {
                 let reason = if uv_blocked {
@@ -168,7 +190,13 @@ where
         // Then the platform obtains a pinUvAuthToken from the authenticator, with the mc (and likely also with the ga)
         // permission (see "pre-flight", mentioned above), using the selected operation.
         let token_request = match uv_operation {
-            Ctap2UserVerificationOperation::None => unreachable!(),
+            // We can't create a pinUvAuthToken with these two options, because the device doesn't support it
+            // But we have the shared secret, which we will store for later usage (mostly for hmac calculation)
+            Ctap2UserVerificationOperation::LegacyUv
+            | Ctap2UserVerificationOperation::ClientPinOnlyForSharedSecret => {
+                break (uv_proto, shared_secret, public_key, uv_operation, None)
+            }
+
             Ctap2UserVerificationOperation::GetPinToken => {
                 Ctap2ClientPinRequest::new_get_pin_token(
                     uv_proto.version(),
@@ -200,7 +228,7 @@ where
 
         match channel.ctap2_client_pin(&token_request, timeout).await {
             Ok(t) => {
-                break (uv_proto, t, shared_secret, public_key, uv_operation);
+                break (uv_proto, shared_secret, public_key, uv_operation, Some(t));
             }
             // Internal retry, because we otherwise can't fall back to PIN, if the UV is blocked
             Err(Error::Ctap(CtapError::UvBlocked)) => {
@@ -236,36 +264,68 @@ where
         }
     };
 
-    let Some(encrypted_pin_uv_auth_token) = token_response.pin_uv_auth_token else {
-        error!("Client PIN response did not include a PIN UV auth token");
-        return Err(Error::Ctap(CtapError::Other));
-    };
+    // Package the results, based on what we did
+    match uv_operation {
+        // We only established a shared secret
+        Ctap2UserVerificationOperation::ClientPinOnlyForSharedSecret
+        | Ctap2UserVerificationOperation::LegacyUv => {
+            // Storing shared secret for later (re)use, such as calculating HMAC secrects, etc.
+            let auth_token_data = AuthTokenData {
+                shared_secret: shared_secret.to_vec(),
+                permission: None,
+                pin_uv_auth_token: None,
+                protocol_version: uv_proto.version(),
+                key_agreement: public_key,
+                uv_operation,
+            };
+            channel.store_auth_data(auth_token_data);
+            if uv_operation == Ctap2UserVerificationOperation::LegacyUv {
+                Ok(UsedPinUvAuthToken::LegacyUV)
+            } else {
+                Ok(UsedPinUvAuthToken::SharedSecretOnly)
+            }
+        }
 
-    let uv_auth_token = uv_proto.decrypt(&shared_secret, &encrypted_pin_uv_auth_token)?;
+        // We established a full pinUvAuthToken
+        Ctap2UserVerificationOperation::GetPinUvAuthTokenUsingUvWithPermissions
+        | Ctap2UserVerificationOperation::GetPinUvAuthTokenUsingPinWithPermissions
+        | Ctap2UserVerificationOperation::GetPinToken => {
+            {
+                let token_response = token_response.unwrap();
+                let Some(encrypted_pin_uv_auth_token) = token_response.pin_uv_auth_token else {
+                    error!("Client PIN response did not include a PIN UV auth token");
+                    return Err(Error::Ctap(CtapError::Other));
+                };
 
-    let token_identifier = Ctap2AuthTokenPermission::new(
-        uv_proto.version(),
-        ctap2_request.permissions(),
-        ctap2_request.permissions_rpid(),
-    );
+                let uv_auth_token =
+                    uv_proto.decrypt(&shared_secret, &encrypted_pin_uv_auth_token)?;
 
-    // Storing auth token for later (re)use, or for calculating HMAC secrects, etc.
-    let auth_token_data = AuthTokenData {
-        shared_secret: shared_secret.to_vec(),
-        permission: token_identifier,
-        pin_uv_auth_token: uv_auth_token.clone(),
-        protocol_version: uv_proto.version(),
-        key_agreement: public_key,
-        uv_operation,
-    };
-    channel.store_auth_data(auth_token_data);
+                let token_identifier = Ctap2AuthTokenPermission::new(
+                    uv_proto.version(),
+                    ctap2_request.permissions(),
+                    ctap2_request.permissions_rpid(),
+                );
 
-    // If successful, the platform creates the pinUvAuthParam parameter by calling
-    // authenticate(pinUvAuthToken, clientDataHash), and goes to Step 1.1.1.
-    // Sets the pinUvAuthProtocol parameter to the value as selected when it obtained the shared secret.
-    ctap2_request.calculate_and_set_uv_auth(&uv_proto, uv_auth_token.as_slice());
+                // Storing auth token for later (re)use
+                let auth_token_data = AuthTokenData {
+                    shared_secret: shared_secret.to_vec(),
+                    permission: Some(token_identifier),
+                    pin_uv_auth_token: Some(uv_auth_token.clone()),
+                    protocol_version: uv_proto.version(),
+                    key_agreement: public_key,
+                    uv_operation,
+                };
+                channel.store_auth_data(auth_token_data);
 
-    Ok(UsedPinUvAuthToken::NewlyCalculated)
+                // If successful, the platform creates the pinUvAuthParam parameter by calling
+                // authenticate(pinUvAuthToken, clientDataHash), and goes to Step 1.1.1.
+                // Sets the pinUvAuthProtocol parameter to the value as selected when it obtained the shared secret.
+                ctap2_request.calculate_and_set_uv_auth(&uv_proto, uv_auth_token.as_slice());
+
+                Ok(UsedPinUvAuthToken::NewlyCalculated)
+            }
+        }
+    }
 }
 
 pub(crate) async fn obtain_shared_secret<C>(

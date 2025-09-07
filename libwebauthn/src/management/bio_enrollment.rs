@@ -335,4 +335,8 @@ impl Ctap2UserVerifiableRequest for Ctap2BioEnrollmentRequest {
             }
         }
     }
+
+    fn needs_shared_secret(&self, _get_info_response: &Ctap2GetInfoResponse) -> bool {
+        false
+    }
 }

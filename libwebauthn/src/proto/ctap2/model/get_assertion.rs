@@ -441,6 +441,20 @@ impl Ctap2UserVerifiableRequest for Ctap2GetAssertionRequest {
     fn handle_legacy_preview(&mut self, _info: &Ctap2GetInfoResponse) {
         // No-op
     }
+
+    fn needs_shared_secret(&self, get_info_response: &Ctap2GetInfoResponse) -> bool {
+        let hmac_supported = get_info_response
+            .extensions
+            .as_ref()
+            .map(|e| e.contains(&String::from("hmac-secret")))
+            .unwrap_or_default();
+        let hmac_requested = self
+            .extensions
+            .as_ref()
+            .map(|e| !matches!(e.hmac_or_prf, GetAssertionHmacOrPrfInput::None))
+            .unwrap_or_default();
+        hmac_requested && hmac_supported
+    }
 }
 
 impl Ctap2GetAssertionResponse {
