@@ -1,5 +1,6 @@
 mod base64url;
 pub mod create;
+pub mod get;
 pub mod rpid;
 
 pub use base64url::Base64UrlString;
