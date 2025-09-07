@@ -1,20 +1,16 @@
-use std::convert::TryInto;
 use std::error::Error;
 use std::io::{self, Write};
 use std::time::Duration;
 
 use libwebauthn::UvUpdate;
-use rand::{thread_rng, Rng};
 use text_io::read;
 use tokio::sync::broadcast::Receiver;
 use tracing_subscriber::{self, EnvFilter};
 
 use libwebauthn::ops::webauthn::{
-    GetAssertionRequest, GetAssertionRequestExtensions, MakeCredentialRequest, RelyingPartyId,
-    UserVerificationRequirement, WebAuthnIDL as _,
+    GetAssertionRequest, MakeCredentialRequest, RelyingPartyId, WebAuthnIDL as _,
 };
 use libwebauthn::pin::PinRequestReason;
-use libwebauthn::proto::ctap2::Ctap2PublicKeyCredentialDescriptor;
 use libwebauthn::transport::hid::list_devices;
 use libwebauthn::transport::{Channel as _, Device};
 use libwebauthn::webauthn::{Error as WebAuthnError, WebAuthn};
@@ -136,17 +132,18 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         .unwrap();
         println!("WebAuthn MakeCredential response: {:?}", response);
 
-        let challenge: [u8; 32] = thread_rng().gen();
-        let credential: Ctap2PublicKeyCredentialDescriptor =
-            (&response.authenticator_data).try_into().unwrap();
-        let get_assertion = GetAssertionRequest {
-            relying_party_id: "example.org".to_owned(),
-            hash: Vec::from(challenge),
-            allow: vec![credential],
-            user_verification: UserVerificationRequirement::Discouraged,
-            extensions: GetAssertionRequestExtensions::default(),
-            timeout: TIMEOUT,
-        };
+        let request_json = r#"
+                {
+                    "challenge": "Y3JlZGVudGlhbHMtZm9yLWxpbnV4L2xpYndlYmF1dGhu",
+                    "timeout": 30000,
+                    "rpId": "example.org",
+                    "userVerification": "discouraged"
+                }
+                "#;
+        let get_assertion: GetAssertionRequest =
+            GetAssertionRequest::from_json(&rpid, request_json)
+                .expect("Failed to parse request JSON");
+        println!("WebAuthn GetAssertion request: {:?}", get_assertion);
 
         let response = loop {
             match channel.webauthn_get_assertion(&get_assertion).await {
