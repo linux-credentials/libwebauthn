@@ -469,6 +469,7 @@ mod tests {
 
     use crate::ops::webauthn::MakeCredentialRequest;
     use crate::ops::webauthn::RelyingPartyId;
+    use crate::proto::ctap2::Ctap2PublicKeyCredentialType;
 
     use super::*;
 
@@ -537,11 +538,102 @@ mod tests {
         serde_json::to_string(&v).unwrap()
     }
 
+    fn test_request_from_json_required_field(field: &str) {
+        let rpid = RelyingPartyId::try_from("example.org").unwrap();
+        let req_json = json_field_rm(REQUEST_BASE_JSON, field);
+
+        let result = MakeCredentialRequest::from_json(&rpid, &req_json);
+        assert!(matches!(
+            result,
+            Err(MakeCredentialRequestParsingError::EncodingError(_))
+        ));
+    }
+
     #[test]
     fn test_request_from_json_base() {
         let rpid = RelyingPartyId::try_from("example.org").unwrap();
         let req: MakeCredentialRequest =
             MakeCredentialRequest::from_json(&rpid, REQUEST_BASE_JSON).unwrap();
         assert_eq!(req, request_base());
+    }
+
+    #[test]
+    fn test_request_from_json_require_rp() {
+        test_request_from_json_required_field("rp");
+    }
+
+    #[test]
+    fn test_request_from_json_require_user() {
+        test_request_from_json_required_field("user");
+    }
+
+    #[test]
+    fn test_request_from_json_require_pub_key_cred_params() {
+        test_request_from_json_required_field("pubKeyCredParams");
+    }
+
+    #[test]
+    fn test_request_from_json_require_challenge() {
+        test_request_from_json_required_field("challenge");
+    }
+
+    #[test]
+    #[ignore] // FIXME(#134): Add validation for challenges
+    fn test_request_from_json_challenge_empty() {
+        let rpid = RelyingPartyId::try_from("example.org").unwrap();
+        let req_json: String = json_field_rm(REQUEST_BASE_JSON, "challenge");
+        let req_json = json_field_add(&req_json, "challenge", r#""""#);
+
+        let result = MakeCredentialRequest::from_json(&rpid, &req_json);
+        assert!(matches!(
+            result,
+            Err(MakeCredentialRequestParsingError::EncodingError(_))
+        ));
+    }
+
+    #[test]
+    fn test_request_from_json_prf_extension() {
+        let rpid = RelyingPartyId::try_from("example.org").unwrap();
+        let req_json = json_field_add(
+            REQUEST_BASE_JSON,
+            "extensions",
+            r#"{"prf": {"eval": {"first": "second"}}}"#,
+        );
+
+        let req: MakeCredentialRequest =
+            MakeCredentialRequest::from_json(&rpid, &req_json).unwrap();
+        assert!(matches!(
+            req.extensions,
+            Some(MakeCredentialsRequestExtensions { prf: Some(_), .. })
+        ));
+    }
+
+    #[test]
+    fn test_request_from_json_unknown_pub_key_cred_params() {
+        let rpid = RelyingPartyId::try_from("example.org").unwrap();
+        let req_json = json_field_add(
+            REQUEST_BASE_JSON,
+            "pubKeyCredParams",
+            r#"[{"type": "something", "alg": -12345}]"#,
+        );
+        let req: MakeCredentialRequest =
+            MakeCredentialRequest::from_json(&rpid, &req_json).unwrap();
+        assert_eq!(
+            req.algorithms,
+            vec![Ctap2CredentialType {
+                algorithm: Ctap2COSEAlgorithmIdentifier::Unknown, // FIXME(#148): Passhtrough unknown algorithms
+                public_key_type: Ctap2PublicKeyCredentialType::Unknown,
+            }]
+        );
+    }
+
+    #[test]
+    fn test_request_from_json_default_timeout() {
+        let rpid = RelyingPartyId::try_from("example.org").unwrap();
+        let req_json = json_field_rm(REQUEST_BASE_JSON, "timeout");
+
+        let req: MakeCredentialRequest =
+            MakeCredentialRequest::from_json(&rpid, &req_json).unwrap();
+        assert_eq!(req.timeout, DEFAULT_TIMEOUT);
     }
 }
