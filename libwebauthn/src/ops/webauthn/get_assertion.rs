@@ -7,8 +7,15 @@ use tracing::{debug, error, trace};
 use crate::{
     fido::AuthenticatorData,
     ops::webauthn::{
-        idl::{FromInnerModel, JsonError},
-        Base64UrlString, WebAuthnIDL,
+        client_data::ClientData,
+        idl::{
+            get::{
+                HmacGetSecretInputJson, LargeBlobInputJson, PrfInputJson,
+                PublicKeyCredentialRequestOptionsJSON,
+            },
+            FromInnerModel, JsonError,
+        },
+        Operation, WebAuthnIDL,
     },
     pin::PinUvAuthProtocol,
     proto::ctap2::{
@@ -22,7 +29,7 @@ use super::{DowngradableRequest, RelyingPartyId, SignRequest, UserVerificationRe
 
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 
-#[derive(Debug, Default, Clone, Serialize)]
+#[derive(Debug, Default, Clone, Serialize, PartialEq)]
 pub struct PRFValue {
     #[serde(with = "serde_bytes")]
     pub first: [u8; 32],
@@ -30,7 +37,7 @@ pub struct PRFValue {
     pub second: Option<[u8; 32]>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct GetAssertionRequest {
     pub relying_party_id: String,
     pub hash: Vec<u8>,
@@ -67,22 +74,6 @@ impl WebAuthnIDL<GetAssertionRequestParsingError> for GetAssertionRequest {
     sequence<DOMString>                                     hints = [];
     AuthenticationExtensionsClientInputsJSON                extensions;
 }; */
-
-#[derive(Deserialize, Debug, Clone)]
-pub struct PublicKeyCredentialRequestOptionsJSON {
-    pub challenge: Base64UrlString,
-    pub timeout: Option<u32>,
-    #[serde(rename = "rpId")]
-    pub relying_party_id: Option<String>,
-    #[serde(rename = "allowCredentials")]
-    #[serde(default)]
-    pub allow_credentials: Vec<Ctap2PublicKeyCredentialDescriptor>,
-    #[serde(rename = "userVerification")]
-    pub uv_requirement: UserVerificationRequirement,
-    #[serde(default)]
-    pub hints: Vec<String>,
-    pub extensions: Option<GetAssertionRequestExtensionsJSON>,
-}
 
 impl FromInnerModel<PublicKeyCredentialRequestOptionsJSON, GetAssertionRequestParsingError>
     for GetAssertionRequest
@@ -123,13 +114,24 @@ impl FromInnerModel<PublicKeyCredentialRequestOptionsJSON, GetAssertionRequestPa
 
         let timeout: Duration = inner
             .timeout
-            .map(|s| Duration::from_secs(s.into()))
+            .map(|s| Duration::from_millis(s.into()))
             .unwrap_or(DEFAULT_TIMEOUT);
+
+        let client_data_json = ClientData {
+            operation: Operation::GetAssertion,
+            challenge: inner.challenge.to_vec(),
+            origin: rpid.to_string(),
+            cross_origin: None,
+        };
 
         Ok(GetAssertionRequest {
             relying_party_id: rpid.to_string(),
-            hash: inner.challenge.into(),
-            allow: inner.allow_credentials,
+            hash: client_data_json.hash(),
+            allow: inner
+                .allow_credentials
+                .into_iter()
+                .map(|c| c.into())
+                .collect(),
             extensions,
             user_verification: inner.uv_requirement,
             timeout,
@@ -137,73 +139,16 @@ impl FromInnerModel<PublicKeyCredentialRequestOptionsJSON, GetAssertionRequestPa
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum GetAssertionHmacOrPrfInput {
     HmacGetSecret(HMACGetSecretInput),
     Prf(PrfInput),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PrfInput {
     pub eval: Option<PRFValue>,
     pub eval_by_credential: HashMap<String, PRFValue>,
-}
-
-#[derive(Debug, Default, Clone, Serialize)]
-pub struct GetAssertionPrfOutput {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub results: Option<PRFValue>,
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct HMACGetSecretInput {
-    pub salt1: [u8; 32],
-    pub salt2: Option<[u8; 32]>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct HmacGetSecretInputJson {
-    pub salt1: Base64UrlString,
-    pub salt2: Option<Base64UrlString>,
-}
-
-impl TryFrom<HmacGetSecretInputJson> for HMACGetSecretInput {
-    type Error = GetAssertionRequestParsingError;
-
-    fn try_from(value: HmacGetSecretInputJson) -> Result<Self, Self::Error> {
-        let salt1 = value.salt1.as_slice().try_into().map_err(|_| {
-            GetAssertionRequestParsingError::UnexpectedLengthError(
-                "extensions.hmacCreateSecret.salt1".to_string(),
-                value.salt1.as_slice().len(),
-            )
-        })?;
-        let salt2 = match value.salt2 {
-            Some(s) => Some(s.as_slice().try_into().map_err(|_| {
-                GetAssertionRequestParsingError::UnexpectedLengthError(
-                    "extensions.hmacCreateSecret.salt2".to_string(),
-                    s.as_slice().len(),
-                )
-            })?),
-            None => None,
-        };
-        Ok(HMACGetSecretInput { salt1, salt2 })
-    }
-}
-#[derive(Debug, Clone, Deserialize)]
-pub struct LargeBlobInputJson {
-    pub read: Option<bool>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct PrfInputJson {
-    pub eval: Option<PrfValuesJson>,
-    pub eval_by_credential: Option<HashMap<String, PrfValuesJson>>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct PrfValuesJson {
-    pub first: Base64UrlString,
-    pub second: Option<Base64UrlString>,
 }
 
 impl TryFrom<PrfInputJson> for PrfInput {
@@ -266,6 +211,41 @@ impl TryFrom<PrfInputJson> for PrfInput {
     }
 }
 
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct GetAssertionPrfOutput {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub results: Option<PRFValue>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct HMACGetSecretInput {
+    pub salt1: [u8; 32],
+    pub salt2: Option<[u8; 32]>,
+}
+
+impl TryFrom<HmacGetSecretInputJson> for HMACGetSecretInput {
+    type Error = GetAssertionRequestParsingError;
+
+    fn try_from(value: HmacGetSecretInputJson) -> Result<Self, Self::Error> {
+        let salt1 = value.salt1.as_slice().try_into().map_err(|_| {
+            GetAssertionRequestParsingError::UnexpectedLengthError(
+                "extensions.hmacCreateSecret.salt1".to_string(),
+                value.salt1.as_slice().len(),
+            )
+        })?;
+        let salt2 = match value.salt2 {
+            Some(s) => Some(s.as_slice().try_into().map_err(|_| {
+                GetAssertionRequestParsingError::UnexpectedLengthError(
+                    "extensions.hmacCreateSecret.salt2".to_string(),
+                    s.as_slice().len(),
+                )
+            })?),
+            None => None,
+        };
+        Ok(HMACGetSecretInput { salt1, salt2 })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GetAssertionLargeBlobExtension {
     Read,
@@ -296,23 +276,11 @@ pub struct GetAssertionLargeBlobExtensionOutput {
     // pub written: Option<bool>,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct GetAssertionRequestExtensions {
     pub cred_blob: bool,
     pub hmac_or_prf: Option<GetAssertionHmacOrPrfInput>,
     pub large_blob: Option<GetAssertionLargeBlobExtension>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct GetAssertionRequestExtensionsJSON {
-    #[serde(rename = "getCredBlob")]
-    pub cred_blob: Option<bool>,
-    #[serde(rename = "largeBlobKey")]
-    pub large_blob: Option<LargeBlobInputJson>,
-    #[serde(rename = "hmacCreateSecret")]
-    pub hamc_get_secret: Option<HmacGetSecretInputJson>,
-    #[serde(rename = "prf")]
-    pub prf: Option<PrfInputJson>,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -458,5 +426,149 @@ impl DowngradableRequest<Vec<SignRequest>> for GetAssertionRequest {
             .collect();
         trace!(?downgraded_requests);
         Ok(downgraded_requests)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use serde_bytes::ByteBuf;
+
+    use crate::ops::webauthn::GetAssertionRequest;
+    use crate::ops::webauthn::RelyingPartyId;
+    use crate::proto::ctap2::Ctap2PublicKeyCredentialType;
+
+    use super::*;
+
+    pub const REQUEST_BASE_JSON: &str = r#"
+    {
+        "challenge": "Y3JlZGVudGlhbHMtZm9yLWxpbnV4L2xpYndlYmF1dGhu",
+        "timeout": 30000,
+        "rpId": "example.org",
+        "allowCredentials": [
+            {
+                "type": "public-key",
+                "id": "bXktY3JlZGVudGlhbC1pZA"
+            }
+        ],
+        "userVerification": "preferred"
+    }
+    "#;
+
+    fn request_base() -> GetAssertionRequest {
+        let client_data_json = ClientData {
+            operation: Operation::GetAssertion,
+            challenge: base64_url::decode("Y3JlZGVudGlhbHMtZm9yLWxpbnV4L2xpYndlYmF1dGhu").unwrap(),
+            origin: "example.org".to_string(),
+            cross_origin: None,
+        };
+        GetAssertionRequest {
+            relying_party_id: "example.org".to_owned(),
+            hash: client_data_json.hash(),
+            allow: vec![Ctap2PublicKeyCredentialDescriptor {
+                r#type: Ctap2PublicKeyCredentialType::PublicKey,
+                id: ByteBuf::from(base64_url::decode("bXktY3JlZGVudGlhbC1pZA").unwrap()),
+                transports: None,
+            }],
+            extensions: GetAssertionRequestExtensions::default(),
+            user_verification: UserVerificationRequirement::Preferred,
+            timeout: Duration::from_secs(30),
+        }
+    }
+
+    fn json_field_add(str: &str, field: &str, value: &str) -> String {
+        let mut v: serde_json::Value = serde_json::from_str(str).unwrap();
+        v.as_object_mut()
+            .unwrap()
+            .insert(field.to_owned(), serde_json::from_str(value).unwrap());
+        serde_json::to_string(&v).unwrap()
+    }
+
+    fn json_field_rm(str: &str, field: &str) -> String {
+        let mut v: serde_json::Value = serde_json::from_str(str).unwrap();
+        v.as_object_mut().unwrap().remove(field);
+        serde_json::to_string(&v).unwrap()
+    }
+
+    #[test]
+    fn test_request_from_json_base() {
+        let rpid = RelyingPartyId::try_from("example.org").unwrap();
+        let req: GetAssertionRequest =
+            GetAssertionRequest::from_json(&rpid, REQUEST_BASE_JSON).unwrap();
+        assert_eq!(req, request_base());
+    }
+
+    #[test]
+    fn test_request_from_json_ignore_missing_rp_id() {
+        let rpid = RelyingPartyId::try_from("example.org").unwrap();
+        let req_json = json_field_rm(REQUEST_BASE_JSON, "rpId");
+
+        let req: GetAssertionRequest = GetAssertionRequest::from_json(&rpid, &req_json).unwrap();
+        assert_eq!(req, request_base());
+    }
+
+    #[test]
+    fn test_request_from_json_ignore_request_rp_id() {
+        let rpid = RelyingPartyId::try_from("example.org").unwrap();
+        let req_json = json_field_rm(REQUEST_BASE_JSON, "rpId");
+        let req_json = json_field_add(&req_json, "rpId", r#""another-example.org""#);
+
+        let req: GetAssertionRequest = GetAssertionRequest::from_json(&rpid, &req_json).unwrap();
+        assert_eq!(req, request_base());
+    }
+
+    #[test]
+    fn test_request_from_json_ignore_missing_allow_credentials() {
+        let rpid = RelyingPartyId::try_from("example.org").unwrap();
+        let req_json = json_field_rm(REQUEST_BASE_JSON, "allowCredentials");
+
+        let req: GetAssertionRequest = GetAssertionRequest::from_json(&rpid, &req_json).unwrap();
+        assert_eq!(
+            req,
+            GetAssertionRequest {
+                allow: vec![],
+                ..request_base()
+            }
+        );
+    }
+
+    #[test]
+    fn test_request_from_json_default_timeout() {
+        let rpid = RelyingPartyId::try_from("example.org").unwrap();
+        let req_json = json_field_rm(REQUEST_BASE_JSON, "timeout");
+
+        let req: GetAssertionRequest = GetAssertionRequest::from_json(&rpid, &req_json).unwrap();
+        assert_eq!(req.timeout, DEFAULT_TIMEOUT);
+    }
+
+    #[test]
+    #[ignore] // FIXME(#134) allow arbitrary size input
+    fn test_request_from_json_prf_extension() {
+        let rpid = RelyingPartyId::try_from("example.org").unwrap();
+        let req_json = json_field_add(
+            REQUEST_BASE_JSON,
+            "extensions",
+            r#"{"prf":{"eval":{"first": "second"}}}"#,
+        );
+
+        let req: GetAssertionRequest = GetAssertionRequest::from_json(&rpid, &req_json).unwrap();
+        if let GetAssertionRequestExtensions {
+            hmac_or_prf:
+                Some(GetAssertionHmacOrPrfInput::Prf(PrfInput {
+                    eval: Some(ref prf_value),
+                    ..
+                })),
+            ..
+        } = &req.extensions
+        {
+            assert_eq!(&prf_value.first[..], b"first");
+            assert_eq!(
+                prf_value.second.as_ref().map(|s| &s[..]),
+                Some(&b"second"[..])
+            );
+        } else {
+            panic!("Expected PRF extension with correct values");
+        }
     }
 }
