@@ -452,7 +452,7 @@ impl Ctap2UserVerifiableRequest for Ctap2GetAssertionRequest {
         let hmac_requested = self
             .extensions
             .as_ref()
-            .map(|e| !matches!(e.hmac_or_prf, GetAssertionHmacOrPrfInput::None))
+            .map(|e| e.hmac_or_prf.is_some())
             .unwrap_or_default();
         hmac_requested && hmac_supported
     }
