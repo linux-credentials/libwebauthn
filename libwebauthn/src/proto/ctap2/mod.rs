@@ -6,13 +6,17 @@ mod model;
 mod protocol;
 
 pub use model::Ctap2GetInfoResponse;
+#[cfg(test)]
+pub use model::Ctap2PinUvAuthProtocolCommand;
 pub use model::{
     Ctap2AttestationStatement, Ctap2AuthTokenPermissionRole, Ctap2COSEAlgorithmIdentifier,
-    Ctap2ClientPinRequest, Ctap2CommandCode, Ctap2CredentialType, Ctap2MakeCredentialOptions,
-    Ctap2PinUvAuthProtocol, Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialRpEntity,
-    Ctap2PublicKeyCredentialType, Ctap2PublicKeyCredentialUserEntity, Ctap2Transport,
-    Ctap2UserVerifiableRequest, Ctap2UserVerificationOperation, FidoU2fAttestationStmt,
+    Ctap2ClientPinRequest, Ctap2ClientPinResponse, Ctap2CommandCode, Ctap2CredentialType,
+    Ctap2MakeCredentialOptions, Ctap2PinUvAuthProtocol, Ctap2PublicKeyCredentialDescriptor,
+    Ctap2PublicKeyCredentialRpEntity, Ctap2PublicKeyCredentialType,
+    Ctap2PublicKeyCredentialUserEntity, Ctap2Transport, Ctap2UserVerifiableRequest,
+    Ctap2UserVerificationOperation, FidoU2fAttestationStmt,
 };
+
 pub use model::{
     Ctap2AuthenticatorConfigCommand, Ctap2AuthenticatorConfigParams,
     Ctap2AuthenticatorConfigRequest,

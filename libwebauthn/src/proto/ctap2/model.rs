@@ -19,10 +19,13 @@ pub use authenticator_config::{
     Ctap2AuthenticatorConfigRequest,
 };
 mod client_pin;
+#[cfg(test)]
+pub use client_pin::Ctap2PinUvAuthProtocolCommand;
 pub use client_pin::{
     Ctap2AuthTokenPermissionRole, Ctap2ClientPinRequest, Ctap2ClientPinResponse,
     Ctap2PinUvAuthProtocol,
 };
+
 mod make_credential;
 pub use make_credential::{
     Ctap2MakeCredentialOptions, Ctap2MakeCredentialRequest, Ctap2MakeCredentialResponse,
@@ -218,7 +221,7 @@ pub enum Ctap2UserVerificationOperation {
     GetPinUvAuthTokenUsingUvWithPermissions,
     GetPinUvAuthTokenUsingPinWithPermissions,
     GetPinToken,
-    ClientPinOnlyForSharedSecret,
+    OnlyForSharedSecret,
     LegacyUv,
 }
 

@@ -70,12 +70,20 @@ where
         }
     }
 
-    user_verification_helper(channel, user_verification, ctap2_request, timeout).await
+    user_verification_helper(
+        channel,
+        &get_info_response,
+        user_verification,
+        ctap2_request,
+        timeout,
+    )
+    .await
 }
 
 #[instrument(skip_all)]
 async fn user_verification_helper<R, C>(
     channel: &mut C,
+    get_info_response: &Ctap2GetInfoResponse,
     user_verification: UserVerificationRequirement,
     ctap2_request: &mut R,
     timeout: Duration,
@@ -84,13 +92,13 @@ where
     C: Channel,
     R: Ctap2UserVerifiableRequest,
 {
-    let get_info_response = channel.ctap2_get_info().await?;
-
     let rp_uv_preferred = user_verification.is_preferred();
+    let rp_uv_discouraged = user_verification.is_discouraged();
     let dev_uv_protected = get_info_response.is_uv_protected();
     let can_establish_shared_secret = get_info_response.can_establish_shared_secret();
-    let needs_shared_secret = ctap2_request.needs_shared_secret(&get_info_response);
-    let uv = rp_uv_preferred || dev_uv_protected;
+    let needs_shared_secret = ctap2_request.needs_shared_secret(get_info_response);
+    // If it is not discouraged and either RP or device requires it.
+    let uv = !rp_uv_discouraged && (rp_uv_preferred || dev_uv_protected);
 
     debug!(%rp_uv_preferred, %dev_uv_protected, %uv, %needs_shared_secret, %can_establish_shared_secret, "Checking if user verification is required");
     // If we do not need to create a shared secret, we can error out here early
@@ -111,24 +119,24 @@ where
             warn!("User verification is preferred, but device user verification is not available. Ignoring.");
             return Ok(UsedPinUvAuthToken::None);
         }
-    } else {
+    } else if !can_establish_shared_secret && !uv {
         // We need a shared secret, but the device does not support any form of query-able UV, so we can't establish a
         // shared secret that is needed
-        if !can_establish_shared_secret {
-            warn!(
-                "Request requires a shared secret, but device is not capable of establishing one. Skipping UV."
-            );
-            // We treat this currently as a non-fatal error as this is only for HMAC-calculations, which
-            // we can drop
-            return Ok(UsedPinUvAuthToken::None);
-        }
+        warn!(
+            "Request requires a shared secret, but device is not capable of establishing one. Skipping UV."
+        );
+        // We treat this currently as a non-fatal error as this is only for HMAC-calculations, which
+        // we can drop
+        //
+        // If we have UV but it's only the LegacyUV, we'll drop out a bit lower down.
+        return Ok(UsedPinUvAuthToken::None);
     }
 
-    let skip_uv = !ctap2_request.can_use_uv(&get_info_response);
+    let skip_uv = !ctap2_request.can_use_uv(get_info_response);
 
     let mut uv_blocked = false;
     let (uv_proto, shared_secret, public_key, uv_operation, token_response) = loop {
-        let uv_operation = get_info_response
+        let mut uv_operation = get_info_response
             .uv_operation(uv_blocked || skip_uv)
             .ok_or({
                 if uv_blocked {
@@ -141,13 +149,19 @@ where
             debug!("No client operation. Setting deprecated request options.uv flag to true.");
             ctap2_request.ensure_uv_set();
             // If the device is UV protected, but has no fitting operation, we have to use the legacy UV option.
-            // If we don't have to establish a shared secret, we can return right here
-            if !needs_shared_secret {
+            // If we don't have to or we can't establish a shared secret, we can return right here
+            // and potentially drop the extension
+            if !needs_shared_secret || !can_establish_shared_secret {
                 return Ok(UsedPinUvAuthToken::LegacyUV);
             }
+        } else if rp_uv_discouraged && needs_shared_secret {
+            // We are not using LegacyUV, but have full support, however RP
+            // discouraged UV, but the request requires a shared secret.
+            // Then we are downgrading the 'supported' uv_operation to OnlyForSharedSecret
+            uv_operation = Ctap2UserVerificationOperation::OnlyForSharedSecret;
         }
 
-        let Some(uv_proto) = select_uv_proto(&get_info_response).await else {
+        let Some(uv_proto) = select_uv_proto(get_info_response).await else {
             error!("No supported PIN/UV auth protocols found");
             return Err(Error::Ctap(CtapError::Other));
         };
@@ -156,7 +170,7 @@ where
         // This prevents the shared secret from expiring whilst we wait for the user to enter a PIN.
         let pin = match uv_operation {
             Ctap2UserVerificationOperation::LegacyUv
-            | Ctap2UserVerificationOperation::ClientPinOnlyForSharedSecret => None,
+            | Ctap2UserVerificationOperation::OnlyForSharedSecret => None,
             Ctap2UserVerificationOperation::GetPinToken
             | Ctap2UserVerificationOperation::GetPinUvAuthTokenUsingPinWithPermissions => {
                 let reason = if uv_blocked {
@@ -170,7 +184,7 @@ where
                 Some(
                     obtain_pin(
                         channel,
-                        &get_info_response,
+                        get_info_response,
                         uv_proto.version(),
                         reason,
                         timeout,
@@ -193,7 +207,7 @@ where
             // We can't create a pinUvAuthToken with these two options, because the device doesn't support it
             // But we have the shared secret, which we will store for later usage (mostly for hmac calculation)
             Ctap2UserVerificationOperation::LegacyUv
-            | Ctap2UserVerificationOperation::ClientPinOnlyForSharedSecret => {
+            | Ctap2UserVerificationOperation::OnlyForSharedSecret => {
                 break (uv_proto, shared_secret, public_key, uv_operation, None)
             }
 
@@ -267,7 +281,7 @@ where
     // Package the results, based on what we did
     match uv_operation {
         // We only established a shared secret
-        Ctap2UserVerificationOperation::ClientPinOnlyForSharedSecret
+        Ctap2UserVerificationOperation::OnlyForSharedSecret
         | Ctap2UserVerificationOperation::LegacyUv => {
             // Storing shared secret for later (re)use, such as calculating HMAC secrects, etc.
             let auth_token_data = AuthTokenData {
@@ -393,4 +407,587 @@ where
         }
     };
     Ok(pin.as_bytes().to_owned())
+}
+
+#[cfg(test)]
+mod test {
+
+    use std::{collections::HashMap, time::Duration};
+
+    use serde_bytes::ByteBuf;
+
+    use crate::{
+        ops::webauthn::{
+            GetAssertionHmacOrPrfInput, GetAssertionRequest, GetAssertionRequestExtensions,
+            HMACGetSecretInput, UserVerificationRequirement,
+        },
+        pin::{pin_hash, PinUvAuthProtocol, PinUvAuthProtocolOne},
+        proto::{
+            ctap2::{
+                cbor::{to_vec, CborRequest, CborResponse},
+                Ctap2ClientPinRequest, Ctap2ClientPinResponse, Ctap2CommandCode,
+                Ctap2GetAssertionRequest, Ctap2GetInfoResponse, Ctap2PinUvAuthProtocol,
+                Ctap2UserVerifiableRequest,
+            },
+            CtapError,
+        },
+        tests::channel::TestChannel,
+        transport::{Channel, Ctap2AuthTokenStore},
+        webauthn::UsedPinUvAuthToken,
+        UvUpdate,
+    };
+
+    use super::{user_verification, Error};
+    const TIMEOUT: Duration = Duration::from_secs(1);
+
+    fn create_info(
+        options: &[(&'static str, bool)],
+        extensions: Option<&[&'static str]>,
+    ) -> Ctap2GetInfoResponse {
+        let mut info = Ctap2GetInfoResponse::default();
+        let mut input = HashMap::new();
+        for (key, val) in options {
+            input.insert(key.to_string(), *val);
+        }
+        info.options = Some(input);
+        if let Some(extensions) = extensions {
+            let mut ext_res = Vec::new();
+            for extension in extensions {
+                ext_res.push(extension.to_string());
+            }
+            info.extensions = Some(ext_res);
+        }
+        info
+    }
+
+    fn create_get_assertion(
+        info: &Ctap2GetInfoResponse,
+        extensions: Option<GetAssertionRequestExtensions>,
+    ) -> Ctap2GetAssertionRequest {
+        Ctap2GetAssertionRequest::from_webauthn_request(
+            &GetAssertionRequest {
+                relying_party_id: String::from("example.com"),
+                hash: vec![9; 32],
+                allow: vec![],
+                extensions,
+                user_verification: UserVerificationRequirement::Preferred,
+                timeout: TIMEOUT,
+            },
+            info,
+        )
+        .unwrap()
+    }
+
+    async fn test_early_exits(
+        info_options: &[(&'static str, bool)],
+        info_extensions: Option<&[&'static str]>,
+        uv_requirement: UserVerificationRequirement,
+        extensions: Option<GetAssertionRequestExtensions>,
+        expected_result: Result<UsedPinUvAuthToken, Error>,
+    ) {
+        let mut channel = TestChannel::new();
+        let info = create_info(info_options, info_extensions);
+        let info_req = CborRequest::new(Ctap2CommandCode::AuthenticatorGetInfo);
+        let info_resp = CborResponse::new_success_from_slice(to_vec(&info).unwrap().as_slice());
+
+        channel.push_command_pair(info_req, info_resp);
+
+        let mut getassertion = create_get_assertion(&info, extensions);
+
+        // We should early return here right at the start and not send a ClientPIN-request
+        let resp =
+            user_verification(&mut channel, uv_requirement, &mut getassertion, TIMEOUT).await;
+
+        assert_eq!(resp, expected_result);
+        // Nothing ended up in the auth store
+        assert!(channel.get_auth_data().is_none());
+    }
+
+    #[tokio::test]
+    async fn early_exit_device_no_options() {
+        test_early_exits(
+            &[],
+            None,
+            UserVerificationRequirement::Preferred,
+            None,
+            Ok(UsedPinUvAuthToken::None),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn early_exit_device_client_pin_but_uv_discouraged() {
+        test_early_exits(
+            &[("clientPin", true)],
+            None,
+            UserVerificationRequirement::Discouraged,
+            None,
+            Ok(UsedPinUvAuthToken::None),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn early_exit_device_client_pin_not_set() {
+        test_early_exits(
+            &[("clientPin", false)],
+            None,
+            UserVerificationRequirement::Preferred,
+            None,
+            Ok(UsedPinUvAuthToken::None),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn early_exit_device_client_pin_not_set_but_uv_required() {
+        let testcases = vec![
+            vec![],
+            // Should be the same as above
+            vec![("clientPin", false)],
+        ];
+        for testcase in testcases {
+            test_early_exits(
+                &testcase,
+                None,
+                UserVerificationRequirement::Required,
+                None,
+                Err(Error::Ctap(CtapError::PINNotSet)),
+            )
+            .await;
+        }
+    }
+
+    #[tokio::test]
+    async fn early_exit_device_client_shared_secret_required_but_not_supported() {
+        let testcases = vec![
+            // Device does not support shared secret operations AND does not support hmac-secret
+            (vec![], None),
+            (vec![("uv", false)], None),
+            // UV but not pinUvAuth supported, so we can't establish a shared secret
+            (vec![("uv", true)], None),
+            (vec![("uv", true), ("pinUvAuthToken", false)], None),
+            // Device does not support shared secret operations but DOES support hmac-secret
+            (vec![], Some(vec!["hmac-secret"])),
+            (
+                vec![("uv", false)],
+                Some(vec!["hmac-secret", "credProtect"]),
+            ),
+            (vec![("uv", true)], Some(vec!["hmac-secret"])),
+            (
+                vec![("uv", true), ("pinUvAuthToken", false)],
+                Some(vec!["hmac-secret"]),
+            ),
+            // Device DOES support shared secret operations but does NOT support hmac-secret
+            (vec![("clientPin", true)], None),
+            (vec![("uv", true), ("pinUvAuthToken", true)], None),
+            (vec![("clientPin", true), ("pinUvAuthToken", true)], None),
+            (
+                vec![("clientPin", true), ("pinUvAuthToken", true), ("uv", true)],
+                None,
+            ),
+        ];
+        for (testcase, info_extensions) in testcases {
+            test_early_exits(
+                &testcase,
+                info_extensions.as_deref(),
+                UserVerificationRequirement::Discouraged,
+                Some(GetAssertionRequestExtensions {
+                    hmac_or_prf: GetAssertionHmacOrPrfInput::HmacGetSecret(HMACGetSecretInput {
+                        salt1: [0; 32],
+                        salt2: None,
+                    }),
+                    ..Default::default()
+                }),
+                Ok(UsedPinUvAuthToken::None),
+            )
+            .await;
+        }
+    }
+
+    #[tokio::test]
+    async fn early_exit_legacy_uv() {
+        let testcases = vec![
+            vec![("uv", true)],
+            vec![("uv", true), ("pinUvAuthToken", false)],
+        ];
+        for testcase in testcases {
+            test_early_exits(
+                &testcase,
+                None,
+                UserVerificationRequirement::Preferred,
+                None,
+                Ok(UsedPinUvAuthToken::LegacyUV),
+            )
+            .await;
+        }
+    }
+
+    #[tokio::test]
+    async fn early_exit_legacy_uv_with_required_shared_secret() {
+        let testcases = vec![
+            vec![("uv", true)],
+            vec![("uv", true), ("pinUvAuthToken", false)],
+        ];
+        // HMAC will be dropped
+        for testcase in testcases {
+            test_early_exits(
+                &testcase,
+                Some(&["hmac-secret"]),
+                UserVerificationRequirement::Preferred,
+                Some(GetAssertionRequestExtensions {
+                    hmac_or_prf: GetAssertionHmacOrPrfInput::HmacGetSecret(HMACGetSecretInput {
+                        salt1: [0; 32],
+                        salt2: None,
+                    }),
+                    ..Default::default()
+                }),
+                Ok(UsedPinUvAuthToken::LegacyUV),
+            )
+            .await;
+        }
+    }
+
+    fn get_key_agreement() -> cosey::PublicKey {
+        // Self generated key
+        //
+        // -> Secret key sec1-DER: 306b0201010420ef614223f3c4c45ca9c7a1bc917d7096de91da43116a48b1fe66eb3068f1a0a0a14403420004326ce69b9e8766cc3e9dfad45e62173ffec90ed1c1c5eabe8d43f2add3d86c0cc21c4f54c9aef343bc701e84ff8e3bb50ad089a0849167b514098bfacc185044
+        //  -> Generated X: 326ce69b9e8766cc3e9dfad45e62173ffec90ed1c1c5eabe8d43f2add3d86c0c
+        //  -> Generated Y: c21c4f54c9aef343bc701e84ff8e3bb50ad089a0849167b514098bfacc185044
+        let pub_key_x =
+            hex::decode("326ce69b9e8766cc3e9dfad45e62173ffec90ed1c1c5eabe8d43f2add3d86c0c")
+                .unwrap();
+        let pub_key_y =
+            hex::decode("c21c4f54c9aef343bc701e84ff8e3bb50ad089a0849167b514098bfacc185044")
+                .unwrap();
+
+        cosey::PublicKey::EcdhEsHkdf256Key(cosey::EcdhEsHkdf256PublicKey {
+            x: cosey::Bytes::from_slice(&pub_key_x).unwrap(),
+            y: cosey::Bytes::from_slice(&pub_key_y).unwrap(),
+        })
+    }
+
+    #[tokio::test]
+    async fn shared_secret_only() {
+        let testcases = vec![
+            (
+                // PIN supported, but not set. We can establish a shared secret, but not a full pinUvAuthToken
+                vec![("clientPin", false)],
+                UserVerificationRequirement::Discouraged,
+            ),
+            (
+                // Should be same for uv="preferred"
+                vec![("clientPin", false)],
+                UserVerificationRequirement::Preferred,
+            ),
+            (
+                // PIN supported, but not requested. We have to establish a shared secret anyways
+                vec![("clientPin", true)],
+                UserVerificationRequirement::Discouraged,
+            ),
+            (
+                // biometrics supported, but not set. We can establish a shared secret, using "pinUvAuthToken"-command
+                vec![("uv", false), ("pinUvAuthToken", true)],
+                UserVerificationRequirement::Discouraged,
+            ),
+            (
+                vec![("uv", false), ("pinUvAuthToken", true)],
+                UserVerificationRequirement::Preferred,
+            ),
+            (
+                // biometrics supported, but not requested. We can establish a shared secret, using "pinUvAuthToken"-command
+                vec![("uv", true), ("pinUvAuthToken", true)],
+                UserVerificationRequirement::Discouraged,
+            ),
+        ];
+
+        let expected_result = Ok(UsedPinUvAuthToken::SharedSecretOnly);
+
+        for (info_options, uv_requirement) in testcases {
+            let extensions = Some(GetAssertionRequestExtensions {
+                hmac_or_prf: GetAssertionHmacOrPrfInput::HmacGetSecret(HMACGetSecretInput {
+                    salt1: [0; 32],
+                    salt2: None,
+                }),
+                ..Default::default()
+            });
+
+            let mut channel = TestChannel::new();
+            let mut info = create_info(&info_options, Some(&["hmac-secret"]));
+            info.pin_auth_protos = Some(vec![1]);
+            let info_req = CborRequest::new(Ctap2CommandCode::AuthenticatorGetInfo);
+            let info_resp = CborResponse::new_success_from_slice(to_vec(&info).unwrap().as_slice());
+            channel.push_command_pair(info_req, info_resp);
+
+            let pin_req = CborRequest::from(&Ctap2ClientPinRequest::new_get_key_agreement(
+                Ctap2PinUvAuthProtocol::One,
+            ));
+            let pin_resp = CborResponse::new_success_from_slice(
+                to_vec(&Ctap2ClientPinResponse {
+                    key_agreement: Some(get_key_agreement()),
+                    pin_uv_auth_token: None,
+                    pin_retries: None,
+                    power_cycle_state: None,
+                    uv_retries: None,
+                })
+                .unwrap()
+                .as_slice(),
+            );
+            channel.push_command_pair(pin_req, pin_resp);
+
+            let mut getassertion = create_get_assertion(&info, extensions);
+
+            // We should early return here right at the start and not send a second ClientPIN-request
+            // after requesting the key-agreement
+            let resp =
+                user_verification(&mut channel, uv_requirement, &mut getassertion, TIMEOUT).await;
+
+            assert_eq!(resp, expected_result);
+            // Something ended up in the auth store
+            assert!(channel.get_auth_data().is_some());
+            assert!(channel.get_auth_data().unwrap().pin_uv_auth_token.is_none());
+            assert!(!channel.get_auth_data().unwrap().shared_secret.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn full_ceremony_using_uv() {
+        let testcases = vec![
+            (
+                vec![("uv", true), ("pinUvAuthToken", true)],
+                UserVerificationRequirement::Preferred,
+            ),
+            (
+                vec![("uv", true), ("pinUvAuthToken", true)],
+                UserVerificationRequirement::Required,
+            ),
+        ];
+
+        let expected_result = Ok(UsedPinUvAuthToken::NewlyCalculated);
+
+        for (info_options, uv_requirement) in testcases {
+            let extensions = Some(GetAssertionRequestExtensions {
+                hmac_or_prf: GetAssertionHmacOrPrfInput::HmacGetSecret(HMACGetSecretInput {
+                    salt1: [0; 32],
+                    salt2: None,
+                }),
+                ..Default::default()
+            });
+
+            let mut channel = TestChannel::new();
+
+            // Queueing GetInfo request and response
+            let mut info = create_info(&info_options, Some(&["hmac-secret"]));
+            info.pin_auth_protos = Some(vec![1]);
+            let info_req = CborRequest::new(Ctap2CommandCode::AuthenticatorGetInfo);
+            let info_resp = CborResponse::new_success_from_slice(to_vec(&info).unwrap().as_slice());
+            channel.push_command_pair(info_req, info_resp);
+
+            // Queueing KeyAgreement request and response
+            let key_agreement_req = CborRequest::from(
+                &Ctap2ClientPinRequest::new_get_key_agreement(Ctap2PinUvAuthProtocol::One),
+            );
+            let key_agreement_resp = CborResponse::new_success_from_slice(
+                to_vec(&Ctap2ClientPinResponse {
+                    key_agreement: Some(get_key_agreement()),
+                    pin_uv_auth_token: None,
+                    pin_retries: None,
+                    power_cycle_state: None,
+                    uv_retries: None,
+                })
+                .unwrap()
+                .as_slice(),
+            );
+            channel.push_command_pair(key_agreement_req, key_agreement_resp);
+
+            let mut getassertion = create_get_assertion(&info, extensions);
+
+            // Queueing getPinUvAuth request and response
+            let pin_protocol = PinUvAuthProtocolOne::new();
+            let (public_key, shared_secret) =
+                pin_protocol.encapsulate(&get_key_agreement()).unwrap();
+            let pin_req = CborRequest::from(&Ctap2ClientPinRequest::new_get_uv_token_with_perm(
+                Ctap2PinUvAuthProtocol::One,
+                public_key,
+                getassertion.permissions(),
+                getassertion.permissions_rpid(),
+            ));
+            // We do here what the device would need to do, i.e. generate a new random
+            // pinUvAuthToken (here all 5's), then encrypt it using the shared_secret.
+            let token = [5; 32];
+            let encrypted_token = pin_protocol.encrypt(&shared_secret, &token).unwrap();
+            let pin_resp = CborResponse::new_success_from_slice(
+                to_vec(&Ctap2ClientPinResponse {
+                    key_agreement: None,
+                    pin_uv_auth_token: Some(ByteBuf::from(encrypted_token)),
+                    pin_retries: None,
+                    power_cycle_state: None,
+                    uv_retries: None,
+                })
+                .unwrap()
+                .as_slice(),
+            );
+            channel.push_command_pair(pin_req, pin_resp);
+
+            let mut recv = channel.get_ux_update_receiver();
+            tokio::task::spawn(async move {
+                let req = recv.recv().await.unwrap();
+                assert!(matches!(req, UvUpdate::PresenceRequired));
+            });
+
+            let resp =
+                user_verification(&mut channel, uv_requirement, &mut getassertion, TIMEOUT).await;
+
+            assert_eq!(resp, expected_result);
+            // Something ended up in the auth store
+            assert!(channel.get_auth_data().is_some());
+            assert_eq!(
+                channel
+                    .get_auth_data()
+                    .as_ref()
+                    .unwrap()
+                    .pin_uv_auth_token
+                    .as_ref()
+                    .unwrap(),
+                &token
+            );
+            assert_eq!(
+                channel.get_auth_data().unwrap().shared_secret,
+                shared_secret
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn full_ceremony_using_pin() {
+        let testcases = vec![
+            (
+                vec![("clientPin", true), ("pinUvAuthToken", true)],
+                UserVerificationRequirement::Preferred,
+            ),
+            (
+                vec![("clientPin", true), ("pinUvAuthToken", true)],
+                UserVerificationRequirement::Required,
+            ),
+        ];
+
+        let expected_result = Ok(UsedPinUvAuthToken::NewlyCalculated);
+
+        for (info_options, uv_requirement) in testcases {
+            let extensions = Some(GetAssertionRequestExtensions {
+                hmac_or_prf: GetAssertionHmacOrPrfInput::HmacGetSecret(HMACGetSecretInput {
+                    salt1: [0; 32],
+                    salt2: None,
+                }),
+                ..Default::default()
+            });
+
+            let mut channel = TestChannel::new();
+
+            // Queueing GetInfo request and response
+            let mut info = create_info(&info_options, Some(&["hmac-secret"]));
+            info.pin_auth_protos = Some(vec![1]);
+            let info_req = CborRequest::new(Ctap2CommandCode::AuthenticatorGetInfo);
+            let info_resp = CborResponse::new_success_from_slice(to_vec(&info).unwrap().as_slice());
+            channel.push_command_pair(info_req, info_resp);
+
+            // Queueing PinRetries request and response
+            let pin_retries_req = CborRequest::from(&Ctap2ClientPinRequest::new_get_pin_retries(
+                Some(Ctap2PinUvAuthProtocol::One),
+            ));
+            let pin_retries_resp = CborResponse::new_success_from_slice(
+                to_vec(&Ctap2ClientPinResponse {
+                    key_agreement: None,
+                    pin_uv_auth_token: None,
+                    pin_retries: Some(5),
+                    power_cycle_state: None,
+                    uv_retries: None,
+                })
+                .unwrap()
+                .as_slice(),
+            );
+            channel.push_command_pair(pin_retries_req, pin_retries_resp);
+
+            // Queueing KeyAgreement request and response
+            let key_agreement_req = CborRequest::from(
+                &Ctap2ClientPinRequest::new_get_key_agreement(Ctap2PinUvAuthProtocol::One),
+            );
+            let key_agreement_resp = CborResponse::new_success_from_slice(
+                to_vec(&Ctap2ClientPinResponse {
+                    key_agreement: Some(get_key_agreement()),
+                    pin_uv_auth_token: None,
+                    pin_retries: None,
+                    power_cycle_state: None,
+                    uv_retries: None,
+                })
+                .unwrap()
+                .as_slice(),
+            );
+            channel.push_command_pair(key_agreement_req, key_agreement_resp);
+
+            let mut getassertion = create_get_assertion(&info, extensions);
+
+            // Queueing getPinUvAuth request and response
+            let pin_protocol = PinUvAuthProtocolOne::new();
+            let (public_key, shared_secret) =
+                pin_protocol.encapsulate(&get_key_agreement()).unwrap();
+            let pin_hash_enc = pin_protocol
+                .encrypt(&shared_secret, &pin_hash("1234".as_bytes()))
+                .unwrap();
+            let pin_req = CborRequest::from(&Ctap2ClientPinRequest::new_get_pin_token_with_perm(
+                Ctap2PinUvAuthProtocol::One,
+                public_key,
+                &pin_hash_enc,
+                getassertion.permissions(),
+                getassertion.permissions_rpid(),
+            ));
+            // We do here what the device would need to do, i.e. generate a new random
+            // pinUvAuthToken (here all 5's), then encrypt it using the shared_secret.
+            let token = [5; 32];
+            let encrypted_token = pin_protocol.encrypt(&shared_secret, &token).unwrap();
+            let pin_resp = CborResponse::new_success_from_slice(
+                to_vec(&Ctap2ClientPinResponse {
+                    key_agreement: None,
+                    pin_uv_auth_token: Some(ByteBuf::from(encrypted_token)),
+                    pin_retries: None,
+                    power_cycle_state: None,
+                    uv_retries: None,
+                })
+                .unwrap()
+                .as_slice(),
+            );
+            channel.push_command_pair(pin_req, pin_resp);
+
+            let mut recv = channel.get_ux_update_receiver();
+            tokio::task::spawn(async move {
+                let req = recv.recv().await.unwrap();
+                if let UvUpdate::PinRequired(update) = req {
+                    update.send_pin("1234").unwrap();
+                } else {
+                    panic!("Wrong UxUpdate received! Expected PinRequired");
+                }
+            });
+
+            let resp =
+                user_verification(&mut channel, uv_requirement, &mut getassertion, TIMEOUT).await;
+
+            assert_eq!(resp, expected_result);
+            // Something ended up in the auth store
+            assert!(channel.get_auth_data().is_some());
+            assert_eq!(
+                channel
+                    .get_auth_data()
+                    .as_ref()
+                    .unwrap()
+                    .pin_uv_auth_token
+                    .as_ref()
+                    .unwrap(),
+                &token
+            );
+            assert_eq!(
+                channel.get_auth_data().unwrap().shared_secret,
+                shared_secret
+            );
+        }
+    }
 }

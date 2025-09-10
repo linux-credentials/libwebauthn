@@ -26,6 +26,14 @@ pub enum UserVerificationRequirement {
 }
 
 impl UserVerificationRequirement {
+    /// Check if user verification is discouraged
+    pub fn is_discouraged(&self) -> bool {
+        match self {
+            Self::Required | Self::Preferred => false,
+            Self::Discouraged => true,
+        }
+    }
+
     /// Check if user verification is preferred or required for this request
     pub fn is_preferred(&self) -> bool {
         match self {

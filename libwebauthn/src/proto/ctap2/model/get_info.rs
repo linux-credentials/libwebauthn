@@ -2,10 +2,13 @@ use std::collections::HashMap;
 
 use serde_bytes::ByteBuf;
 use serde_indexed::DeserializeIndexed;
+#[cfg(test)]
+use serde_indexed::SerializeIndexed;
 use tracing::debug;
 
 use super::{Ctap2CredentialType, Ctap2UserVerificationOperation};
 
+#[cfg_attr(test, derive(SerializeIndexed))]
 #[derive(Debug, Clone, DeserializeIndexed, Default)]
 pub struct Ctap2GetInfoResponse {
     /// versions (0x01)
@@ -227,7 +230,7 @@ impl Ctap2GetInfoResponse {
             // clientPIN exists, but is not enabled, aka PIN is not yet set on the device
             // We can use it for establishing a shared secret, but not for creating a pinUvAuthToken
             if self.option_exists("clientPin") && !self.option_enabled("clientPin") {
-                return Some(Ctap2UserVerificationOperation::ClientPinOnlyForSharedSecret);
+                return Some(Ctap2UserVerificationOperation::OnlyForSharedSecret);
             }
 
             // clientPin is not enabled (not supported or Pin not set) and
@@ -238,7 +241,7 @@ impl Ctap2GetInfoResponse {
                 && self.option_exists("uv")
                 && self.option_enabled("pinUvAuthToken")
             {
-                return Some(Ctap2UserVerificationOperation::ClientPinOnlyForSharedSecret);
+                return Some(Ctap2UserVerificationOperation::OnlyForSharedSecret);
             }
 
             // If we do have a PIN, check if we need to use legacy getPinToken or new getPinUvAuthToken..-command
@@ -355,11 +358,11 @@ mod test {
         assert!(info.can_establish_shared_secret());
         assert_eq!(
             info.uv_operation(false),
-            Some(Ctap2UserVerificationOperation::ClientPinOnlyForSharedSecret)
+            Some(Ctap2UserVerificationOperation::OnlyForSharedSecret)
         );
         assert_eq!(
             info.uv_operation(true),
-            Some(Ctap2UserVerificationOperation::ClientPinOnlyForSharedSecret)
+            Some(Ctap2UserVerificationOperation::OnlyForSharedSecret)
         );
     }
 
@@ -410,7 +413,7 @@ mod test {
         );
         assert_eq!(
             info.uv_operation(true),
-            Some(Ctap2UserVerificationOperation::ClientPinOnlyForSharedSecret)
+            Some(Ctap2UserVerificationOperation::OnlyForSharedSecret)
         );
     }
 
@@ -425,11 +428,11 @@ mod test {
         assert!(info.can_establish_shared_secret());
         assert_eq!(
             info.uv_operation(false),
-            Some(Ctap2UserVerificationOperation::ClientPinOnlyForSharedSecret)
+            Some(Ctap2UserVerificationOperation::OnlyForSharedSecret)
         );
         assert_eq!(
             info.uv_operation(true),
-            Some(Ctap2UserVerificationOperation::ClientPinOnlyForSharedSecret)
+            Some(Ctap2UserVerificationOperation::OnlyForSharedSecret)
         );
     }
 
@@ -463,7 +466,7 @@ mod test {
         );
         assert_eq!(
             info.uv_operation(true),
-            Some(Ctap2UserVerificationOperation::ClientPinOnlyForSharedSecret)
+            Some(Ctap2UserVerificationOperation::OnlyForSharedSecret)
         );
     }
 
@@ -495,11 +498,11 @@ mod test {
         assert!(info.can_establish_shared_secret());
         assert_eq!(
             info.uv_operation(false),
-            Some(Ctap2UserVerificationOperation::ClientPinOnlyForSharedSecret)
+            Some(Ctap2UserVerificationOperation::OnlyForSharedSecret)
         );
         assert_eq!(
             info.uv_operation(true),
-            Some(Ctap2UserVerificationOperation::ClientPinOnlyForSharedSecret)
+            Some(Ctap2UserVerificationOperation::OnlyForSharedSecret)
         );
     }
 
@@ -513,11 +516,11 @@ mod test {
         assert!(info.can_establish_shared_secret());
         assert_eq!(
             info.uv_operation(false),
-            Some(Ctap2UserVerificationOperation::ClientPinOnlyForSharedSecret)
+            Some(Ctap2UserVerificationOperation::OnlyForSharedSecret)
         );
         assert_eq!(
             info.uv_operation(true),
-            Some(Ctap2UserVerificationOperation::ClientPinOnlyForSharedSecret)
+            Some(Ctap2UserVerificationOperation::OnlyForSharedSecret)
         );
     }
 
@@ -547,7 +550,7 @@ mod test {
         );
         assert_eq!(
             info.uv_operation(true),
-            Some(Ctap2UserVerificationOperation::ClientPinOnlyForSharedSecret)
+            Some(Ctap2UserVerificationOperation::OnlyForSharedSecret)
         );
     }
 
@@ -564,11 +567,11 @@ mod test {
         assert!(info.can_establish_shared_secret());
         assert_eq!(
             info.uv_operation(false),
-            Some(Ctap2UserVerificationOperation::ClientPinOnlyForSharedSecret)
+            Some(Ctap2UserVerificationOperation::OnlyForSharedSecret)
         );
         assert_eq!(
             info.uv_operation(true),
-            Some(Ctap2UserVerificationOperation::ClientPinOnlyForSharedSecret)
+            Some(Ctap2UserVerificationOperation::OnlyForSharedSecret)
         );
     }
 }

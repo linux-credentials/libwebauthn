@@ -9,7 +9,7 @@ use crate::proto::ctap2::Ctap2AuthenticatorConfigRequest;
 use crate::proto::ctap2::Ctap2BioEnrollmentRequest;
 use crate::proto::ctap2::Ctap2CredentialManagementRequest;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CborRequest {
     pub command: Ctap2CommandCode,
     pub encoded_data: Vec<u8>,
@@ -18,7 +18,7 @@ pub struct CborRequest {
 impl CborRequest {
     pub fn new(command: Ctap2CommandCode) -> Self {
         Self {
-            command: command,
+            command,
             encoded_data: vec![],
         }
     }
