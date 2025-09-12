@@ -431,7 +431,7 @@ mod test {
             },
             CtapError,
         },
-        tests::channel::TestChannel,
+        transport::mock::channel::MockChannel,
         transport::{Channel, Ctap2AuthTokenStore},
         webauthn::UsedPinUvAuthToken,
         UvUpdate,
@@ -485,7 +485,7 @@ mod test {
         extensions: Option<GetAssertionRequestExtensions>,
         expected_result: Result<UsedPinUvAuthToken, Error>,
     ) {
-        let mut channel = TestChannel::new();
+        let mut channel = MockChannel::new();
         let info = create_info(info_options, info_extensions);
         let info_req = CborRequest::new(Ctap2CommandCode::AuthenticatorGetInfo);
         let info_resp = CborResponse::new_success_from_slice(to_vec(&info).unwrap().as_slice());
@@ -712,7 +712,7 @@ mod test {
                 ..Default::default()
             });
 
-            let mut channel = TestChannel::new();
+            let mut channel = MockChannel::new();
             let mut info = create_info(&info_options, Some(&["hmac-secret"]));
             info.pin_auth_protos = Some(vec![1]);
             let info_req = CborRequest::new(Ctap2CommandCode::AuthenticatorGetInfo);
@@ -774,7 +774,7 @@ mod test {
                 ..Default::default()
             });
 
-            let mut channel = TestChannel::new();
+            let mut channel = MockChannel::new();
 
             // Queueing GetInfo request and response
             let mut info = create_info(&info_options, Some(&["hmac-secret"]));
@@ -882,7 +882,7 @@ mod test {
                 ..Default::default()
             });
 
-            let mut channel = TestChannel::new();
+            let mut channel = MockChannel::new();
 
             // Queueing GetInfo request and response
             let mut info = create_info(&info_options, Some(&["hmac-secret"]));

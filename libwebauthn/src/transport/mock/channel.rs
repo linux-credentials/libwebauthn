@@ -14,14 +14,14 @@ use crate::{
     UvUpdate,
 };
 
-pub struct TestChannel {
+pub struct MockChannel {
     expected_requests: VecDeque<CborRequest>,
     responses: VecDeque<CborResponse>,
     auth_token_data: Option<AuthTokenData>,
     ux_update_sender: broadcast::Sender<UvUpdate>,
 }
 
-impl TestChannel {
+impl MockChannel {
     pub fn new() -> Self {
         let (ux_update_sender, _) = broadcast::channel(16);
         Self {
@@ -38,7 +38,7 @@ impl TestChannel {
     }
 }
 
-impl Ctap2AuthTokenStore for TestChannel {
+impl Ctap2AuthTokenStore for MockChannel {
     fn store_auth_data(&mut self, auth_token_data: AuthTokenData) {
         self.auth_token_data = Some(auth_token_data);
     }
@@ -52,14 +52,14 @@ impl Ctap2AuthTokenStore for TestChannel {
     }
 }
 
-impl Display for TestChannel {
+impl Display for MockChannel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "TestChannel")
     }
 }
 
 #[async_trait]
-impl Channel for TestChannel {
+impl Channel for MockChannel {
     type UxUpdate = UvUpdate;
 
     fn get_ux_update_sender(&self) -> &broadcast::Sender<Self::UxUpdate> {
