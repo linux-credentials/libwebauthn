@@ -1,0 +1,509 @@
+use std::collections::HashMap;
+use std::time::Duration;
+
+use crate::ops::webauthn::{
+    GetAssertionHmacOrPrfInput, GetAssertionRequest, GetAssertionRequestExtensions,
+    MakeCredentialHmacOrPrfInput, MakeCredentialPrfOutput, MakeCredentialsRequestExtensions,
+    PRFValue,
+};
+use crate::pin::PinManagement;
+use crate::proto::ctap2::Ctap2PublicKeyCredentialDescriptor;
+use crate::transport::hid::channel::HidChannel;
+use crate::transport::hid::get_virtual_device;
+use crate::transport::{Channel, Device};
+use crate::webauthn::{Error as WebAuthnError, PlatformError, WebAuthn};
+use crate::UvUpdate;
+use crate::{
+    ops::webauthn::{MakeCredentialRequest, ResidentKeyRequirement, UserVerificationRequirement},
+    proto::ctap2::{
+        Ctap2CredentialType, Ctap2PublicKeyCredentialRpEntity, Ctap2PublicKeyCredentialUserEntity,
+    },
+};
+use rand::{thread_rng, Rng};
+use test_log::test;
+use tokio::sync::broadcast::Receiver;
+
+const TIMEOUT: Duration = Duration::from_secs(10);
+
+#[test(tokio::test)]
+async fn test_webauthn_prf_no_pin_set() {
+    let mut device = get_virtual_device();
+    let mut channel = device.channel().await.unwrap();
+    run_test_battery(&mut channel).await;
+}
+
+#[test(tokio::test)]
+async fn test_webauthn_prf_with_pin_set() {
+    let mut device = get_virtual_device();
+    let mut channel = device.channel().await.unwrap();
+    channel
+        .change_pin(String::from("1234"), TIMEOUT)
+        .await
+        .unwrap();
+    run_test_battery(&mut channel).await;
+}
+
+async fn handle_updates(mut state_recv: Receiver<UvUpdate>) {
+    while let Ok(update) = state_recv.recv().await {
+        if let UvUpdate::PinRequired(update) = update {
+            let _ = update.send_pin("1234");
+        }
+    }
+}
+
+async fn run_test_battery(channel: &mut HidChannel<'_>) {
+    let user_id: [u8; 32] = thread_rng().gen();
+    let challenge: [u8; 32] = thread_rng().gen();
+
+    let extensions = MakeCredentialsRequestExtensions {
+        hmac_or_prf: MakeCredentialHmacOrPrfInput::Prf,
+        ..Default::default()
+    };
+
+    // Make Credentials ceremony
+    let make_credentials_request = MakeCredentialRequest {
+        origin: "example.org".to_owned(),
+        hash: Vec::from(challenge),
+        relying_party: Ctap2PublicKeyCredentialRpEntity::new("example.org", "example.org"),
+        user: Ctap2PublicKeyCredentialUserEntity::new(&user_id, "mario.rossi", "Mario Rossi"),
+        resident_key: Some(ResidentKeyRequirement::Discouraged),
+        user_verification: UserVerificationRequirement::Preferred,
+        algorithms: vec![Ctap2CredentialType::default()],
+        exclude: None,
+        extensions: Some(extensions),
+        timeout: TIMEOUT,
+    };
+
+    let state_recv = channel.get_ux_update_receiver();
+    tokio::spawn(handle_updates(state_recv));
+
+    let response = channel
+        .webauthn_make_credential(&make_credentials_request)
+        .await
+        .expect("Failed to register credential");
+    println!("WebAuthn MakeCredential response: {:?}", response);
+
+    // Creating a credential with HMAC should work even if no PIN is set
+    assert_eq!(
+        response
+            .authenticator_data
+            .extensions
+            .as_ref()
+            .and_then(|e| e.hmac_secret),
+        Some(true)
+    );
+    assert_eq!(
+        response.unsigned_extensions_output.prf,
+        Some(MakeCredentialPrfOutput {
+            enabled: Some(true)
+        })
+    );
+
+    let credential: Ctap2PublicKeyCredentialDescriptor =
+        (&response.authenticator_data).try_into().unwrap();
+    let get_assertion = GetAssertionRequest {
+        relying_party_id: "example.org".to_owned(),
+        hash: Vec::from(challenge),
+        allow: vec![credential.clone()],
+        user_verification: UserVerificationRequirement::Discouraged,
+        extensions: None,
+        timeout: TIMEOUT,
+    };
+
+    let response = channel
+        .webauthn_get_assertion(&get_assertion)
+        .await
+        .expect("Failed to sign in");
+
+    // Test 1: eval_by_credential with the cred_id we got
+    let eval = None;
+
+    let mut eval_by_credential = HashMap::new();
+    eval_by_credential.insert(
+        base64_url::encode(&credential.id),
+        PRFValue {
+            first: [1; 32],
+            second: None,
+        },
+    );
+    let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf {
+        eval,
+        eval_by_credential,
+    };
+    run_success_test(
+        channel,
+        &credential,
+        &challenge,
+        hmac_or_prf,
+        true,
+        false,
+        "eval_by_credential only",
+    )
+    .await;
+
+    // Test 2: eval and eval_with_credential with cred_id we got
+    let eval = Some(PRFValue {
+        first: [2; 32],
+        second: None,
+    });
+
+    let mut eval_by_credential = HashMap::new();
+    eval_by_credential.insert(
+        base64_url::encode(&credential.id),
+        PRFValue {
+            first: [1; 32],
+            second: None,
+        },
+    );
+    let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf {
+        eval,
+        eval_by_credential,
+    };
+    run_success_test(
+        channel,
+        &credential,
+        &challenge,
+        hmac_or_prf,
+        true,
+        false,
+        "eval and eval_by_credential",
+    )
+    .await;
+
+    // Test 3: eval only
+    let eval = Some(PRFValue {
+        first: [1; 32],
+        second: None,
+    });
+
+    let eval_by_credential = HashMap::new();
+    let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf {
+        eval,
+        eval_by_credential,
+    };
+    run_success_test(
+        channel,
+        &credential,
+        &challenge,
+        hmac_or_prf,
+        true,
+        false,
+        "eval only",
+    )
+    .await;
+
+    // Test 4: eval and a full list of eval_by_credential
+    let eval = Some(PRFValue {
+        first: [2; 32],
+        second: None,
+    });
+
+    let mut eval_by_credential = HashMap::new();
+    eval_by_credential.insert(
+        base64_url::encode(&[5; 54]),
+        PRFValue {
+            first: [5; 32],
+            second: None,
+        },
+    );
+    eval_by_credential.insert(
+        base64_url::encode(&[7; 54]),
+        PRFValue {
+            first: [7; 32],
+            second: Some([7; 32]),
+        },
+    );
+    eval_by_credential.insert(
+        base64_url::encode(&[8; 54]),
+        PRFValue {
+            first: [8; 32],
+            second: Some([8; 32]),
+        },
+    );
+    eval_by_credential.insert(
+        base64_url::encode(&credential.id),
+        PRFValue {
+            first: [1; 32],
+            second: Some([7; 32]),
+        },
+    );
+    let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf {
+        eval,
+        eval_by_credential,
+    };
+    run_success_test(
+        channel,
+        &credential,
+        &challenge,
+        hmac_or_prf,
+        true,
+        true,
+        "eval and full list of eval_by_credential",
+    )
+    .await;
+
+    // Test 5: eval and non-fitting list of eval_by_credential
+    let eval = Some(PRFValue {
+        first: [1; 32],
+        second: None,
+    });
+
+    let mut eval_by_credential = HashMap::new();
+    eval_by_credential.insert(
+        base64_url::encode(&[5; 54]),
+        PRFValue {
+            first: [5; 32],
+            second: None,
+        },
+    );
+    eval_by_credential.insert(
+        base64_url::encode(&[7; 54]),
+        PRFValue {
+            first: [7; 32],
+            second: Some([7; 32]),
+        },
+    );
+    eval_by_credential.insert(
+        base64_url::encode(&[8; 54]),
+        PRFValue {
+            first: [8; 32],
+            second: Some([8; 32]),
+        },
+    );
+    let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf {
+        eval,
+        eval_by_credential,
+    };
+    run_success_test(
+        channel,
+        &credential,
+        &challenge,
+        hmac_or_prf,
+        true,
+        false,
+        "eval and non-fitting list of eval_by_credential",
+    )
+    .await;
+
+    // Test 6: no eval and non-fitting list of eval_by_credential
+    let eval = None;
+
+    let mut eval_by_credential = HashMap::new();
+    eval_by_credential.insert(
+        base64_url::encode(&[5; 54]),
+        PRFValue {
+            first: [5; 32],
+            second: None,
+        },
+    );
+    eval_by_credential.insert(
+        base64_url::encode(&[7; 54]),
+        PRFValue {
+            first: [7; 32],
+            second: Some([7; 32]),
+        },
+    );
+    eval_by_credential.insert(
+        base64_url::encode(&[8; 54]),
+        PRFValue {
+            first: [8; 32],
+            second: Some([8; 32]),
+        },
+    );
+    let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf {
+        eval,
+        eval_by_credential,
+    };
+    run_success_test(
+        channel,
+        &credential,
+        &challenge,
+        hmac_or_prf,
+        false,
+        false,
+        "No eval and non-fitting list of eval_by_credential (should have no extension output)",
+    )
+    .await;
+
+    // Test 7: Wrongly encoded credential_id
+    let eval = Some(PRFValue {
+        first: [2; 32],
+        second: None,
+    });
+
+    let mut eval_by_credential = HashMap::new();
+    eval_by_credential.insert(
+        String::from("ÄöoLfwekldß^"),
+        PRFValue {
+            first: [1; 32],
+            second: None,
+        },
+    );
+    let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf {
+        eval,
+        eval_by_credential,
+    };
+    run_failed_test(
+        channel,
+        Some(&credential),
+        &challenge,
+        hmac_or_prf,
+        "Wrongly encoded credential_id",
+        WebAuthnError::Platform(PlatformError::SyntaxError),
+    )
+    .await;
+
+    // Test 8: Empty credential_id
+    let eval = None;
+    let mut eval_by_credential = HashMap::new();
+    eval_by_credential.insert(
+        String::new(),
+        PRFValue {
+            first: [1; 32],
+            second: None,
+        },
+    );
+    let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf {
+        eval,
+        eval_by_credential,
+    };
+    run_failed_test(
+        channel,
+        Some(&credential),
+        &challenge,
+        hmac_or_prf,
+        "Empty credential_id",
+        WebAuthnError::Platform(PlatformError::SyntaxError),
+    )
+    .await;
+
+    // Test 9: Empty allow_list, set eval_by_credential
+    let eval = None;
+    let mut eval_by_credential = HashMap::new();
+    eval_by_credential.insert(
+        String::new(),
+        PRFValue {
+            first: [1; 32],
+            second: None,
+        },
+    );
+    let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf {
+        eval,
+        eval_by_credential,
+    };
+    run_failed_test(
+        channel,
+        None,
+        &challenge,
+        hmac_or_prf,
+        "Empty allow_list, set eval_by_credential",
+        WebAuthnError::Platform(PlatformError::NotSupported),
+    )
+    .await;
+
+    println!("WebAuthn GetAssertion response: {:?}", response);
+}
+
+async fn run_success_test(
+    channel: &mut HidChannel<'_>,
+    credential: &Ctap2PublicKeyCredentialDescriptor,
+    challenge: &[u8; 32],
+    hmac_or_prf: GetAssertionHmacOrPrfInput,
+    expect_extensions: bool,
+    expect_prf_second: bool,
+    printoutput: &str,
+) {
+    let get_assertion = GetAssertionRequest {
+        relying_party_id: "example.org".to_owned(),
+        hash: Vec::from(challenge),
+        allow: vec![credential.clone()],
+        user_verification: UserVerificationRequirement::Discouraged,
+        extensions: Some(GetAssertionRequestExtensions {
+            hmac_or_prf,
+            ..Default::default()
+        }),
+        timeout: TIMEOUT,
+    };
+
+    let response = channel
+        .webauthn_get_assertion(&get_assertion)
+        .await
+        .expect("Failed to run PRF-test GetAssertion");
+    assert_eq!(response.assertions.len(), 1, "Testcase: {}", printoutput);
+    if expect_extensions {
+        assert!(
+            response.assertions[0].unsigned_extensions_output.is_some(),
+            "Testcase: {}",
+            printoutput
+        );
+        assert!(
+            response.assertions[0]
+                .unsigned_extensions_output
+                .as_ref()
+                .unwrap()
+                .prf
+                .is_some(),
+            "Testcase: {}",
+            printoutput
+        );
+        let prf = response.assertions[0]
+            .unsigned_extensions_output
+            .as_ref()
+            .expect("Did not get unsigned_extensions_output")
+            .prf
+            .as_ref()
+            .expect("Did not get prf inside unsigned_extensions_output");
+        assert!(prf.results.is_some(), "Testcase: {}", printoutput);
+        let results = prf.results.as_ref().unwrap();
+        assert_ne!(results.first, [0; 32], "Testcase: {}", printoutput);
+        if expect_prf_second {
+            assert!(results.second.is_some(), "Testcase: {}", printoutput);
+        } else {
+            assert!(results.second.is_none(), "Testcase: {}", printoutput);
+        }
+    } else {
+        assert!(
+            response.assertions[0].unsigned_extensions_output.is_none(),
+            "Testcase: {}",
+            printoutput
+        );
+    }
+}
+
+async fn run_failed_test(
+    channel: &mut HidChannel<'_>,
+    credential: Option<&Ctap2PublicKeyCredentialDescriptor>,
+    challenge: &[u8; 32],
+    hmac_or_prf: GetAssertionHmacOrPrfInput,
+    printoutput: &str,
+    expected_error: WebAuthnError,
+) {
+    let get_assertion = GetAssertionRequest {
+        relying_party_id: "example.org".to_owned(),
+        hash: Vec::from(challenge),
+        allow: credential.map(|x| vec![x.clone()]).unwrap_or_default(),
+        user_verification: UserVerificationRequirement::Discouraged,
+        extensions: Some(GetAssertionRequestExtensions {
+            hmac_or_prf,
+            ..Default::default()
+        }),
+        timeout: TIMEOUT,
+    };
+
+    let response: Result<(), WebAuthnError> = loop {
+        match channel.webauthn_get_assertion(&get_assertion).await {
+            Ok(_) => panic!("Success, even though it should have errored out!"),
+            Err(WebAuthnError::Ctap(ctap_error)) => {
+                if ctap_error.is_retryable_user_error() {
+                    println!("Oops, try again! Error: {}", ctap_error);
+                    continue;
+                }
+                break Err(WebAuthnError::Ctap(ctap_error));
+            }
+            Err(err) => break Err(err),
+        };
+    };
+
+    assert_eq!(response, Err(expected_error), "{printoutput}:");
+    println!("Success for test: {printoutput}")
+}
