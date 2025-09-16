@@ -22,7 +22,7 @@ use crate::{PinRequiredUpdate, UvUpdate};
 
 pub(crate) enum UsedPinUvAuthToken {
     FromStorage,
-    NewlyCalculated,
+    NewlyCalculated(Ctap2UserVerificationOperation),
     LegacyUV,
     SharedSecretOnly,
     None,
@@ -336,7 +336,7 @@ where
                 // Sets the pinUvAuthProtocol parameter to the value as selected when it obtained the shared secret.
                 ctap2_request.calculate_and_set_uv_auth(&uv_proto, uv_auth_token.as_slice());
 
-                Ok(UsedPinUvAuthToken::NewlyCalculated)
+                Ok(UsedPinUvAuthToken::NewlyCalculated(uv_operation))
             }
         }
     }
@@ -427,12 +427,11 @@ mod test {
                 cbor::{to_vec, CborRequest, CborResponse},
                 Ctap2ClientPinRequest, Ctap2ClientPinResponse, Ctap2CommandCode,
                 Ctap2GetAssertionRequest, Ctap2GetInfoResponse, Ctap2PinUvAuthProtocol,
-                Ctap2UserVerifiableRequest,
+                Ctap2UserVerifiableRequest, Ctap2UserVerificationOperation,
             },
             CtapError,
         },
-        transport::mock::channel::MockChannel,
-        transport::{Channel, Ctap2AuthTokenStore},
+        transport::{mock::channel::MockChannel, Channel, Ctap2AuthTokenStore},
         webauthn::UsedPinUvAuthToken,
         UvUpdate,
     };
@@ -763,7 +762,9 @@ mod test {
             ),
         ];
 
-        let expected_result = Ok(UsedPinUvAuthToken::NewlyCalculated);
+        let expected_result = Ok(UsedPinUvAuthToken::NewlyCalculated(
+            Ctap2UserVerificationOperation::GetPinUvAuthTokenUsingUvWithPermissions,
+        ));
 
         for (info_options, uv_requirement) in testcases {
             let extensions = Some(GetAssertionRequestExtensions {
@@ -871,7 +872,9 @@ mod test {
             ),
         ];
 
-        let expected_result = Ok(UsedPinUvAuthToken::NewlyCalculated);
+        let expected_result = Ok(UsedPinUvAuthToken::NewlyCalculated(
+            Ctap2UserVerificationOperation::GetPinUvAuthTokenUsingPinWithPermissions,
+        ));
 
         for (info_options, uv_requirement) in testcases {
             let extensions = Some(GetAssertionRequestExtensions {

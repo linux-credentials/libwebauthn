@@ -21,6 +21,7 @@ use crate::{
 };
 use rand::{thread_rng, Rng};
 use test_log::test;
+use tokio::sync::broadcast::error::TryRecvError;
 use tokio::sync::broadcast::Receiver;
 
 const TIMEOUT: Duration = Duration::from_secs(10);
@@ -29,7 +30,7 @@ const TIMEOUT: Duration = Duration::from_secs(10);
 async fn test_webauthn_prf_no_pin_set() {
     let mut device = get_virtual_device();
     let mut channel = device.channel().await.unwrap();
-    run_test_battery(&mut channel).await;
+    run_test_battery(&mut channel, false).await;
 }
 
 #[test(tokio::test)]
@@ -40,18 +41,38 @@ async fn test_webauthn_prf_with_pin_set() {
         .change_pin(String::from("1234"), TIMEOUT)
         .await
         .unwrap();
-    run_test_battery(&mut channel).await;
+    run_test_battery(&mut channel, true).await;
 }
 
-async fn handle_updates(mut state_recv: Receiver<UvUpdate>) {
-    while let Ok(update) = state_recv.recv().await {
-        if let UvUpdate::PinRequired(update) = update {
-            let _ = update.send_pin("1234");
+enum UvUpdateShim {
+    PresenceRequired,
+    PinRequired,
+}
+
+async fn handle_updates(
+    mut state_recv: Receiver<UvUpdate>,
+    expected_updates: Vec<UvUpdateShim>,
+) -> Receiver<UvUpdate> {
+    for expected_update in expected_updates {
+        let update = state_recv
+            .recv()
+            .await
+            .expect("Failed to receive UV update");
+        match expected_update {
+            UvUpdateShim::PresenceRequired => assert_eq!(update, UvUpdate::PresenceRequired),
+            UvUpdateShim::PinRequired => {
+                if let UvUpdate::PinRequired(update) = update {
+                    let _ = update.send_pin("1234");
+                } else {
+                    panic!("Did not get PinRequired-update as expected!");
+                }
+            }
         }
     }
+    state_recv
 }
 
-async fn run_test_battery(channel: &mut HidChannel<'_>) {
+async fn run_test_battery(channel: &mut HidChannel<'_>, using_pin: bool) {
     let user_id: [u8; 32] = thread_rng().gen();
     let challenge: [u8; 32] = thread_rng().gen();
 
@@ -75,13 +96,34 @@ async fn run_test_battery(channel: &mut HidChannel<'_>) {
     };
 
     let state_recv = channel.get_ux_update_receiver();
-    tokio::spawn(handle_updates(state_recv));
+
+    let mut expected_updates = Vec::new();
+    // First make cred
+    if using_pin {
+        expected_updates.push(UvUpdateShim::PinRequired);
+    }
+    expected_updates.push(UvUpdateShim::PresenceRequired); // First MakeCredential
+
+    // After this point, pinUvAuthToken should be cached by the channel, so no more PIN
+    // requirements. The initial MakeCredential-call has a pinUvAuthToken valid for both
+    // MakeCredential and GetAssertion (due to doing preflight), so it can be reused
+    // for all GetAssertion calls afterwards.
+    expected_updates.push(UvUpdateShim::PresenceRequired); // First GetAssertion w/o extensions
+    expected_updates.push(UvUpdateShim::PresenceRequired); // Test 1
+    expected_updates.push(UvUpdateShim::PresenceRequired); // Test 2
+    expected_updates.push(UvUpdateShim::PresenceRequired); // Test 3
+    expected_updates.push(UvUpdateShim::PresenceRequired); // Test 4
+    expected_updates.push(UvUpdateShim::PresenceRequired); // Test 5
+    expected_updates.push(UvUpdateShim::PresenceRequired); // Test 6
+
+    // Tests 7-9 should have no update, as it errors out inside the platform
+
+    let uv_handle = tokio::spawn(handle_updates(state_recv, expected_updates));
 
     let response = channel
         .webauthn_make_credential(&make_credentials_request)
         .await
         .expect("Failed to register credential");
-    println!("WebAuthn MakeCredential response: {:?}", response);
 
     // Creating a credential with HMAC should work even if no PIN is set
     assert_eq!(
@@ -105,12 +147,12 @@ async fn run_test_battery(channel: &mut HidChannel<'_>) {
         relying_party_id: "example.org".to_owned(),
         hash: Vec::from(challenge),
         allow: vec![credential.clone()],
-        user_verification: UserVerificationRequirement::Discouraged,
+        user_verification: UserVerificationRequirement::Preferred,
         extensions: None,
         timeout: TIMEOUT,
     };
 
-    let response = channel
+    let _response = channel
         .webauthn_get_assertion(&get_assertion)
         .await
         .expect("Failed to sign in");
@@ -401,7 +443,9 @@ async fn run_test_battery(channel: &mut HidChannel<'_>) {
     )
     .await;
 
-    println!("WebAuthn GetAssertion response: {:?}", response);
+    let mut state_recv = uv_handle.await.unwrap();
+    // Verify that there is no lingering UV update in the queue
+    assert_eq!(state_recv.try_recv(), Err(TryRecvError::Empty))
 }
 
 async fn run_success_test(
@@ -417,7 +461,7 @@ async fn run_success_test(
         relying_party_id: "example.org".to_owned(),
         hash: Vec::from(challenge),
         allow: vec![credential.clone()],
-        user_verification: UserVerificationRequirement::Discouraged,
+        user_verification: UserVerificationRequirement::Preferred,
         extensions: Some(GetAssertionRequestExtensions {
             hmac_or_prf,
             ..Default::default()
