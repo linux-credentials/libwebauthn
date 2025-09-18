@@ -485,6 +485,7 @@ mod test {
         expected_result: Result<UsedPinUvAuthToken, Error>,
     ) {
         let mut channel = MockChannel::new();
+        let status_recv = channel.get_ux_update_receiver();
         let info = create_info(info_options, info_extensions);
         let info_req = CborRequest::new(Ctap2CommandCode::AuthenticatorGetInfo);
         let info_resp = CborResponse::new_success_from_slice(to_vec(&info).unwrap().as_slice());
@@ -500,6 +501,8 @@ mod test {
         assert_eq!(resp, expected_result);
         // Nothing ended up in the auth store
         assert!(channel.get_auth_data().is_none());
+        // No updates should be sent, since we are exiting early
+        assert!(status_recv.is_empty());
     }
 
     #[tokio::test]
@@ -712,6 +715,7 @@ mod test {
             });
 
             let mut channel = MockChannel::new();
+            let status_recv = channel.get_ux_update_receiver();
             let mut info = create_info(&info_options, Some(&["hmac-secret"]));
             info.pin_auth_protos = Some(vec![1]);
             let info_req = CborRequest::new(Ctap2CommandCode::AuthenticatorGetInfo);
@@ -746,6 +750,8 @@ mod test {
             assert!(channel.get_auth_data().is_some());
             assert!(channel.get_auth_data().unwrap().pin_uv_auth_token.is_none());
             assert!(!channel.get_auth_data().unwrap().shared_secret.is_empty());
+            // No updates should be sent, since we are only doing shared_secret
+            assert!(status_recv.is_empty());
         }
     }
 
@@ -776,6 +782,8 @@ mod test {
             });
 
             let mut channel = MockChannel::new();
+
+            let mut status_recv = channel.get_ux_update_receiver();
 
             // Queueing GetInfo request and response
             let mut info = create_info(&info_options, Some(&["hmac-secret"]));
@@ -856,6 +864,8 @@ mod test {
                 channel.get_auth_data().unwrap().shared_secret,
                 shared_secret
             );
+            // No updates should be sent, since we are exiting early
+            assert_eq!(status_recv.recv().await, Ok(UvUpdate::PresenceRequired));
         }
     }
 
@@ -962,13 +972,14 @@ mod test {
             channel.push_command_pair(pin_req, pin_resp);
 
             let mut recv = channel.get_ux_update_receiver();
-            tokio::task::spawn(async move {
+            let recv_handle = tokio::task::spawn(async move {
                 let req = recv.recv().await.unwrap();
                 if let UvUpdate::PinRequired(update) = req {
                     update.send_pin("1234").unwrap();
                 } else {
                     panic!("Wrong UxUpdate received! Expected PinRequired");
                 }
+                recv
             });
 
             let resp =
@@ -991,6 +1002,9 @@ mod test {
                 channel.get_auth_data().unwrap().shared_secret,
                 shared_secret
             );
+            let recv = recv_handle.await.expect("Failed to join update thread");
+            // No more updates should be sent
+            assert!(recv.is_empty());
         }
     }
 }
