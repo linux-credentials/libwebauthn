@@ -12,6 +12,7 @@ use tracing::{debug, instrument, trace, warn, Level};
 
 use crate::proto::ctap1::apdu::{ApduRequest, ApduResponse};
 use crate::proto::ctap2::cbor::{CborRequest, CborResponse};
+use crate::proto::ctap2::Ctap2;
 use crate::transport::channel::{AuthTokenData, Channel, ChannelStatus, Ctap2AuthTokenStore};
 use crate::transport::device::SupportedProtocols;
 use crate::transport::error::TransportError;
@@ -141,16 +142,24 @@ where
         return Ok(false);
     }
 
-    pub fn select_fido2(&mut self) -> Result<(), Error> {
+    pub async fn select_fido2(&mut self) -> Result<(), Error> {
+        // Given legacy support for CTAP1/U2F, the client MUST determine the capabilities of the device at the selection stage.
         let command = command::select_file(SELECT_P1, SELECT_P2, APDU_FIDO);
-        let is_u2f_v2 = self.handle(self.ctx, command).map(|e| (e == b"U2F_V2"))?;
-        self.supported = SupportedProtocols {
-            u2f: is_u2f_v2,
-            // A CTAP authenticatorGetInfo should be issued to
-            // determine if the device supports CTAP2 or
-            // not. Assume it does for now.
-            fido2: true,
-        };
+        let response = self.handle(self.ctx, command)?;
+        let mut u2f = false;
+        let mut fido2 = false;
+        if response == b"FIDO_2_0" {
+            //     If the authenticator ONLY implements CTAP2, the device SHALL respond with "FIDO_2_0", or 0x4649444f5f325f30.
+            fido2 = true;
+            // NOTE: Yubikeys seem to ignore this part of the specification and always return U2F_V2, even if U2F-NFC is disabled.
+        } else if response == b"U2F_V2" {
+            //     If the authenticator implements CTAP1/U2F, the version information SHALL be the string "U2F_V2", or 0x5532465f5632, to maintain backwards-compatibility with CTAP1/U2F-only clients.
+            u2f = true;
+            //     If the authenticator implements both CTAP1/U2F and CTAP2, the version information SHALL be the string "U2F_V2", or 0x5532465f5632, to maintain backwards-compatibility with CTAP1/U2F-only clients. CTAP2-aware clients MAY then issue a CTAP authenticatorGetInfo command to determine if the device supports CTAP2 or not.
+            fido2 = self.ctap2_get_info().await.is_ok();
+        }
+
+        self.supported = SupportedProtocols { u2f, fido2 };
 
         Ok(())
     }
@@ -176,7 +185,7 @@ where
         let mut buf = [0u8; 1024];
         let mut rapdu = Vec::new();
 
-        let len: usize = self.handle_in_ctx(ctx, &command_buf, &mut buf)?;
+        let len = self.handle_in_ctx(ctx, &command_buf, &mut buf)?;
         let mut resp = Response::from(&buf[..len]);
 
         let (mut sw1, mut sw2) = resp.trailer;
@@ -221,13 +230,20 @@ where
     }
 
     #[instrument(level = Level::DEBUG, skip_all)]
-    async fn apdu_send(&self, _request: &ApduRequest, _timeout: Duration) -> Result<(), Error> {
-        todo!("apdu_send")
+    async fn apdu_send(&mut self, request: &ApduRequest, _timeout: Duration) -> Result<(), Error> {
+        let resp = self.handle(self.ctx, request)?;
+        trace!("apdu_send {:?}", resp);
+
+        let apdu_response = ApduResponse::new_success(&resp);
+        self.apdu_response = Some(apdu_response);
+        Ok(())
     }
 
     #[instrument(level = Level::DEBUG, skip_all)]
-    async fn apdu_recv(&self, _timeout: Duration) -> Result<ApduResponse, Error> {
-        todo!("apdu_recv")
+    async fn apdu_recv(&mut self, _timeout: Duration) -> Result<ApduResponse, Error> {
+        self.apdu_response
+            .take()
+            .ok_or(Error::Transport(TransportError::InvalidFraming))
     }
 
     #[instrument(level = Level::DEBUG, skip_all)]

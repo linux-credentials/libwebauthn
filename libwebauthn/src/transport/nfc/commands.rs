@@ -1,5 +1,7 @@
 use apdu::Command;
 
+use crate::proto::ctap1::apdu::ApduRequest;
+
 // Copy private impl
 const CLA_DEFAULT: u8 = 0x00;
 const CLA_INTER_INDUSTRY: u8 = 0x80;
@@ -75,6 +77,18 @@ impl<'a> From<CtapMsgCommand<'a>> for Command<'a> {
             0, //CTAP_P1_SUPP_GET_RESP,
             CTAP_P2,
             cmd.payload,
+        )
+    }
+}
+
+impl<'a> From<&'a ApduRequest> for Command<'a> {
+    fn from(cmd: &'a ApduRequest) -> Self {
+        Self::new_with_payload(
+            0, // CLA
+            cmd.ins,
+            cmd.p1,
+            cmd.p2,
+            cmd.data.as_deref().unwrap_or(&[]),
         )
     }
 }

@@ -3,7 +3,10 @@ use std::fmt;
 #[allow(unused_imports)]
 use tracing::{debug, info, instrument, trace};
 
-use crate::{transport::device::Device, webauthn::Error};
+use crate::{
+    transport::{device::Device, Channel},
+    webauthn::Error,
+};
 
 use super::channel::NfcChannel;
 #[cfg(feature = "libnfc")]
@@ -57,7 +60,7 @@ impl NfcDevice {
         }
     }
 
-    fn channel_sync<'d>(&'d self) -> Result<NfcChannel<Context>, Error> {
+    async fn channel_sync(&self) -> Result<NfcChannel<Context>, Error> {
         trace!("nfc channel {:?}", self);
         let mut channel: NfcChannel<Context> = match &self.info {
             #[cfg(feature = "libnfc")]
@@ -66,8 +69,7 @@ impl NfcDevice {
             DeviceInfo::Pcsc(info) => info.channel(),
         }?;
 
-        channel.select_fido2()?;
-
+        channel.select_fido2().await?;
         Ok(channel)
     }
 }
@@ -75,24 +77,26 @@ impl NfcDevice {
 #[async_trait]
 impl<'d> Device<'d, Nfc, NfcChannel<Context>> for NfcDevice {
     async fn channel(&'d mut self) -> Result<NfcChannel<Context>, Error> {
-        self.channel_sync()
+        self.channel_sync().await
     }
 }
 
-fn is_fido<Ctx>(device: &NfcDevice) -> bool
+async fn is_fido<Ctx>(device: &NfcDevice) -> bool
 where
     Ctx: fmt::Debug + fmt::Display + Copy + Send + Sync,
 {
-    fn inner<Ctx>(device: &NfcDevice) -> Result<bool, Error>
+    async fn inner<Ctx>(device: &NfcDevice) -> Result<bool, Error>
     where
         Ctx: fmt::Debug + fmt::Display + Copy + Send + Sync,
     {
-        let mut chan = device.channel_sync()?;
-        let _ = chan.select_fido2()?;
-        Ok(true)
+        let chan = device.channel_sync().await?;
+        // We fill the struct within channel_sync() and the call cannot fail for NFC,
+        // so unwrap is fine here
+        let protocols = chan.supported_protocols().await.unwrap();
+        Ok(protocols.fido2 || protocols.u2f)
     }
 
-    inner::<Ctx>(device).is_ok()
+    inner::<Ctx>(device).await.is_ok()
 }
 
 #[instrument]
@@ -106,11 +110,11 @@ pub async fn list_devices() -> Result<Vec<NfcDevice>, Error> {
     ];
 
     for list_devices in list_devices_fns {
-        let mut devices = list_devices()?
-            .into_iter()
-            .filter(|e| is_fido::<Context>(&e))
-            .collect::<Vec<NfcDevice>>();
-        all_devices.append(&mut devices);
+        for device in list_devices()? {
+            if is_fido::<Context>(&device).await {
+                all_devices.push(device);
+            }
+        }
     }
 
     Ok(all_devices)
