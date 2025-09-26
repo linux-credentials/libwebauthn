@@ -61,6 +61,16 @@ pub trait Channel: Send + Sync + Display + Ctap2AuthTokenStore {
     fn supports_preflight() -> bool {
         true
     }
+
+    // Default no-op implementations for these, as we currently only have a test device
+    // for HidChannel, and that will override these default implementations.
+    #[cfg(test)]
+    fn set_forced_pin_protocol(&mut self, _protocols: Ctap2PinUvAuthProtocol) {}
+
+    #[cfg(test)]
+    fn get_forced_pin_protocol(&mut self) -> Option<Ctap2PinUvAuthProtocol> {
+        None
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

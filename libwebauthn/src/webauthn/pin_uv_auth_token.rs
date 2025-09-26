@@ -29,8 +29,13 @@ pub(crate) enum UsedPinUvAuthToken {
 }
 
 pub(crate) async fn select_uv_proto(
+    #[cfg(test)] override_protocol: Option<Ctap2PinUvAuthProtocol>,
     get_info_response: &Ctap2GetInfoResponse,
 ) -> Option<Box<dyn PinUvAuthProtocol>> {
+    #[cfg(test)]
+    if let Some(proto) = override_protocol {
+        return Some(proto.create_protocol_object());
+    }
     for &protocol in get_info_response.pin_auth_protos.iter().flatten() {
         match protocol {
             1 => return Some(Box::new(PinUvAuthProtocolOne::new())),
@@ -56,8 +61,12 @@ where
 {
     let get_info_response = channel.ctap2_get_info().await?;
     ctap2_request.handle_legacy_preview(&get_info_response);
-    let maybe_uv_proto = select_uv_proto(&get_info_response).await;
-
+    let maybe_uv_proto = select_uv_proto(
+        #[cfg(test)]
+        channel.get_forced_pin_protocol(),
+        &get_info_response,
+    )
+    .await;
     if let Some(uv_proto) = maybe_uv_proto {
         let token_identifier = Ctap2AuthTokenPermission::new(
             uv_proto.version(),
@@ -161,7 +170,13 @@ where
             uv_operation = Ctap2UserVerificationOperation::OnlyForSharedSecret;
         }
 
-        let Some(uv_proto) = select_uv_proto(get_info_response).await else {
+        let Some(uv_proto) = select_uv_proto(
+            #[cfg(test)]
+            channel.get_forced_pin_protocol(),
+            get_info_response,
+        )
+        .await
+        else {
             error!("No supported PIN/UV auth protocols found");
             return Err(Error::Ctap(CtapError::Other));
         };
