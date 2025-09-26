@@ -102,6 +102,9 @@ where
 #[instrument]
 pub async fn list_devices() -> Result<Vec<NfcDevice>, Error> {
     let mut all_devices = Vec::new();
+    // TODO: Either only allow one backend, OR deduplicate found devices here!
+    //       Otherwise, we'll potentially have the same device discovered by
+    //       both backends and thus added multiple times to the list.
     let list_devices_fns = [
         #[cfg(feature = "libnfc")]
         libnfc::list_devices,

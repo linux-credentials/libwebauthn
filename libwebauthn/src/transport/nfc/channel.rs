@@ -23,7 +23,7 @@ use super::commands::{command_ctap_msg, command_get_response};
 
 const SELECT_P1: u8 = 0x04;
 const SELECT_P2: u8 = 0x00;
-const APDU_FIDO: &[u8; 8] = b"\xa0\x00\x00\x06\x47\x2f\x00\x01";
+const FIDO2_AID: &[u8; 8] = b"\xa0\x00\x00\x06\x47\x2f\x00\x01";
 const SW1_MORE_DATA: u8 = 0x61;
 
 pub type CancelNfcOperation = ();
@@ -144,7 +144,7 @@ where
 
     pub async fn select_fido2(&mut self) -> Result<(), Error> {
         // Given legacy support for CTAP1/U2F, the client MUST determine the capabilities of the device at the selection stage.
-        let command = command::select_file(SELECT_P1, SELECT_P2, APDU_FIDO);
+        let command = command::select_file(SELECT_P1, SELECT_P2, FIDO2_AID);
         let response = self.handle(self.ctx, command)?;
         let mut u2f = false;
         let mut fido2 = false;
