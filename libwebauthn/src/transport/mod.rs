@@ -12,5 +12,9 @@ mod transport;
 
 pub(crate) use channel::{AuthTokenData, Ctap2AuthTokenPermission};
 pub use channel::{Channel, Ctap2AuthTokenStore};
+
+#[cfg(test)]
+pub use channel::ChannelStatus;
+
 pub use device::Device;
 pub use transport::Transport;

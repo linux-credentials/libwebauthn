@@ -221,6 +221,7 @@ pub enum Ctap2PinUvAuthProtocolCommand {
     GetPinUvAuthTokenUsingPinWithPermissions = 0x09,
 }
 
+#[cfg_attr(test, derive(SerializeIndexed))]
 #[derive(Debug, Clone, Default, DeserializeIndexed)]
 pub struct Ctap2ClientPinResponse {
     /// keyAgreement (0x01)

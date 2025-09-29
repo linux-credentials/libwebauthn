@@ -10,7 +10,7 @@ use p256::{
     ecdh::EphemeralSecret, elliptic_curve::sec1::FromEncodedPoint, EncodedPoint,
     PublicKey as P256PublicKey,
 };
-use rand::{rngs::OsRng, thread_rng, Rng};
+use rand::{rngs::OsRng, thread_rng, Rng, SeedableRng};
 use sha2::{Digest, Sha256};
 use tracing::{error, instrument, warn};
 use x509_parser::nom::AsBytes;
@@ -97,7 +97,14 @@ pub struct PinUvAuthProtocolOne {
 
 impl PinUvAuthProtocolOne {
     pub fn new() -> Self {
-        let private_key = EphemeralSecret::random(&mut OsRng);
+        let private_key = if cfg!(test) {
+            // For testing only!!
+            // We need a deterministic, seedable RNG to be able to "predict" crypto-operations
+            let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+            EphemeralSecret::random(&mut rng)
+        } else {
+            EphemeralSecret::random(&mut OsRng)
+        };
         let public_key = private_key.public_key();
         Self {
             private_key,
@@ -247,7 +254,14 @@ pub struct PinUvAuthProtocolTwo {
 
 impl PinUvAuthProtocolTwo {
     pub fn new() -> Self {
-        let private_key = EphemeralSecret::random(&mut OsRng);
+        let private_key = if cfg!(test) {
+            // For testing only!!
+            // We need a deterministic, seedable RNG to be able to "predict" crypto-operations
+            let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+            EphemeralSecret::random(&mut rng)
+        } else {
+            EphemeralSecret::random(&mut OsRng)
+        };
         let public_key = private_key.public_key();
         Self {
             private_key,
