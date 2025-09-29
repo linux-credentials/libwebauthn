@@ -79,10 +79,10 @@ impl Channel for MockChannel {
         unimplemented!();
     }
 
-    async fn apdu_send(&self, _request: &ApduRequest, _timeout: Duration) -> Result<(), Error> {
+    async fn apdu_send(&mut self, _request: &ApduRequest, _timeout: Duration) -> Result<(), Error> {
         unimplemented!();
     }
-    async fn apdu_recv(&self, _timeout: Duration) -> Result<ApduResponse, Error> {
+    async fn apdu_recv(&mut self, _timeout: Duration) -> Result<ApduResponse, Error> {
         unimplemented!();
     }
 
