@@ -18,6 +18,8 @@ use tracing::{debug, info, instrument, trace, warn, Level};
 use crate::proto::ctap1::apdu::{ApduRequest, ApduResponse};
 use crate::proto::ctap1::{Ctap1, Ctap1RegisterRequest};
 use crate::proto::ctap2::cbor::{CborRequest, CborResponse};
+#[cfg(test)]
+use crate::proto::ctap2::Ctap2PinUvAuthProtocol;
 use crate::proto::ctap2::{Ctap2, Ctap2MakeCredentialRequest};
 use crate::proto::CtapError;
 use crate::transport::channel::{AuthTokenData, Channel, ChannelStatus, Ctap2AuthTokenStore};
@@ -72,6 +74,8 @@ pub struct HidChannel<'d> {
     auth_token_data: Option<AuthTokenData>,
     ux_update_sender: broadcast::Sender<UvUpdate>,
     handle: HidChannelHandle,
+    #[cfg(test)]
+    pin_protocol_override: Option<Ctap2PinUvAuthProtocol>,
 }
 
 impl<'d> HidChannel<'d> {
@@ -97,6 +101,8 @@ impl<'d> HidChannel<'d> {
             auth_token_data: None,
             ux_update_sender,
             handle,
+            #[cfg(test)]
+            pin_protocol_override: None,
         };
         channel.init = channel.init(INIT_TIMEOUT).await?;
         Ok(channel)
@@ -498,6 +504,16 @@ impl Channel for HidChannel<'_> {
 
     fn get_ux_update_sender(&self) -> &broadcast::Sender<UvUpdate> {
         &self.ux_update_sender
+    }
+
+    #[cfg(test)]
+    fn set_forced_pin_protocol(&mut self, protocols: Ctap2PinUvAuthProtocol) {
+        self.pin_protocol_override = Some(protocols);
+    }
+
+    #[cfg(test)]
+    fn get_forced_pin_protocol(&mut self) -> Option<Ctap2PinUvAuthProtocol> {
+        self.pin_protocol_override
     }
 }
 

@@ -7,7 +7,7 @@ use crate::ops::webauthn::{
     PRFValue,
 };
 use crate::pin::PinManagement;
-use crate::proto::ctap2::Ctap2PublicKeyCredentialDescriptor;
+use crate::proto::ctap2::{Ctap2PinUvAuthProtocol, Ctap2PublicKeyCredentialDescriptor};
 use crate::transport::hid::channel::HidChannel;
 use crate::transport::hid::get_virtual_device;
 use crate::transport::{Channel, Device};
@@ -37,6 +37,30 @@ async fn test_webauthn_prf_no_pin_set() {
 async fn test_webauthn_prf_with_pin_set() {
     let mut device = get_virtual_device();
     let mut channel = device.channel().await.unwrap();
+    channel
+        .change_pin(String::from("1234"), TIMEOUT)
+        .await
+        .unwrap();
+    run_test_battery(&mut channel, true).await;
+}
+
+#[test(tokio::test)]
+async fn test_webauthn_prf_with_pin_set_forced_pin_protocol_one() {
+    let mut device = get_virtual_device();
+    let mut channel = device.channel().await.unwrap();
+    channel.set_forced_pin_protocol(Ctap2PinUvAuthProtocol::One);
+    channel
+        .change_pin(String::from("1234"), TIMEOUT)
+        .await
+        .unwrap();
+    run_test_battery(&mut channel, true).await;
+}
+
+#[test(tokio::test)]
+async fn test_webauthn_prf_with_pin_set_forced_pin_protocol_two() {
+    let mut device = get_virtual_device();
+    let mut channel = device.channel().await.unwrap();
+    channel.set_forced_pin_protocol(Ctap2PinUvAuthProtocol::Two);
     channel
         .change_pin(String::from("1234"), TIMEOUT)
         .await

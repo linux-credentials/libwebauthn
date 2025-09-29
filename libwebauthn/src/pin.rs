@@ -406,7 +406,13 @@ where
             return Err(Error::Platform(PlatformError::PinTooLong));
         }
 
-        let Some(uv_proto) = select_uv_proto(&get_info_response).await else {
+        let Some(uv_proto) = select_uv_proto(
+            #[cfg(test)]
+            self.get_forced_pin_protocol(),
+            &get_info_response,
+        )
+        .await
+        else {
             error!("No supported PIN/UV auth protocols found");
             return Err(Error::Ctap(CtapError::Other));
         };
