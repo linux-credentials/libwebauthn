@@ -11,7 +11,6 @@ use std::{
     borrow::Cow,
     cell::RefCell,
     fmt::Debug,
-    path::Path,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -36,7 +35,7 @@ use trussed::{
     backend::BackendId,
     platform::Platform as _,
     store::Store as _,
-    virt::{self, StorageConfig, StoreConfig},
+    virt::{self, StoreConfig},
 };
 use trussed_staging::virt::{BackendIds, Client, Dispatcher};
 
@@ -44,15 +43,15 @@ use trussed_staging::virt::{BackendIds, Client, Dispatcher};
 const ATTESTATION_CERT: &[u8] = include_bytes!("./data/fido-cert.der");
 const ATTESTATION_KEY: &[u8] = include_bytes!("./data/fido-key.trussed");
 
-pub fn run_ctaphid<F, T>(storage_dir: &Path, f: F) -> T
+pub fn run_ctaphid<F, T>(f: F) -> T
 where
     F: FnOnce(ctaphid::Device<Device>) -> T + Send,
     T: Send,
 {
-    run_ctaphid_with_options(storage_dir, Default::default(), f)
+    run_ctaphid_with_options(Default::default(), f)
 }
 
-pub fn run_ctaphid_with_options<F, T>(storage_dir: &Path, options: Options, f: F) -> T
+pub fn run_ctaphid_with_options<F, T>(options: Options, f: F) -> T
 where
     F: FnOnce(ctaphid::Device<Device>) -> T + Send,
     T: Send,
@@ -61,7 +60,6 @@ where
     files.push((path!("fido/x5c/00").into(), ATTESTATION_CERT.into()));
     files.push((path!("fido/sec/00").into(), ATTESTATION_KEY.into()));
     with_client(
-        storage_dir,
         &files,
         |client| {
             let mut authenticator = Authenticator::new(
@@ -184,26 +182,23 @@ impl HidDevice for Device<'_> {
     }
 }
 
-fn with_client<F, F2, T>(
-    storage_dir: &Path,
-    files: &[(PathBuf, Vec<u8>)],
-    f: F,
-    inspect_ifs: F2,
-) -> T
+fn with_client<F, F2, T>(files: &[(PathBuf, Vec<u8>)], f: F, inspect_ifs: F2) -> T
 where
     F: FnOnce(Client) -> T,
     F2: FnOnce(&dyn DynFilesystem),
 {
-    let store = StoreConfig {
-        internal: StorageConfig::filesystem(storage_dir.join("internal")),
-        external: StorageConfig::filesystem(storage_dir.join("external")),
-        volatile: StorageConfig::filesystem(storage_dir.join("volatile")),
-    };
-    // Since we want to run this repeatedly, RAM-storage sadly doesn't work,
-    // as it is wiped with each `with_platform()`-call. So we have to switch
-    // to using filesystem-storage
-    // virt::with_platform(StoreConfig::ram(), |mut platform| {
-    virt::with_platform(store, |mut platform| {
+    // We are currently using only RAM storage, which means everything is wiped,
+    // once the channel is dropped.
+    // In case we need at some point a device that remembers registered credentials
+    // across channel-instantiations, pass a Path to a (temp)-dir into this function
+    // and call this instead:
+    // let store = StoreConfig {
+    //     internal: StorageConfig::filesystem(storage_dir.join("internal")),
+    //     external: StorageConfig::filesystem(storage_dir.join("external")),
+    //     volatile: StorageConfig::filesystem(storage_dir.join("volatile")),
+    // };
+    // virt::with_platform(store, |mut platform| {
+    virt::with_platform(StoreConfig::ram(), |mut platform| {
         // virt always uses the same seed -- request some random bytes to reach a somewhat random
         // state
         let uniform = Uniform::from(0..64);

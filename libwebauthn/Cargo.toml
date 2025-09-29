@@ -77,12 +77,16 @@ qrcode = "0.14.1"
 # on fido-authenticator.
 ctaphid-dispatch = { version = "0.3" }
 ctaphid = { version = "0.3.1", default-features = false }
-fido-authenticator = { git = "https://github.com/Nitrokey/fido-authenticator.git",tag = "v0.1.1-nitrokey.27", features = ["dispatch"] }
+fido-authenticator = { git = "https://github.com/Nitrokey/fido-authenticator.git",tag = "v0.1.1-nitrokey.27", features = ["dispatch", "log-all"] }
 littlefs2 = { version = "0.6.0" }
 trussed = { version = "0.1", features = ["virt"] }
 trussed-staging = { version = "0.3.0", features = ["chunked", "hkdf", "virt", "fs-info"] }
 interchange = { version = "0.3.0" }
 tempfile = { version = "3.21" }
+# For turning on logging in fido-authenticator
+delog = { version = "0.1", features = ["std-log"]}
+# For turning on logging in unittests
+test-log = { version = "0.2" }
 
 # The trussed ecosystem is currently a bit messy, so we have to do some patching of the versions
 [patch.crates-io]

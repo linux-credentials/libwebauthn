@@ -5,6 +5,12 @@ pub mod cable;
 pub mod device;
 pub mod hid;
 #[cfg(test)]
+/// A mock channel that can be used in tests to
+/// queue expected requests and responses in unittests
+pub mod mock;
+#[cfg(test)]
+/// Fully fledged virtual device based on trussed
+/// for end2end tests
 pub mod virt;
 
 mod channel;

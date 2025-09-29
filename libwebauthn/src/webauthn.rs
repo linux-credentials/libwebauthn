@@ -12,6 +12,7 @@ use crate::proto::ctap1::Ctap1;
 use crate::proto::ctap2::preflight::ctap2_preflight;
 use crate::proto::ctap2::{
     Ctap2, Ctap2ClientPinRequest, Ctap2GetAssertionRequest, Ctap2MakeCredentialRequest,
+    Ctap2UserVerificationOperation,
 };
 pub use crate::transport::error::TransportError;
 use crate::transport::Channel;
@@ -118,8 +119,12 @@ where
                     .await?;
 
             // We've already sent out this update, in case we used builtin UV
-            // but if we used PIN or None, we need to touch the device now.
-            if self.used_pin_for_auth() || uv_auth_used == UsedPinUvAuthToken::None {
+            // but in all other cases, we need to touch the device now.
+            if uv_auth_used
+                != UsedPinUvAuthToken::NewlyCalculated(
+                    Ctap2UserVerificationOperation::GetPinUvAuthTokenUsingUvWithPermissions,
+                )
+            {
                 self.send_ux_update(UvUpdate::PresenceRequired.into()).await;
             }
             handle_errors!(
@@ -186,16 +191,23 @@ where
             let uv_auth_used =
                 user_verification(self, op.user_verification, &mut ctap2_request, op.timeout)
                     .await?;
-
-            // We've already sent out this update, in case we used builtin UV
-            // but if we used PIN or None, we need to touch the device now.
-            if self.used_pin_for_auth() || uv_auth_used == UsedPinUvAuthToken::None {
-                self.send_ux_update(UvUpdate::PresenceRequired.into()).await;
-            }
+            // Order is important here!
+            // We can error out in calculate_hmac() with PlatformError's,
+            // so only send out the UvUpdate after we are done with hmac.
             if let Some(auth_data) = self.get_auth_data() {
                 if let Some(e) = ctap2_request.extensions.as_mut() {
                     e.calculate_hmac(&op.allow, auth_data)?;
                 }
+            }
+
+            // We've already sent out this update, in case we used builtin UV
+            // but in all other cases, we need to touch the device now.
+            if uv_auth_used
+                != UsedPinUvAuthToken::NewlyCalculated(
+                    Ctap2UserVerificationOperation::GetPinUvAuthTokenUsingUvWithPermissions,
+                )
+            {
+                self.send_ux_update(UvUpdate::PresenceRequired.into()).await;
             }
 
             handle_errors!(
