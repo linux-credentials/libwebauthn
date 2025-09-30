@@ -12,6 +12,8 @@ pub mod mock;
 /// Fully fledged virtual device based on trussed
 /// for end2end tests
 pub mod virt;
+#[cfg(feature = "nfc")]
+pub mod nfc;
 
 mod channel;
 mod transport;

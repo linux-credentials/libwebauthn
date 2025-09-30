@@ -20,7 +20,10 @@ use libwebauthn::proto::ctap2::{
     Ctap2CredentialType, Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialRpEntity,
     Ctap2PublicKeyCredentialType, Ctap2PublicKeyCredentialUserEntity,
 };
+#[cfg(not(feature = "nfc"))]
 use libwebauthn::transport::hid::list_devices;
+#[cfg(feature = "nfc")]
+use libwebauthn::transport::nfc::list_devices;
 use libwebauthn::transport::{Channel as _, Device};
 use libwebauthn::webauthn::{CtapError, Error as WebAuthnError, WebAuthn};
 
@@ -156,7 +159,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
 }
 
 async fn make_credential_call(
-    channel: &mut HidChannel<'_>,
+    channel: &mut impl Channel,
     user_id: &[u8],
     exclude_list: Option<Vec<Ctap2PublicKeyCredentialDescriptor>>,
 ) -> Result<Ctap2PublicKeyCredentialDescriptor, WebAuthnError> {
@@ -194,7 +197,7 @@ async fn make_credential_call(
 }
 
 async fn get_assertion_call(
-    channel: &mut HidChannel<'_>,
+    channel: &mut impl Channel,
     allow_list: Vec<Ctap2PublicKeyCredentialDescriptor>,
 ) -> Result<GetAssertionResponse, WebAuthnError> {
     let challenge: [u8; 32] = thread_rng().gen();
