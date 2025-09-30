@@ -1,12 +1,10 @@
 use async_trait::async_trait;
 use std::fmt;
-use tokio::sync::mpsc;
 #[allow(unused_imports)]
 use tracing::{debug, info, instrument, trace};
 
-use crate::UxUpdate;
+use crate::webauthn::error::Error;
 use crate::transport::device::Device;
-use crate::transport::error::Error;
 
 use super::channel::NfcChannel;
 #[cfg(feature = "libnfc")]
@@ -62,9 +60,9 @@ impl NfcDevice {
 
     fn channel_sync<'d>(
         &'d self,
-    ) -> Result<(NfcChannel<Context>, mpsc::Receiver<UxUpdate>), Error> {
+    ) -> Result<NfcChannel<Context>, Error> {
         trace!("nfc channel {:?}", self);
-        let (mut channel, recv): (NfcChannel<Context>, mpsc::Receiver<UxUpdate>) = match &self.info
+        let mut channel: NfcChannel<Context> = match &self.info
         {
             #[cfg(feature = "libnfc")]
             DeviceInfo::LibNfc(info) => info.channel(),
@@ -74,7 +72,7 @@ impl NfcDevice {
 
         channel.select_fido2()?;
 
-        Ok((channel, recv))
+        Ok(channel)
     }
 }
 
@@ -82,7 +80,7 @@ impl NfcDevice {
 impl<'d> Device<'d, Nfc, NfcChannel<Context>> for NfcDevice {
     async fn channel(
         &'d mut self,
-    ) -> Result<(NfcChannel<Context>, mpsc::Receiver<UxUpdate>), Error> {
+    ) -> Result<NfcChannel<Context>, Error> {
         self.channel_sync()
     }
 }
@@ -95,7 +93,7 @@ where
     where
         Ctx: fmt::Debug + fmt::Display + Copy + Send + Sync,
     {
-        let (mut chan, _send) = device.channel_sync()?;
+        let mut chan = device.channel_sync()?;
         let _ = chan.select_fido2()?;
         Ok(true)
     }

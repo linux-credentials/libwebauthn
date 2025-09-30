@@ -1,8 +1,8 @@
 use super::Context;
 use super::channel::{HandlerInCtx, NfcBackend, NfcChannel};
 use super::device::NfcDevice;
-use crate::UxUpdate;
-use crate::transport::error::{Error, TransportError};
+use crate::webauthn::error::Error;
+use crate::transport::error::TransportError;
 use apdu::core::HandleError;
 use apdu_core;
 use std::fmt;
@@ -11,7 +11,6 @@ use std::io::Write;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use tokio::sync::mpsc;
 #[allow(unused_imports)]
 use tracing::{debug, info, instrument, trace};
 
@@ -70,8 +69,7 @@ impl Info {
         }
     }
 
-    pub fn channel(&self) -> Result<(NfcChannel<Context>, mpsc::Receiver<UxUpdate>), Error> {
-        let (send, recv) = mpsc::channel(1);
+    pub fn channel(&self) -> Result<NfcChannel<Context>, Error> {
         let context = nfc1::Context::new().map_err(|e| map_error(e))?;
 
         let mut chan = Channel::new(self, context);
@@ -89,8 +87,8 @@ impl Info {
         debug!("Selected: {:?}", target);
 
         let ctx = Context {};
-        let channel = NfcChannel::new(Box::new(chan), ctx, send);
-        Ok((channel, recv))
+        let channel = NfcChannel::new(Box::new(chan), ctx);
+        Ok(channel)
     }
 }
 

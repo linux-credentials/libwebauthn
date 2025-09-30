@@ -5,16 +5,18 @@ use async_trait::async_trait;
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::time::Duration;
-use tokio::sync::mpsc;
+use tokio::sync::broadcast;
+use tokio::sync::mpsc::{self, Sender};
 #[allow(unused_imports)]
 use tracing::{Level, debug, instrument, trace, warn};
 
-use crate::UxUpdate;
+use crate::webauthn::error::Error;
+use crate::UvUpdate;
 use crate::proto::ctap1::apdu::{ApduRequest, ApduResponse};
 use crate::proto::ctap2::cbor::{CborRequest, CborResponse};
 use crate::transport::channel::{AuthTokenData, Channel, ChannelStatus, Ctap2AuthTokenStore};
 use crate::transport::device::SupportedProtocols;
-use crate::transport::error::{Error, TransportError};
+use crate::transport::error::TransportError;
 
 use super::commands::{command_ctap_msg, command_get_response};
 
@@ -22,6 +24,8 @@ const SELECT_P1: u8 = 0x04;
 const SELECT_P2: u8 = 0x00;
 const APDU_FIDO: &[u8; 8] = b"\xa0\x00\x00\x06\x47\x2f\x00\x01";
 const SW1_MORE_DATA: u8 = 0x61;
+
+pub type CancelNfcOperation = ();
 
 #[derive(thiserror::Error)]
 pub enum NfcError {
@@ -68,15 +72,27 @@ pub trait HandlerInCtx<Ctx> {
 
 pub trait NfcBackend<Ctx>: HandlerInCtx<Ctx> + Display {}
 
+#[derive(Debug, Clone)]
+pub struct NfcChannelHandle {
+    tx: Sender<CancelNfcOperation>,
+}
+
+impl NfcChannelHandle {
+    pub async fn cancel_ongoing_operation(&self) {
+        let _ = self.tx.send(()).await;
+    }
+}
+
 pub struct NfcChannel<Ctx>
 where
     Ctx: Copy + Sync,
 {
     delegate: Box<dyn NfcBackend<Ctx> + Send + Sync>,
     auth_token_data: Option<AuthTokenData>,
-    tx: mpsc::Sender<UxUpdate>,
+    ux_update_sender: broadcast::Sender<UvUpdate>,
+    handle: NfcChannelHandle,
     ctx: Ctx,
-    apdu_response: Option<ApduResponse>,
+    _apdu_response: Option<ApduResponse>,
     cbor_response: Option<CborResponse>,
     supported: SupportedProtocols,
     status: ChannelStatus,
@@ -98,14 +114,17 @@ where
     pub fn new(
         delegate: Box<dyn NfcBackend<Ctx> + Send + Sync>,
         ctx: Ctx,
-        tx: mpsc::Sender<UxUpdate>,
     ) -> Self {
+        let (ux_update_sender, _) = broadcast::channel(16);
+        let (handle_tx, _handle_rx) = mpsc::channel(1);
+        let handle = NfcChannelHandle { tx: handle_tx };
         NfcChannel {
             delegate,
             auth_token_data: None,
-            tx,
+            ux_update_sender,
+            handle,
             ctx,
-            apdu_response: None,
+            _apdu_response: None,
             cbor_response: None,
             supported: SupportedProtocols {
                 fido2: false,
@@ -113,6 +132,10 @@ where
             },
             status: ChannelStatus::Ready,
         }
+    }
+
+    pub fn get_handle(&self) -> NfcChannelHandle {
+        self.handle.clone()
     }
 
     #[instrument(skip_all)]
@@ -192,6 +215,8 @@ impl<'a, Ctx> Channel for NfcChannel<Ctx>
 where
     Ctx: Copy + Send + Sync + fmt::Debug + Display,
 {
+    type UxUpdate = UvUpdate;
+
     async fn supported_protocols(&self) -> Result<SupportedProtocols, Error> {
         Ok(self.supported)
     }
@@ -205,7 +230,7 @@ where
     }
 
     #[instrument(level = Level::DEBUG, skip_all)]
-    async fn apdu_send(&self, request: &ApduRequest, _timeout: Duration) -> Result<(), Error> {
+    async fn apdu_send(&self, _request: &ApduRequest, _timeout: Duration) -> Result<(), Error> {
         todo!("apdu_send")
     }
 
@@ -272,8 +297,8 @@ where
             .ok_or(Error::Transport(TransportError::InvalidFraming))
     }
 
-    fn get_state_sender(&self) -> &mpsc::Sender<UxUpdate> {
-        &self.tx
+    fn get_ux_update_sender(&self) -> &broadcast::Sender<UvUpdate> {
+        &self.ux_update_sender
     }
 }
 
