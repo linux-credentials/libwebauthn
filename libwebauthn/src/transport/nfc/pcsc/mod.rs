@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 #[allow(unused_imports)]
 use tracing::{debug, info, instrument, trace};
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Info {
     name: CString,
 }

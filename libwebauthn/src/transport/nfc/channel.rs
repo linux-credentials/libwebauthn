@@ -208,6 +208,14 @@ where
                 apdu::Error::from(e).into()
             })
     }
+
+    #[instrument(skip_all)]
+    pub async fn blink_and_wait_for_user_presence(
+        &mut self,
+        _timeout: Duration,
+    ) -> Result<bool, Error> {
+        unimplemented!()
+    }
 }
 
 #[async_trait]

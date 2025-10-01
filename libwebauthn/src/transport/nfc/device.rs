@@ -15,7 +15,7 @@ use super::libnfc;
 use super::pcsc;
 use super::{Context, Nfc};
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 enum DeviceInfo {
     #[cfg(feature = "libnfc")]
     LibNfc(libnfc::Info),
@@ -23,7 +23,7 @@ enum DeviceInfo {
     Pcsc(pcsc::Info),
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct NfcDevice {
     info: DeviceInfo,
 }

@@ -18,7 +18,7 @@ const MAX_DEVICES: usize = 10;
 const TIMEOUT: Duration = Duration::from_millis(5000);
 const MODULATION_TYPE: nfc1::ModulationType = nfc1::ModulationType::Iso14443a;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Info {
     connstring: String,
 }
