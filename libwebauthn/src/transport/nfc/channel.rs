@@ -6,6 +6,7 @@ use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::time::Duration;
 use tokio::sync::broadcast;
+use tokio::sync::mpsc::{self, Sender};
 #[allow(unused_imports)]
 use tracing::{debug, instrument, trace, warn, Level};
 
@@ -23,6 +24,8 @@ const SELECT_P1: u8 = 0x04;
 const SELECT_P2: u8 = 0x00;
 const APDU_FIDO: &[u8; 8] = b"\xa0\x00\x00\x06\x47\x2f\x00\x01";
 const SW1_MORE_DATA: u8 = 0x61;
+
+pub type CancelNfcOperation = ();
 
 #[derive(thiserror::Error)]
 pub enum NfcError {
@@ -69,6 +72,17 @@ pub trait HandlerInCtx<Ctx> {
 
 pub trait NfcBackend<Ctx>: HandlerInCtx<Ctx> + Display {}
 
+#[derive(Debug, Clone)]
+pub struct NfcChannelHandle {
+    tx: Sender<CancelNfcOperation>,
+}
+
+impl NfcChannelHandle {
+    pub async fn cancel_ongoing_operation(&self) {
+        let _ = self.tx.send(()).await;
+    }
+}
+
 pub struct NfcChannel<Ctx>
 where
     Ctx: Copy + Sync,
@@ -76,6 +90,7 @@ where
     delegate: Box<dyn NfcBackend<Ctx> + Send + Sync>,
     auth_token_data: Option<AuthTokenData>,
     ux_update_sender: broadcast::Sender<UvUpdate>,
+    handle: NfcChannelHandle,
     ctx: Ctx,
     apdu_response: Option<ApduResponse>,
     cbor_response: Option<CborResponse>,
@@ -98,10 +113,13 @@ where
 {
     pub fn new(delegate: Box<dyn NfcBackend<Ctx> + Send + Sync>, ctx: Ctx) -> Self {
         let (ux_update_sender, _) = broadcast::channel(16);
+        let (handle_tx, _handle_rx) = mpsc::channel(1);
+        let handle = NfcChannelHandle { tx: handle_tx };
         NfcChannel {
             delegate,
             auth_token_data: None,
             ux_update_sender,
+            handle,
             ctx,
             apdu_response: None,
             cbor_response: None,
@@ -111,6 +129,10 @@ where
             },
             status: ChannelStatus::Ready,
         }
+    }
+
+    pub fn get_handle(&self) -> NfcChannelHandle {
+        self.handle.clone()
     }
 
     #[instrument(skip_all)]
@@ -136,16 +158,11 @@ where
     fn handle_in_ctx(
         &mut self,
         ctx: Ctx,
-        command_buf: &Vec<u8>,
+        command_buf: &[u8],
         buf: &mut [u8],
     ) -> Result<usize, NfcError> {
-        Ok(self.delegate.handle_in_ctx(ctx, &command_buf, buf)?)
-        // .map_err(|e| match e {
-        //     HandleError::NotEnoughBuffer(l) => {
-        //         NfcError::Device(HandleError::NotEnoughBuffer(l))
-        //     }
-        //     HandleError::Nfc(e) => NfcError::Device(e),
-        // })
+        let res = self.delegate.handle_in_ctx(ctx, command_buf, buf)?;
+        Ok(res)
     }
 
     pub fn handle<'a>(
@@ -159,7 +176,7 @@ where
         let mut buf = [0u8; 1024];
         let mut rapdu = Vec::new();
 
-        let len: usize = self.handle_in_ctx(ctx, &command_buf, &mut buf)? as usize;
+        let len: usize = self.handle_in_ctx(ctx, &command_buf, &mut buf)?;
         let mut resp = Response::from(&buf[..len]);
 
         let (mut sw1, mut sw2) = resp.trailer;
@@ -190,6 +207,7 @@ where
     Ctx: Copy + Send + Sync + fmt::Debug + Display,
 {
     type UxUpdate = UvUpdate;
+
     async fn supported_protocols(&self) -> Result<SupportedProtocols, Error> {
         Ok(self.supported)
     }

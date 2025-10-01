@@ -46,7 +46,7 @@ pub fn command_get_response(p1: u8, p2: u8, le: u8) -> GetResponseCommand {
 
 const CLA_HAS_MORE: u8 = 0x10;
 const INS_CTAP_MSG: u8 = 0x10;
-const CTAP_P1_SUPP_GET_RESP: u8 = 0x80;
+const _CTAP_P1_SUPP_GET_RESP: u8 = 0x80;
 const CTAP_P2: u8 = 0x00;
 
 /// `CTAP MSG` (0x10) command.
