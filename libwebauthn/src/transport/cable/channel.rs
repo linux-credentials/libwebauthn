@@ -133,12 +133,12 @@ impl<'d> Channel for CableChannel {
         // TODO Send CableTunnelMessageType#Shutdown and drop the connection
     }
 
-    async fn apdu_send(&self, _request: &ApduRequest, _timeout: Duration) -> Result<(), Error> {
+    async fn apdu_send(&mut self, _request: &ApduRequest, _timeout: Duration) -> Result<(), Error> {
         error!("APDU send not supported in caBLE transport");
         Err(Error::Transport(TransportError::TransportUnavailable))
     }
 
-    async fn apdu_recv(&self, _timeout: Duration) -> Result<ApduResponse, Error> {
+    async fn apdu_recv(&mut self, _timeout: Duration) -> Result<ApduResponse, Error> {
         error!("APDU recv not supported in caBLE transport");
         Err(Error::Transport(TransportError::TransportUnavailable))
     }

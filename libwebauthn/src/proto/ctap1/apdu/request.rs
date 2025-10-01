@@ -21,11 +21,11 @@ const CONTROL_BYTE_DONT_ENFORCE_UP_AND_SIGN: u8 = 0x08;
 
 #[derive(Debug)]
 pub struct ApduRequest {
-    ins: u8,
-    p1: u8,
-    p2: u8,
-    data: Option<Vec<u8>>,
-    response_max_length: Option<usize>,
+    pub(crate) ins: u8,
+    pub(crate) p1: u8,
+    pub(crate) p2: u8,
+    pub(crate) data: Option<Vec<u8>>,
+    pub(crate) response_max_length: Option<usize>,
 }
 
 impl ApduRequest {

@@ -109,7 +109,7 @@ where
     // If it is not discouraged and either RP or device requires it.
     let uv = !rp_uv_discouraged && (rp_uv_preferred || dev_uv_protected);
 
-    debug!(%rp_uv_preferred, %dev_uv_protected, %uv, %needs_shared_secret, %can_establish_shared_secret, "Checking if user verification is required");
+    debug!(%rp_uv_preferred, %rp_uv_discouraged, %dev_uv_protected, %uv, %needs_shared_secret, %can_establish_shared_secret, "Checking if user verification is required");
     // If we do not need to create a shared secret, we can error out here early
     if !needs_shared_secret {
         if !uv {

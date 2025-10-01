@@ -51,8 +51,8 @@ pub trait Channel: Send + Sync + Display + Ctap2AuthTokenStore {
     async fn status(&self) -> ChannelStatus;
     async fn close(&mut self);
 
-    async fn apdu_send(&self, request: &ApduRequest, timeout: Duration) -> Result<(), Error>;
-    async fn apdu_recv(&self, timeout: Duration) -> Result<ApduResponse, Error>;
+    async fn apdu_send(&mut self, request: &ApduRequest, timeout: Duration) -> Result<(), Error>;
+    async fn apdu_recv(&mut self, timeout: Duration) -> Result<ApduResponse, Error>;
 
     async fn cbor_send(&mut self, request: &CborRequest, timeout: Duration) -> Result<(), Error>;
     async fn cbor_recv(&mut self, timeout: Duration) -> Result<CborResponse, Error>;

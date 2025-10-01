@@ -4,6 +4,8 @@ pub mod ble;
 pub mod cable;
 pub mod device;
 pub mod hid;
+#[cfg(feature = "nfc")]
+pub mod nfc;
 #[cfg(test)]
 /// A mock channel that can be used in tests to
 /// queue expected requests and responses in unittests

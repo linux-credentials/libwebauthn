@@ -3,7 +3,6 @@ use std::error::Error;
 use std::io::{self, Write};
 use std::time::Duration;
 
-use libwebauthn::transport::hid::channel::HidChannel;
 use libwebauthn::UvUpdate;
 use rand::{thread_rng, Rng};
 use serde_bytes::ByteBuf;
@@ -20,8 +19,11 @@ use libwebauthn::proto::ctap2::{
     Ctap2CredentialType, Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialRpEntity,
     Ctap2PublicKeyCredentialType, Ctap2PublicKeyCredentialUserEntity,
 };
+#[cfg(not(feature = "nfc"))]
 use libwebauthn::transport::hid::list_devices;
-use libwebauthn::transport::{Channel as _, Device};
+#[cfg(feature = "nfc")]
+use libwebauthn::transport::nfc::list_devices;
+use libwebauthn::transport::{Channel, Device};
 use libwebauthn::webauthn::{CtapError, Error as WebAuthnError, WebAuthn};
 
 const TIMEOUT: Duration = Duration::from_secs(10);
@@ -156,7 +158,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
 }
 
 async fn make_credential_call(
-    channel: &mut HidChannel<'_>,
+    channel: &mut impl Channel,
     user_id: &[u8],
     exclude_list: Option<Vec<Ctap2PublicKeyCredentialDescriptor>>,
 ) -> Result<Ctap2PublicKeyCredentialDescriptor, WebAuthnError> {
@@ -194,7 +196,7 @@ async fn make_credential_call(
 }
 
 async fn get_assertion_call(
-    channel: &mut HidChannel<'_>,
+    channel: &mut impl Channel,
     allow_list: Vec<Ctap2PublicKeyCredentialDescriptor>,
 ) -> Result<GetAssertionResponse, WebAuthnError> {
     let challenge: [u8; 32] = thread_rng().gen();

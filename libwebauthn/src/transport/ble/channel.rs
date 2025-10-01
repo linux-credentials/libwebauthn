@@ -86,7 +86,7 @@ impl<'a> Channel for BleChannel<'a> {
     }
 
     #[instrument(level = Level::DEBUG, skip_all)]
-    async fn apdu_send(&self, request: &ApduRequest, _timeout: Duration) -> Result<(), Error> {
+    async fn apdu_send(&mut self, request: &ApduRequest, _timeout: Duration) -> Result<(), Error> {
         debug!({rev = ?self.revision}, "Sending APDU request");
         trace!(?request);
 
@@ -100,7 +100,7 @@ impl<'a> Channel for BleChannel<'a> {
     }
 
     #[instrument(level = Level::DEBUG, skip_all)]
-    async fn apdu_recv(&self, _timeout: Duration) -> Result<ApduResponse, Error> {
+    async fn apdu_recv(&mut self, _timeout: Duration) -> Result<ApduResponse, Error> {
         let response_frame = self
             .connection
             .frame_recv()
