@@ -20,7 +20,7 @@ use libwebauthn::proto::ctap2::{
 #[cfg(not(feature = "nfc"))]
 use libwebauthn::transport::hid::list_devices;
 #[cfg(feature = "nfc")]
-use libwebauthn::transport::nfc::list_devices;
+use libwebauthn::transport::nfc::{is_nfc_available, list_devices};
 use libwebauthn::transport::{Channel as _, Device};
 use libwebauthn::webauthn::{Error as WebAuthnError, WebAuthn};
 
@@ -77,6 +77,13 @@ async fn handle_updates(mut state_recv: Receiver<UvUpdate>) {
 pub async fn main() -> Result<(), Box<dyn Error>> {
     setup_logging();
 
+    #[cfg(feature = "nfc")]
+    {
+        if !is_nfc_available() {
+            println!("No NFC-Reader found. NFC is not available on your system.");
+            return Err("NFC not available".into());
+        }
+    }
     let devices = list_devices().await.unwrap();
 
     println!("Devices found: {:?}", devices);

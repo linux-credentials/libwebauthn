@@ -151,9 +151,21 @@ where
 }
 
 #[instrument]
-pub fn list_devices() -> Result<Vec<NfcDevice>, Error> {
+pub(crate) fn is_nfc_available() -> bool {
+    let Ok(ctx) = pcsc::Context::establish(pcsc::Scope::User) else {
+        return false;
+    };
+    // If there is no reader, we say NFC is not available
+    ctx.list_readers_len().unwrap_or_default() > 0
+}
+
+#[instrument]
+pub(crate) fn list_devices() -> Result<Vec<NfcDevice>, Error> {
     let ctx = pcsc::Context::establish(pcsc::Scope::User).expect("PC/SC context");
     let len = ctx.list_readers_len().expect("PC/SC readers len");
+    if len == 0 {
+        return Err(Error::Transport(TransportError::TransportUnavailable));
+    }
     let mut readers_buf = vec![0; len];
     let devices = ctx
         .list_readers(&mut readers_buf)

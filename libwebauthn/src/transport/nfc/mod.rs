@@ -8,7 +8,7 @@ pub mod libnfc;
 #[cfg(feature = "pcsc")]
 pub mod pcsc;
 
-pub use device::list_devices;
+pub use device::{is_nfc_available, list_devices};
 
 use super::Transport;
 

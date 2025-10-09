@@ -122,3 +122,18 @@ pub async fn list_devices() -> Result<Vec<NfcDevice>, Error> {
 
     Ok(all_devices)
 }
+
+#[instrument]
+pub fn is_nfc_available() -> bool {
+    let mut available = false;
+    #[cfg(feature = "libnfc")]
+    {
+        available |= libnfc::is_nfc_available();
+    }
+    #[cfg(feature = "pcsc")]
+    {
+        available |= pcsc::is_nfc_available();
+    }
+
+    available
+}

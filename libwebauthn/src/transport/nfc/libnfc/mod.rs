@@ -63,14 +63,14 @@ impl From<nfc1::Error> for Error {
 }
 
 impl Info {
-    pub fn new(connstring: &String) -> Self {
+    pub fn new(connstring: &str) -> Self {
         Info {
-            connstring: connstring.clone(),
+            connstring: connstring.to_string(),
         }
     }
 
     pub fn channel(&self) -> Result<NfcChannel<Context>, Error> {
-        let context = nfc1::Context::new().map_err(|e| map_error(e))?;
+        let context = nfc1::Context::new().map_err(map_error)?;
 
         let mut chan = Channel::new(self, context);
 
@@ -113,7 +113,7 @@ impl Channel {
         device: &mut nfc1::Device,
         modulation: &nfc1::Modulation,
     ) -> nfc1::Result<nfc1::Target> {
-        match device.initiator_select_passive_target(&modulation) {
+        match device.initiator_select_passive_target(modulation) {
             Ok(target) => {
                 if let nfc1::target_info::TargetInfo::Iso14443a(iso) = target.target_info {
                     if iso.uid_len > 0 {
@@ -150,8 +150,7 @@ impl Channel {
                 thread::sleep(Duration::from_millis(100));
             }
             trace!("Poll {:?} {}", modulation, i);
-            if let Ok(target) =
-                Channel::initiator_select_passive_target_ex(&mut device, &modulation)
+            if let Ok(target) = Channel::initiator_select_passive_target_ex(&mut device, modulation)
             {
                 if is_one_rate {
                     return Ok(target);
@@ -162,7 +161,7 @@ impl Channel {
                     device.initiator_init()?;
                     trace!("Try {:?}", modulation);
                     if let Ok(target) =
-                        Channel::initiator_select_passive_target_ex(&mut device, &modulation)
+                        Channel::initiator_select_passive_target_ex(&mut device, modulation)
                     {
                         return Ok(target);
                     }
@@ -216,7 +215,16 @@ impl fmt::Display for Channel {
 impl<Ctx> NfcBackend<Ctx> for Channel where Ctx: fmt::Debug + fmt::Display {}
 
 #[instrument]
-pub fn list_devices() -> Result<Vec<NfcDevice>, Error> {
+pub(crate) fn is_nfc_available() -> bool {
+    let Ok(mut context) = nfc1::Context::new() else {
+        return false;
+    };
+    // "list_devices()" lists readers. If none is found, we say it is not available
+    context.list_devices(1).map(|d| d.len()).unwrap_or_default() > 0
+}
+
+#[instrument]
+pub(crate) fn list_devices() -> Result<Vec<NfcDevice>, Error> {
     let mut context =
         nfc1::Context::new().map_err(|_| Error::Transport(TransportError::TransportUnavailable))?;
     let devices = context
