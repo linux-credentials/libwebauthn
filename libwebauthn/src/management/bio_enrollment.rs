@@ -98,7 +98,7 @@ where
         // No UV needed
         let resp = self.ctap2_bio_enrollment(&req, timeout).await?;
         let Some(fingerprint_kind) = resp.fingerprint_kind else {
-            info!("Channel did not return fingerprint_kind Sensor Info");
+            info!("Channel did not return fingerprint_kind in sensor info.");
             return Err(Error::Ctap(CtapError::Other))
         };
         Ok(Ctap2BioEnrollmentFingerprintSensorInfo {
