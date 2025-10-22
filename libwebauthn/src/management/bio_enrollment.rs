@@ -81,7 +81,13 @@ where
         let req = Ctap2BioEnrollmentRequest::new_get_modality();
         // No UV needed
         let resp = self.ctap2_bio_enrollment(&req, timeout).await?;
-        resp.modality.ok_or(Error::Ctap(CtapError::Other))
+        match resp.modality {
+            Some(modality) => Ok(modality),
+            None => {
+                info!("Channel did not return modality.");
+                Err(Error::Ctap(CtapError::Other))
+            }
+        }
     }
 
     async fn get_fingerprint_sensor_info(
@@ -91,8 +97,12 @@ where
         let req = Ctap2BioEnrollmentRequest::new_fingerprint_sensor_info();
         // No UV needed
         let resp = self.ctap2_bio_enrollment(&req, timeout).await?;
+        let Some(fingerprint_kind) = resp.fingerprint_kind else {
+            info!("Channel did not return fingerprint_kind Sensor Info");
+            return Err(Error::Ctap(CtapError::Other))
+        };
         Ok(Ctap2BioEnrollmentFingerprintSensorInfo {
-            fingerprint_kind: resp.fingerprint_kind.ok_or(Error::Ctap(CtapError::Other))?,
+            fingerprint_kind,
             max_capture_samples_required_for_enroll: resp
                 .max_capture_samples_required_for_enroll
                 .clone(),
