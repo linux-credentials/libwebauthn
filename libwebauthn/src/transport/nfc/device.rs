@@ -100,11 +100,14 @@ where
 }
 
 #[instrument]
-pub async fn list_devices() -> Result<Vec<NfcDevice>, Error> {
-    let mut all_devices = Vec::new();
-    // TODO: Either only allow one backend, OR deduplicate found devices here!
-    //       Otherwise, we'll potentially have the same device discovered by
-    //       both backends and thus added multiple times to the list.
+/// Returns Ok(None) if no devices are found, otherwise returns
+/// the first device found by either NFC-backend.
+pub async fn get_nfc_device() -> Result<Option<NfcDevice>, Error> {
+    // See https://github.com/linux-credentials/libwebauthn/issues/154 for
+    // why we only return the first found device here.
+    // We'd otherwise need to deduplicate found devices here, as
+    // we'll potentially have the same device discovered by
+    // both backends and thus added multiple times to the list.
     let list_devices_fns = [
         #[cfg(feature = "libnfc")]
         libnfc::list_devices,
@@ -115,12 +118,12 @@ pub async fn list_devices() -> Result<Vec<NfcDevice>, Error> {
     for list_devices in list_devices_fns {
         for device in list_devices()? {
             if is_fido::<Context>(&device).await {
-                all_devices.push(device);
+                return Ok(Some(device));
             }
         }
     }
 
-    Ok(all_devices)
+    Ok(None)
 }
 
 #[instrument]

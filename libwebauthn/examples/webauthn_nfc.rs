@@ -17,7 +17,7 @@ use libwebauthn::proto::ctap2::{
     Ctap2CredentialType, Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialRpEntity,
     Ctap2PublicKeyCredentialUserEntity,
 };
-use libwebauthn::transport::hid::list_devices;
+use libwebauthn::transport::nfc::{get_nfc_device, is_nfc_available};
 use libwebauthn::transport::{Channel as _, Device};
 use libwebauthn::webauthn::{Error as WebAuthnError, WebAuthn};
 
@@ -73,17 +73,20 @@ async fn handle_updates(mut state_recv: Receiver<UvUpdate>) {
 #[tokio::main]
 pub async fn main() -> Result<(), Box<dyn Error>> {
     setup_logging();
-    let devices = list_devices().await.unwrap();
 
-    println!("Devices found: {:?}", devices);
+    if !is_nfc_available() {
+        println!("No NFC-Reader found. NFC is not available on your system.");
+        return Err("NFC not available".into());
+    }
+
+    let device = get_nfc_device().await?;
 
     let user_id: [u8; 32] = thread_rng().gen();
     let challenge: [u8; 32] = thread_rng().gen();
 
-    for mut device in devices {
-        println!("Selected HID authenticator: {}", &device);
+    if let Some(mut device) = device {
+        println!("Selected NFC authenticator: {}", &device);
         let mut channel = device.channel().await?;
-        channel.wink(TIMEOUT).await?;
 
         // Make Credentials ceremony
         let make_credentials_request = MakeCredentialRequest {

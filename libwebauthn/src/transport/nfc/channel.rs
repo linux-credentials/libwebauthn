@@ -234,7 +234,7 @@ where
     }
 
     async fn close(&mut self) {
-        todo!("close")
+        ()
     }
 
     #[instrument(level = Level::DEBUG, skip_all)]
