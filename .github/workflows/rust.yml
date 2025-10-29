@@ -23,3 +23,7 @@ jobs:
         run: cargo build
       - name: Run tests
         run: cargo test --verbose
+      - name: Install nfc dependencies
+        run: sudo apt-get install libnfc-dev libpcsclite-dev
+      - name: Build with nfc-support
+        run: cargo build --features libnfc,pcsc

@@ -15,6 +15,13 @@ path = "src/lib.rs"
 
 [features]
 default = []
+nfc = ["apdu-core", "apdu"]
+pcsc = [ "nfc", "dep:pcsc" ]
+libnfc = [
+  "nfc",
+  "nfc1-sys",
+  "nfc1",
+]
 
 [dependencies]
 base64-url = "3.0.0"
@@ -64,6 +71,11 @@ snow = { version = "0.10", features = ["use-p256"] }
 ctap-types = { version = "0.4.0" }
 btleplug = "0.11.7"
 thiserror = "2.0.12"
+apdu-core = { version = "0.4.0", optional = true }
+apdu = { version = "0.4.0", optional = true }
+pcsc = { version = "2.9.0", optional = true }
+nfc1 = { version = "0.6.0", optional = true, default-features = false }
+nfc1-sys = { version = "0.3.9", optional = true, default-features = false }
 
 [dev-dependencies]
 tracing-subscriber = { version = "0.3.3", features = ["env-filter"] }
@@ -92,3 +104,12 @@ test-log = { version = "0.2" }
 [patch.crates-io]
 trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "024e0eca5fb7dbd2457831f7c7bffe4341e08775" }
 trussed-staging = { git = "https://github.com/trussed-dev/trussed-staging.git", rev = "7922d67e9637a87e5625aaff9e5111f0d4ec0346" }
+
+# Only compile NFC-examples, if NFC-features are used
+[[example]]
+name = "u2f_nfc"
+required-features = ["nfc"]
+
+[[example]]
+name = "webauthn_nfc"
+required-features = ["nfc"]

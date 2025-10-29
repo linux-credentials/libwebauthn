@@ -453,7 +453,7 @@ impl Channel for HidChannel<'_> {
     }
 
     async fn apdu_send(
-        &self,
+        &mut self,
         request: &ApduRequest,
         _timeout: std::time::Duration,
     ) -> Result<(), Error> {
@@ -468,7 +468,7 @@ impl Channel for HidChannel<'_> {
         Ok(())
     }
 
-    async fn apdu_recv(&self, timeout: std::time::Duration) -> Result<ApduResponse, Error> {
+    async fn apdu_recv(&mut self, timeout: std::time::Duration) -> Result<ApduResponse, Error> {
         let hid_response = self.hid_recv(timeout).await?;
         let apdu_response = ApduResponse::try_from(&hid_response.payload)
             .or(Err(Error::Transport(TransportError::InvalidFraming)))?;
