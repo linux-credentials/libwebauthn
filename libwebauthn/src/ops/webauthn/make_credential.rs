@@ -27,9 +27,8 @@ use crate::{
     },
 };
 
+use super::timeout::DEFAULT_TIMEOUT;
 use super::{DowngradableRequest, RegisterRequest, UserVerificationRequirement};
-
-pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone)]
 pub struct MakeCredentialResponse {
@@ -73,22 +72,18 @@ impl MakeCredentialsResponseUnsignedExtensions {
         let mut hmac_create_secret = None;
         let mut prf = None;
         if let Some(signed_extensions) = signed_extensions {
-            (hmac_create_secret, prf) = if let Some(incoming_ext) = &request.extensions {
-                if let Some(_hmac_create_secret) = incoming_ext.hmac_create_secret {
-                    (signed_extensions.hmac_secret, None)
-                } else if let Some(_prf) = &incoming_ext.prf {
-                    (
-                        None,
-                        Some(MakeCredentialPrfOutput {
-                            enabled: signed_extensions.hmac_secret,
-                        }),
-                    )
-                } else {
-                    (None, None)
+            if let Some(incoming_ext) = &request.extensions {
+                // hmacCreateSecret and prf can both be requested and returned independently.
+                // Both map to the same underlying CTAP2 hmac-secret extension.
+                if incoming_ext.hmac_create_secret.is_some() {
+                    hmac_create_secret = signed_extensions.hmac_secret;
                 }
-            } else {
-                (None, None)
-            };
+                if incoming_ext.prf.is_some() {
+                    prf = Some(MakeCredentialPrfOutput {
+                        enabled: signed_extensions.hmac_secret,
+                    });
+                }
+            }
         }
 
         // credProps extension

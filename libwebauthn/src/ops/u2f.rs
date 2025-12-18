@@ -9,7 +9,7 @@ use x509_parser::nom::AsBytes;
 use super::webauthn::MakeCredentialRequest;
 use crate::fido::{AttestedCredentialData, AuthenticatorData, AuthenticatorDataFlags};
 use crate::ops::webauthn::{
-    GetAssertionRequest, GetAssertionRequestExtensions, GetAssertionResponse,
+    GetAssertionRequest, GetAssertionResponse,
     MakeCredentialResponse, UserVerificationRequirement,
 };
 use crate::proto::ctap1::{Ctap1RegisterRequest, Ctap1SignRequest};
@@ -207,7 +207,7 @@ impl UpgradableResponse<GetAssertionResponse, SignRequest> for SignResponse {
                 id: request.key_handle.clone().into(),
                 transports: None,
             }],
-            extensions: GetAssertionRequestExtensions::default(),
+            extensions: None,
             user_verification: if request.require_user_presence {
                 UserVerificationRequirement::Required
             } else {

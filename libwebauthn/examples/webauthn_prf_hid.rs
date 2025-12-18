@@ -175,7 +175,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
                 second: None,
             },
         );
-        let hmac_or_prf: GetAssertionHmacOrPrfInput = GetAssertionHmacOrPrfInput::Prf(PrfInput {
+        let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf(PrfInput {
             eval,
             eval_by_credential,
         });
@@ -195,7 +195,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         });
 
         let eval_by_credential = HashMap::new();
-        let hmac_or_prf: GetAssertionHmacOrPrfInput = GetAssertionHmacOrPrfInput::Prf(PrfInput {
+        let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf(PrfInput {
             eval,
             eval_by_credential,
         });
@@ -243,7 +243,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
                 second: None,
             },
         );
-        let hmac_or_prf: GetAssertionHmacOrPrfInput = GetAssertionHmacOrPrfInput::Prf(PrfInput {
+        let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf(PrfInput {
             eval,
             eval_by_credential,
         });
@@ -284,7 +284,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
                 second: Some([8; 32]),
             },
         );
-        let hmac_or_prf: GetAssertionHmacOrPrfInput = GetAssertionHmacOrPrfInput::Prf(PrfInput {
+        let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf(PrfInput {
             eval,
             eval_by_credential,
         });
@@ -322,7 +322,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
                 second: Some([8; 32]),
             },
         );
-        let hmac_or_prf: GetAssertionHmacOrPrfInput = GetAssertionHmacOrPrfInput::Prf(PrfInput {
+        let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf(PrfInput {
             eval,
             eval_by_credential,
         });
@@ -349,7 +349,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
                 second: None,
             },
         );
-        let hmac_or_prf: GetAssertionHmacOrPrfInput = GetAssertionHmacOrPrfInput::Prf(PrfInput {
+        let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf(PrfInput {
             eval,
             eval_by_credential,
         });
@@ -373,7 +373,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
                 second: None,
             },
         );
-        let hmac_or_prf: GetAssertionHmacOrPrfInput = GetAssertionHmacOrPrfInput::Prf(PrfInput {
+        let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf(PrfInput {
             eval,
             eval_by_credential,
         });
@@ -426,10 +426,10 @@ async fn run_success_test(
         hash: Vec::from(challenge),
         allow: vec![credential.clone()],
         user_verification: UserVerificationRequirement::Discouraged,
-        extensions: GetAssertionRequestExtensions {
+        extensions: Some(GetAssertionRequestExtensions {
             hmac_or_prf: Some(hmac_or_prf),
             ..Default::default()
-        },
+        }),
         timeout: TIMEOUT,
     };
 
@@ -468,10 +468,10 @@ async fn run_failed_test(
         hash: Vec::from(challenge),
         allow: credential.map(|x| vec![x.clone()]).unwrap_or_default(),
         user_verification: UserVerificationRequirement::Discouraged,
-        extensions: GetAssertionRequestExtensions {
+        extensions: Some(GetAssertionRequestExtensions {
             hmac_or_prf: Some(hmac_or_prf),
             ..Default::default()
-        },
+        }),
         timeout: TIMEOUT,
     };
 

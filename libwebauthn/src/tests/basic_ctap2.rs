@@ -66,7 +66,7 @@ async fn test_webauthn_basic_ctap2() {
         hash: Vec::from(challenge),
         allow: vec![credential],
         user_verification: UserVerificationRequirement::Discouraged,
-        extensions: GetAssertionRequestExtensions::default(),
+        extensions: Some(GetAssertionRequestExtensions::default()),
         timeout: TIMEOUT,
     };
 

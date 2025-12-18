@@ -202,7 +202,7 @@ async fn get_assertion_call(
         hash: Vec::from(challenge),
         allow: allow_list,
         user_verification: UserVerificationRequirement::Discouraged,
-        extensions: GetAssertionRequestExtensions::default(),
+        extensions: Some(GetAssertionRequestExtensions::default()),
         timeout: TIMEOUT,
     };
 

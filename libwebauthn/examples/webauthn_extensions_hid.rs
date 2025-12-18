@@ -147,7 +147,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             hash: Vec::from(challenge),
             allow: vec![credential],
             user_verification: UserVerificationRequirement::Discouraged,
-            extensions: GetAssertionRequestExtensions {
+            extensions: Some(GetAssertionRequestExtensions {
                 cred_blob: true,
                 hmac_or_prf: Some(GetAssertionHmacOrPrfInput::HmacGetSecret(
                     HMACGetSecretInput {
@@ -156,7 +156,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
                     },
                 )),
                 ..Default::default()
-            },
+            }),
             timeout: TIMEOUT,
         };
 

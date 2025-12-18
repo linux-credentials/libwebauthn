@@ -25,9 +25,8 @@ use crate::{
     webauthn::CtapError,
 };
 
+use super::timeout::DEFAULT_TIMEOUT;
 use super::{DowngradableRequest, RelyingPartyId, SignRequest, UserVerificationRequirement};
-
-pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Default, Clone, Serialize, PartialEq)]
 pub struct PRFValue {
@@ -42,7 +41,7 @@ pub struct GetAssertionRequest {
     pub relying_party_id: String,
     pub hash: Vec<u8>,
     pub allow: Vec<Ctap2PublicKeyCredentialDescriptor>,
-    pub extensions: GetAssertionRequestExtensions,
+    pub extensions: Option<GetAssertionRequestExtensions>,
     pub user_verification: UserVerificationRequirement,
     pub timeout: Duration,
 }
@@ -97,20 +96,22 @@ impl FromInnerModel<PublicKeyCredentialRequestOptionsJSON, GetAssertionRequestPa
             None => None,
         };
 
-        let extensions_opt = inner.extensions.clone();
-        let extensions = GetAssertionRequestExtensions {
-            cred_blob: extensions_opt
+        let extensions =
+            inner
+                .extensions
                 .as_ref()
-                .and_then(|ext| ext.cred_blob)
-                .unwrap_or(false),
-            large_blob: extensions_opt
-                .as_ref()
-                .and_then(|ext| ext.large_blob.clone())
-                .map(Option::<GetAssertionLargeBlobExtension>::try_from)
-                .transpose()?
-                .flatten(),
-            hmac_or_prf,
-        };
+                .map(|extensions_opt| GetAssertionRequestExtensions {
+                    cred_blob: extensions_opt.cred_blob.unwrap_or(false),
+                    large_blob: extensions_opt
+                        .large_blob
+                        .clone()
+                        .map(Option::<GetAssertionLargeBlobExtension>::try_from)
+                        .transpose()
+                        .ok()
+                        .flatten()
+                        .flatten(),
+                    hmac_or_prf: hmac_or_prf.clone(),
+                });
 
         let timeout: Duration = inner
             .timeout
@@ -471,7 +472,7 @@ mod tests {
                 id: ByteBuf::from(base64_url::decode("bXktY3JlZGVudGlhbC1pZA").unwrap()),
                 transports: None,
             }],
-            extensions: GetAssertionRequestExtensions::default(),
+            extensions: None, // No extensions key in the base JSON
             user_verification: UserVerificationRequirement::Preferred,
             timeout: Duration::from_secs(30),
         }
@@ -543,6 +544,21 @@ mod tests {
     }
 
     #[test]
+    fn test_request_from_json_empty_extensions() {
+        // Test that "extensions": {} results in Some(default) not None
+        // This is important for strict portals that distinguish between
+        // no extensions key vs empty extensions object
+        let rpid = RelyingPartyId::try_from("example.org").unwrap();
+        let req_json = json_field_add(REQUEST_BASE_JSON, "extensions", r#"{}"#);
+
+        let req: GetAssertionRequest = GetAssertionRequest::from_json(&rpid, &req_json).unwrap();
+        assert_eq!(
+            req.extensions,
+            Some(GetAssertionRequestExtensions::default())
+        );
+    }
+
+    #[test]
     #[ignore] // FIXME(#134) allow arbitrary size input
     fn test_request_from_json_prf_extension() {
         let rpid = RelyingPartyId::try_from("example.org").unwrap();
@@ -553,14 +569,14 @@ mod tests {
         );
 
         let req: GetAssertionRequest = GetAssertionRequest::from_json(&rpid, &req_json).unwrap();
-        if let GetAssertionRequestExtensions {
+        if let Some(GetAssertionRequestExtensions {
             hmac_or_prf:
                 Some(GetAssertionHmacOrPrfInput::Prf(PrfInput {
                     eval: Some(ref prf_value),
                     ..
                 })),
             ..
-        } = &req.extensions
+        }) = &req.extensions
         {
             assert_eq!(&prf_value.first[..], b"first");
             assert_eq!(

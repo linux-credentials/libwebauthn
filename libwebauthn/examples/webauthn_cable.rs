@@ -162,7 +162,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         hash: Vec::from(challenge),
         allow: vec![credential],
         user_verification: UserVerificationRequirement::Discouraged,
-        extensions: GetAssertionRequestExtensions::default(),
+        extensions: Some(GetAssertionRequestExtensions::default()),
         timeout: TIMEOUT,
     };
 

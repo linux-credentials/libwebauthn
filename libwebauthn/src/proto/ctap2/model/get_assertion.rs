@@ -160,7 +160,9 @@ impl Ctap2GetAssertionRequest {
         //
         // So we silently drop the extension if the device does not support it.
         if !info.option_enabled("largeBlobs") {
-            req.extensions.large_blob = None;
+            if let Some(ref mut ext) = req.extensions {
+                ext.large_blob = None;
+            }
         }
 
         Ok(Ctap2GetAssertionRequest::from(req))
@@ -173,7 +175,7 @@ impl From<GetAssertionRequest> for Ctap2GetAssertionRequest {
             relying_party_id: op.relying_party_id,
             client_data_hash: ByteBuf::from(op.hash),
             allow: op.allow,
-            extensions: Some(op.extensions.into()),
+            extensions: op.extensions.map(|ext| ext.into()),
             options: Some(Ctap2GetAssertionOptions {
                 require_user_presence: true,
                 require_user_verification: op.user_verification.is_required(),
@@ -517,7 +519,7 @@ impl Ctap2GetAssertionResponseExtensions {
         });
 
         let (hmac_get_secret, prf) = if let Some(decrypted) = decrypted_hmac {
-            match &request.extensions.hmac_or_prf {
+            match request.extensions.as_ref().and_then(|ext| ext.hmac_or_prf.as_ref()) {
                 None => (None, None),
                 Some(GetAssertionHmacOrPrfInput::HmacGetSecret(..)) => (Some(decrypted), None),
                 Some(GetAssertionHmacOrPrfInput::Prf(..)) => (
@@ -535,7 +537,7 @@ impl Ctap2GetAssertionResponseExtensions {
         };
 
         // LargeBlobs was requested
-        let large_blob = match request.extensions.large_blob {
+        let large_blob = match request.extensions.as_ref().and_then(|ext| ext.large_blob.as_ref()) {
             None => None,
             Some(GetAssertionLargeBlobExtension::Read) => {
                 Some(GetAssertionLargeBlobExtensionOutput {
