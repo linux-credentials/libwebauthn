@@ -9,8 +9,8 @@ use x509_parser::nom::AsBytes;
 use super::webauthn::MakeCredentialRequest;
 use crate::fido::{AttestedCredentialData, AuthenticatorData, AuthenticatorDataFlags};
 use crate::ops::webauthn::{
-    GetAssertionRequest, GetAssertionResponse,
-    MakeCredentialResponse, UserVerificationRequirement,
+    GetAssertionRequest, GetAssertionResponse, MakeCredentialResponse,
+    UserVerificationRequirement,
 };
 use crate::proto::ctap1::{Ctap1RegisterRequest, Ctap1SignRequest};
 use crate::proto::ctap1::{Ctap1RegisterResponse, Ctap1SignResponse};
@@ -133,7 +133,7 @@ impl UpgradableResponse<MakeCredentialResponse, MakeCredentialRequest> for Regis
         //   states a different length range.
         let attestation_statement = Ctap2AttestationStatement::FidoU2F(FidoU2fAttestationStmt {
             signature: ByteBuf::from(self.signature.clone()),
-            certificate: ByteBuf::from(self.attestation.clone()),
+            certificates: vec![ByteBuf::from(self.attestation.clone())],
         });
 
         // Let attestationObject be a CBOR map (see "attObj" in Generating an Attestation Object [WebAuthn]) with the
@@ -201,7 +201,9 @@ impl UpgradableResponse<GetAssertionResponse, SignRequest> for SignResponse {
         // something like that here. In reality, we only need `extensions: None` currently.
         let orig_request = GetAssertionRequest {
             relying_party_id: String::new(), // We don't have access to that info here, but we don't need it either
-            hash: request.app_id_hash.clone(),
+            challenge: Vec::new(), // U2F path doesn't use client_data for response serialization
+            origin: String::new(),
+            cross_origin: None,
             allow: vec![Ctap2PublicKeyCredentialDescriptor {
                 r#type: Ctap2PublicKeyCredentialType::PublicKey,
                 id: request.key_handle.clone().into(),
