@@ -212,7 +212,7 @@ impl FromInnerModel<PublicKeyCredentialCreationOptionsJSON, MakeCredentialReques
         let user_verification = inner
             .authenticator_selection
             .as_ref()
-            .map_or(UserVerificationRequirement::Discouraged, |s| {
+            .map_or(UserVerificationRequirement::Preferred, |s| {
                 s.user_verification
             });
 
@@ -625,5 +625,41 @@ mod tests {
         let req: MakeCredentialRequest =
             MakeCredentialRequest::from_json(&rpid, &req_json).unwrap();
         assert_eq!(req.timeout, DEFAULT_TIMEOUT);
+    }
+
+    /// Per spec, when authenticatorSelection is missing, userVerification should default to "preferred".
+    /// https://www.w3.org/TR/webauthn-3/#dom-authenticatorselectioncriteria-userverification
+    #[test]
+    fn test_request_from_json_default_user_verification_preferred() {
+        let rpid = RelyingPartyId::try_from("example.org").unwrap();
+        let req_json = json_field_rm(REQUEST_BASE_JSON, "authenticatorSelection");
+
+        let req: MakeCredentialRequest =
+            MakeCredentialRequest::from_json(&rpid, &req_json).unwrap();
+        assert_eq!(
+            req.user_verification,
+            UserVerificationRequirement::Preferred
+        );
+    }
+
+    /// Per spec, when userVerification is missing inside authenticatorSelection,
+    /// it should default to "preferred".
+    #[test]
+    fn test_request_from_json_missing_user_verification_in_authenticator_selection() {
+        let rpid = RelyingPartyId::try_from("example.org").unwrap();
+        // Replace authenticatorSelection with one that has no userVerification field
+        let mut req_json = json_field_rm(REQUEST_BASE_JSON, "authenticatorSelection");
+        req_json = json_field_add(
+            &req_json,
+            "authenticatorSelection",
+            r#"{"residentKey": "discouraged"}"#,
+        );
+
+        let req: MakeCredentialRequest =
+            MakeCredentialRequest::from_json(&rpid, &req_json).unwrap();
+        assert_eq!(
+            req.user_verification,
+            UserVerificationRequirement::Preferred
+        );
     }
 }
