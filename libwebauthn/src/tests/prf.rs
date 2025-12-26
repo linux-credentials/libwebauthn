@@ -108,7 +108,8 @@ async fn run_test_battery(channel: &mut HidChannel<'_>, using_pin: bool) {
     // Make Credentials ceremony
     let make_credentials_request = MakeCredentialRequest {
         origin: "example.org".to_owned(),
-        hash: Vec::from(challenge),
+        challenge: Vec::from(challenge),
+        cross_origin: None,
         relying_party: Ctap2PublicKeyCredentialRpEntity::new("example.org", "example.org"),
         user: Ctap2PublicKeyCredentialUserEntity::new(&user_id, "mario.rossi", "Mario Rossi"),
         resident_key: Some(ResidentKeyRequirement::Discouraged),
@@ -169,7 +170,9 @@ async fn run_test_battery(channel: &mut HidChannel<'_>, using_pin: bool) {
         (&response.authenticator_data).try_into().unwrap();
     let get_assertion = GetAssertionRequest {
         relying_party_id: "example.org".to_owned(),
-        hash: Vec::from(challenge),
+        challenge: Vec::from(challenge),
+        origin: "example.org".to_owned(),
+        cross_origin: None,
         allow: vec![credential.clone()],
         user_verification: UserVerificationRequirement::Preferred,
         extensions: None,
@@ -483,7 +486,9 @@ async fn run_success_test(
 ) {
     let get_assertion = GetAssertionRequest {
         relying_party_id: "example.org".to_owned(),
-        hash: Vec::from(challenge),
+        challenge: Vec::from(challenge),
+        origin: "example.org".to_owned(),
+        cross_origin: None,
         allow: vec![credential.clone()],
         user_verification: UserVerificationRequirement::Preferred,
         extensions: Some(GetAssertionRequestExtensions {
@@ -548,7 +553,9 @@ async fn run_failed_test(
 ) {
     let get_assertion = GetAssertionRequest {
         relying_party_id: "example.org".to_owned(),
-        hash: Vec::from(challenge),
+        challenge: Vec::from(challenge),
+        origin: "example.org".to_owned(),
+        cross_origin: None,
         allow: credential.map(|x| vec![x.clone()]).unwrap_or_default(),
         user_verification: UserVerificationRequirement::Discouraged,
         extensions: Some(GetAssertionRequestExtensions {

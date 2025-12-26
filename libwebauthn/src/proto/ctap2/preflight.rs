@@ -127,7 +127,8 @@ mod tests {
         let challenge: [u8; 32] = thread_rng().gen();
         let make_credentials_request = MakeCredentialRequest {
             origin: "example.org".to_owned(),
-            hash: Vec::from(challenge),
+            challenge: Vec::from(challenge),
+            cross_origin: None,
             relying_party: Ctap2PublicKeyCredentialRpEntity::new("example.org", "example.org"),
             user: Ctap2PublicKeyCredentialUserEntity::new(user_id, "mario.rossi", "Mario Rossi"),
             resident_key: Some(ResidentKeyRequirement::Discouraged),
@@ -151,7 +152,9 @@ mod tests {
         let challenge: [u8; 32] = thread_rng().gen();
         let get_assertion = GetAssertionRequest {
             relying_party_id: "example.org".to_owned(),
-            hash: Vec::from(challenge),
+            challenge: Vec::from(challenge),
+            origin: "example.org".to_owned(),
+            cross_origin: None,
             allow: allow_list,
             user_verification: UserVerificationRequirement::Discouraged,
             extensions: None,
