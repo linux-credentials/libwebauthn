@@ -57,6 +57,12 @@ pub enum GetAssertionRequestParsingError {
 
     #[error("Not supported: {0}")]
     NotSupported(String),
+
+    #[error("Invalid relying party ID: {0}")]
+    InvalidRelyingPartyId(String),
+
+    #[error("Mismatching relying party ID: {0} != {1}")]
+    MismatchingRelyingPartyId(String, String),
 }
 
 impl WebAuthnIDL<GetAssertionRequestParsingError> for GetAssertionRequest {
@@ -81,6 +87,19 @@ impl FromInnerModel<PublicKeyCredentialRequestOptionsJSON, GetAssertionRequestPa
         rpid: &RelyingPartyId,
         inner: PublicKeyCredentialRequestOptionsJSON,
     ) -> Result<Self, GetAssertionRequestParsingError> {
+        if let Some(relying_party_id) = inner.relying_party_id.as_deref() {
+            let parsed = RelyingPartyId::try_from(relying_party_id).map_err(|err| {
+                GetAssertionRequestParsingError::InvalidRelyingPartyId(err.to_string())
+            })?;
+            // TODO(#160): Add support for related origin per WebAuthn Level 3.
+            if parsed.0 != rpid.0 {
+                return Err(GetAssertionRequestParsingError::MismatchingRelyingPartyId(
+                    parsed.0,
+                    rpid.0.to_string(),
+                ));
+            }
+        }
+
         let prf = match inner.extensions.as_ref() {
             Some(ext) => match &ext.prf {
                 Some(prf_json) => Some(PrfInput::try_from(prf_json.clone())?),
@@ -507,13 +526,30 @@ mod tests {
     }
 
     #[test]
-    fn test_request_from_json_ignore_request_rp_id() {
+    fn test_request_from_json_invalid_rp_id() {
         let rpid = RelyingPartyId::try_from("example.org").unwrap();
-        let req_json = json_field_rm(REQUEST_BASE_JSON, "rpId");
-        let req_json = json_field_add(&req_json, "rpId", r#""another-example.org""#);
+        let req_json = json_field_add(&REQUEST_BASE_JSON, "rpId", r#""example.org.""#);
 
-        let req: GetAssertionRequest = GetAssertionRequest::from_json(&rpid, &req_json).unwrap();
-        assert_eq!(req, request_base());
+        let result = GetAssertionRequest::from_json(&rpid, &req_json);
+        assert!(matches!(
+            result,
+            Err(GetAssertionRequestParsingError::InvalidRelyingPartyId(_))
+        ));
+    }
+
+    #[test]
+    fn test_request_from_json_mismatching_rp_id() {
+        let rpid = RelyingPartyId::try_from("example.org").unwrap();
+        let req_json = json_field_add(&REQUEST_BASE_JSON, "rpId", r#""other.example.org""#);
+
+        let result = GetAssertionRequest::from_json(&rpid, &req_json);
+        assert!(matches!(
+            result,
+            Err(GetAssertionRequestParsingError::MismatchingRelyingPartyId(
+                _,
+                _
+            ))
+        ));
     }
 
     #[test]

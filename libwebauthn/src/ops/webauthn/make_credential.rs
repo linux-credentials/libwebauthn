@@ -195,6 +195,20 @@ impl FromInnerModel<PublicKeyCredentialCreationOptionsJSON, MakeCredentialReques
         rpid: &RelyingPartyId,
         inner: PublicKeyCredentialCreationOptionsJSON,
     ) -> Result<Self, MakeCredentialRequestParsingError> {
+        let rp_id = RelyingPartyId::try_from(inner.rp.id.as_str()).map_err(|err| {
+            MakeCredentialRequestParsingError::InvalidRelyingPartyId(err.to_string())
+        })?;
+        // TODO(#160): Add support for related origin per WebAuthn Level 3.
+        if rp_id.0 != rpid.0 {
+            return Err(
+                MakeCredentialRequestParsingError::MismatchingRelyingPartyId(
+                    rp_id.0,
+                    rpid.0.to_string(),
+                ),
+            );
+        }
+        let mut relying_party = inner.rp;
+        relying_party.id = rp_id.0;
         let resident_key = if inner
             .authenticator_selection
             .as_ref()
@@ -232,7 +246,7 @@ impl FromInnerModel<PublicKeyCredentialCreationOptionsJSON, MakeCredentialReques
         Ok(Self {
             hash: client_data_json.hash(),
             origin: rpid.to_owned().into(),
-            relying_party: inner.rp,
+            relying_party,
             user: inner.user.into(),
             resident_key,
             user_verification,
@@ -253,6 +267,10 @@ pub enum MakeCredentialRequestParsingError {
     /// The client must throw an "EncodingError" DOMException.
     #[error("Invalid JSON format: {0}")]
     EncodingError(#[from] JsonError),
+    #[error("Invalid relying party ID: {0}")]
+    InvalidRelyingPartyId(String),
+    #[error("Mismatching relying party ID: {0} != {1}")]
+    MismatchingRelyingPartyId(String, String),
 }
 
 impl WebAuthnIDL<MakeCredentialRequestParsingError> for MakeCredentialRequest {
@@ -661,5 +679,37 @@ mod tests {
             req.user_verification,
             UserVerificationRequirement::Preferred
         );
+    }
+
+    #[test]
+    fn test_request_from_json_invalid_rp_id() {
+        let rpid = RelyingPartyId::try_from("example.org").unwrap();
+        let req_json = json_field_add(
+            REQUEST_BASE_JSON,
+            "rp",
+            r#"{"id": "example.org.", "name": "example.org"}"#,
+        );
+
+        let result = MakeCredentialRequest::from_json(&rpid, &req_json);
+        assert!(matches!(
+            result,
+            Err(MakeCredentialRequestParsingError::InvalidRelyingPartyId(_))
+        ));
+    }
+
+    #[test]
+    fn test_request_from_json_mismatching_rp_id() {
+        let rpid = RelyingPartyId::try_from("example.org").unwrap();
+        let req_json = json_field_add(
+            REQUEST_BASE_JSON,
+            "rp",
+            r#"{"id": "other.example.org", "name": "example.org"}"#,
+        );
+
+        let result = MakeCredentialRequest::from_json(&rpid, &req_json);
+        assert!(matches!(
+            result,
+            Err(MakeCredentialRequestParsingError::MismatchingRelyingPartyId(_, _))
+        ));
     }
 }
