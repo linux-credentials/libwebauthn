@@ -109,7 +109,7 @@ where
         if Self::supports_preflight() {
             if let Some(exclude_list) = &op.exclude {
                 let filtered_exclude_list =
-                    ctap2_preflight(self, exclude_list, &op.hash, &op.relying_party.id).await;
+                    ctap2_preflight(self, exclude_list, &op.client_data_hash(), &op.relying_party.id).await;
                 ctap2_request.exclude = Some(filtered_exclude_list);
             }
         }
@@ -172,7 +172,7 @@ where
 
         if Self::supports_preflight() {
             let filtered_allow_list =
-                ctap2_preflight(self, &op.allow, &op.hash, &op.relying_party_id).await;
+                ctap2_preflight(self, &op.allow, &op.client_data_hash(), &op.relying_party_id).await;
             if filtered_allow_list.is_empty() && !op.allow.is_empty() {
                 // We filtered out everything in preflight, meaning none of the allowed
                 // credentials are present on this device. So we error out here

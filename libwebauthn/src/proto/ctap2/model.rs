@@ -239,10 +239,10 @@ pub enum Ctap2UserVerificationOperation {
 mod tests {
     use crate::proto::ctap2::cbor;
     use crate::proto::ctap2::Ctap2PublicKeyCredentialDescriptor;
+    use serde_bytes::ByteBuf;
 
     use super::{Ctap2COSEAlgorithmIdentifier, Ctap2CredentialType, Ctap2PublicKeyCredentialType};
     use hex;
-    use serde_bytes::ByteBuf;
     use serde_cbor_2 as serde_cbor;
 
     #[test]
