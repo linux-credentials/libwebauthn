@@ -7,8 +7,8 @@ use super::{
 use crate::{
     fido::AuthenticatorData,
     ops::webauthn::{
-        CredentialProtectionPolicy, MakeCredentialHmacOrPrfInput, MakeCredentialLargeBlobExtension,
-        MakeCredentialRequest, MakeCredentialResponse, MakeCredentialsRequestExtensions,
+        CredentialProtectionPolicy, MakeCredentialLargeBlobExtension, MakeCredentialRequest,
+        MakeCredentialResponse, MakeCredentialsRequestExtensions,
         MakeCredentialsResponseUnsignedExtensions, ResidentKeyRequirement,
     },
     pin::PinUvAuthProtocol,
@@ -225,8 +225,12 @@ impl Ctap2MakeCredentialsRequestExtensions {
         // LargeBlob (NOTE: Not to be confused with LargeBlobKey. LargeBlob has "Preferred" as well)
         // https://developer.mozilla.org/en-US/docs/Web/API/Web_Authentication_API/WebAuthn_extensions#largeblob
         //
-        let large_blob_key = match requested_extensions.large_blob {
-            MakeCredentialLargeBlobExtension::Required => {
+        let large_blob_key = match requested_extensions
+            .large_blob
+            .as_ref()
+            .map(|info| info.support)
+        {
+            Some(MakeCredentialLargeBlobExtension::Required) => {
                 // "required": The credential will be created with an authenticator to store blobs. The create() call will fail if this is impossible.
                 if !info.option_enabled("largeBlobs") {
                     warn!("This request will potentially fail. Large blob extension required, but device does not support it.");
@@ -235,7 +239,7 @@ impl Ctap2MakeCredentialsRequestExtensions {
                 // We only add a warning for easier debugging.
                 Some(true)
             }
-            MakeCredentialLargeBlobExtension::Preferred => {
+            Some(MakeCredentialLargeBlobExtension::Preferred) => {
                 if info.option_enabled("largeBlobs") {
                     Some(true)
                 } else {
@@ -244,19 +248,23 @@ impl Ctap2MakeCredentialsRequestExtensions {
                     None
                 }
             }
-            MakeCredentialLargeBlobExtension::None => None,
+            _ => None,
         };
 
         // HMAC Secret
-        let hmac_secret = match requested_extensions.hmac_or_prf {
-            MakeCredentialHmacOrPrfInput::None => None,
-            MakeCredentialHmacOrPrfInput::HmacGetSecret | MakeCredentialHmacOrPrfInput::Prf => {
-                Some(true)
-            }
+        let hmac_secret = if requested_extensions.hmac_create_secret == Some(true)
+            || requested_extensions.prf.is_some()
+        {
+            Some(true)
+        } else {
+            None
         };
 
         Ok(Ctap2MakeCredentialsRequestExtensions {
-            cred_blob: requested_extensions.cred_blob.clone(),
+            cred_blob: requested_extensions
+                .cred_blob
+                .as_ref()
+                .map(|inner| inner.0.clone()),
             hmac_secret,
             cred_protect: requested_extensions
                 .cred_protect

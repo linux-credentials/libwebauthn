@@ -610,10 +610,12 @@ mod test {
                 info_extensions.as_deref(),
                 UserVerificationRequirement::Discouraged,
                 Some(GetAssertionRequestExtensions {
-                    hmac_or_prf: GetAssertionHmacOrPrfInput::HmacGetSecret(HMACGetSecretInput {
-                        salt1: [0; 32],
-                        salt2: None,
-                    }),
+                    hmac_or_prf: Some(GetAssertionHmacOrPrfInput::HmacGetSecret(
+                        HMACGetSecretInput {
+                            salt1: [0; 32],
+                            salt2: None,
+                        },
+                    )),
                     ..Default::default()
                 }),
                 Ok(UsedPinUvAuthToken::None),
@@ -653,10 +655,12 @@ mod test {
                 Some(&["hmac-secret"]),
                 UserVerificationRequirement::Preferred,
                 Some(GetAssertionRequestExtensions {
-                    hmac_or_prf: GetAssertionHmacOrPrfInput::HmacGetSecret(HMACGetSecretInput {
-                        salt1: [0; 32],
-                        salt2: None,
-                    }),
+                    hmac_or_prf: Some(GetAssertionHmacOrPrfInput::HmacGetSecret(
+                        HMACGetSecretInput {
+                            salt1: [0; 32],
+                            salt2: None,
+                        },
+                    )),
                     ..Default::default()
                 }),
                 Ok(UsedPinUvAuthToken::LegacyUV),
@@ -722,10 +726,12 @@ mod test {
 
         for (info_options, uv_requirement) in testcases {
             let extensions = Some(GetAssertionRequestExtensions {
-                hmac_or_prf: GetAssertionHmacOrPrfInput::HmacGetSecret(HMACGetSecretInput {
-                    salt1: [0; 32],
-                    salt2: None,
-                }),
+                hmac_or_prf: Some(GetAssertionHmacOrPrfInput::HmacGetSecret(
+                    HMACGetSecretInput {
+                        salt1: [0; 32],
+                        salt2: None,
+                    },
+                )),
                 ..Default::default()
             });
 
@@ -789,10 +795,12 @@ mod test {
 
         for (info_options, uv_requirement) in testcases {
             let extensions = Some(GetAssertionRequestExtensions {
-                hmac_or_prf: GetAssertionHmacOrPrfInput::HmacGetSecret(HMACGetSecretInput {
-                    salt1: [0; 32],
-                    salt2: None,
-                }),
+                hmac_or_prf: Some(GetAssertionHmacOrPrfInput::HmacGetSecret(
+                    HMACGetSecretInput {
+                        salt1: [0; 32],
+                        salt2: None,
+                    },
+                )),
                 ..Default::default()
             });
 
@@ -903,10 +911,12 @@ mod test {
 
         for (info_options, uv_requirement) in testcases {
             let extensions = Some(GetAssertionRequestExtensions {
-                hmac_or_prf: GetAssertionHmacOrPrfInput::HmacGetSecret(HMACGetSecretInput {
-                    salt1: [0; 32],
-                    salt2: None,
-                }),
+                hmac_or_prf: Some(GetAssertionHmacOrPrfInput::HmacGetSecret(
+                    HMACGetSecretInput {
+                        salt1: [0; 32],
+                        salt2: None,
+                    },
+                )),
                 ..Default::default()
             });
 

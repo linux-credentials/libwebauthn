@@ -9,7 +9,8 @@ use x509_parser::nom::AsBytes;
 use super::webauthn::MakeCredentialRequest;
 use crate::fido::{AttestedCredentialData, AuthenticatorData, AuthenticatorDataFlags};
 use crate::ops::webauthn::{
-    GetAssertionRequest, GetAssertionResponse, MakeCredentialResponse, UserVerificationRequirement,
+    GetAssertionRequest, GetAssertionResponse,
+    MakeCredentialResponse, UserVerificationRequirement,
 };
 use crate::proto::ctap1::{Ctap1RegisterRequest, Ctap1SignRequest};
 use crate::proto::ctap1::{Ctap1RegisterResponse, Ctap1SignResponse};
