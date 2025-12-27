@@ -40,10 +40,13 @@ _Looking for the D-Bus API proposal?_ Check out [credentialsd][credentialsd].
 
 ## Transports
 
-|                      | USB (HID)                 | Bluetooth Low Energy (BLE) | NFC                              | TPM 2.0 (Platform)    | Hybrid (caBLEv2)                   |
-| -------------------- | ------------------------- | -------------------------- | -------------------------------- | --------------------- | ---------------------------------- |
-| **FIDO U2F**         | 🟢 Supported (via hidapi) | 🟢 Supported (via bluez)   | 🟢 Supported (pcsc or libnfc)    | 🟠 Planned ([#4][#4]) | N/A                                |
-| **WebAuthn (FIDO2)** | 🟢 Supported (via hidapi) | 🟢 Supported (via bluez)   | 🟢 Supported (pcsc or libnfc)    | 🟠 Planned ([#4][#4]) | 🟢 Supported |
+|                              | FIDO U2F              | WebAuthn (FIDO2)      |
+| ---------------------------- | --------------------- | --------------------- |
+| **USB (HID)**                | 🟢 Supported (hidapi) | 🟢 Supported (hidapi) |
+| **Bluetooth Low Energy**     | 🟢 Supported (bluez)  | 🟢 Supported (bluez)  |
+| **NFC**                      | 🟢 Supported (pcsc or libnfc) | 🟢 Supported (pcsc or libnfc) |
+| **TPM 2.0 (Platform)**       | 🟠 Planned ([#4][#4]) | 🟠 Planned ([#4][#4]) |
+| **Hybrid (QR code scan, aka caBLE v2)**         | N/A                   | 🟢 Supported          |
 
 ## Example programs
 
