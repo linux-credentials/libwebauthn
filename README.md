@@ -40,10 +40,13 @@ _Looking for the D-Bus API proposal?_ Check out [credentialsd][credentialsd].
 
 ## Transports
 
-|                      | USB (HID)                 | Bluetooth Low Energy (BLE) | NFC                   | TPM 2.0 (Platform)    | Hybrid (caBLEv2)                   |
-| -------------------- | ------------------------- | -------------------------- | --------------------- | --------------------- | ---------------------------------- |
-| **FIDO U2F**         | 🟢 Supported (via hidapi) | 🟢 Supported (via bluez)   | 🟠 Planned ([#5][#5]) | 🟠 Planned ([#4][#4]) | N/A                                |
-| **WebAuthn (FIDO2)** | 🟢 Supported (via hidapi) | 🟢 Supported (via bluez)   | 🟠 Planned ([#5][#5]) | 🟠 Planned ([#4][#4]) | 🟢 Supported |
+|                              | FIDO U2F              | WebAuthn (FIDO2)      |
+| ---------------------------- | --------------------- | --------------------- |
+| **USB (HID)**                | 🟢 Supported (hidapi) | 🟢 Supported (hidapi) |
+| **Bluetooth Low Energy**     | 🟢 Supported (bluez)  | 🟢 Supported (bluez)  |
+| **NFC**                      | 🟢 Supported (pcsc or libnfc) | 🟢 Supported (pcsc or libnfc) |
+| **TPM 2.0 (Platform)**       | 🟠 Planned ([#4][#4]) | 🟠 Planned ([#4][#4]) |
+| **Hybrid (QR code scan, aka caBLE v2)**         | N/A                   | 🟢 Supported          |
 
 ## Example programs
 
@@ -52,6 +55,7 @@ After cloning, you can try out [one of the libwebauthn examples](libwebauthn/exa
 $ cd libwebauthn
 $ git submodule update --init
 $ cargo run --example webauthn_hid
+$ cargo run --example webauthn_nfc
 $ cargo run --example webauthn_cable
 $ cargo run --example u2f_hid
 ```
@@ -72,7 +76,6 @@ If you don't know where to start, check out the _Issues_ tab.
 [#10]: https://github.com/linux-credentials/libwebauthn/issues/10
 [#3]: https://github.com/linux-credentials/libwebauthn/issues/3
 [#4]: https://github.com/linux-credentials/libwebauthn/issues/4
-[#5]: https://github.com/linux-credentials/libwebauthn/issues/5
 [#17]: https://github.com/linux-credentials/libwebauthn/issues/17
 [#18]: https://github.com/linux-credentials/libwebauthn/issues/18
 [#31]: https://github.com/linux-credentials/libwebauthn/issues/31
