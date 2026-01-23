@@ -60,6 +60,10 @@ $ cargo run --example webauthn_cable
 $ cargo run --example u2f_hid
 ```
 
+## Package Requirements
+
+- libhidapi-dev/hidapi-devel
+
 ## Contributing
 
 We welcome contributions!
