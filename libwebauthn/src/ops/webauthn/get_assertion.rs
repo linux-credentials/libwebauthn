@@ -86,7 +86,7 @@ impl FromInnerModel<PublicKeyCredentialRequestOptionsJSON, GetAssertionRequestPa
                 if let Some(prf) = ext.prf {
                     let prf_input = PrfInput::try_from(prf)?;
                     Some(GetAssertionHmacOrPrfInput::Prf(prf_input))
-                } else if let Some(hmac) = ext.hamc_get_secret {
+                } else if let Some(hmac) = ext.hmac_get_secret {
                     let hmac_input = HMACGetSecretInput::try_from(hmac)?;
                     Some(GetAssertionHmacOrPrfInput::HmacGetSecret(hmac_input))
                 } else {

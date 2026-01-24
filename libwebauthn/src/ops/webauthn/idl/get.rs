@@ -52,7 +52,7 @@ pub struct GetAssertionRequestExtensionsJSON {
     #[serde(rename = "largeBlobKey")]
     pub large_blob: Option<LargeBlobInputJson>,
     #[serde(rename = "hmacCreateSecret")]
-    pub hamc_get_secret: Option<HmacGetSecretInputJson>,
+    pub hmac_get_secret: Option<HmacGetSecretInputJson>,
     #[serde(rename = "prf")]
     pub prf: Option<PrfInputJson>,
 }
