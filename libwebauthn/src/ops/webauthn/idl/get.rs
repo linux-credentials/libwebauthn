@@ -35,12 +35,12 @@ pub struct PublicKeyCredentialDescriptorJSON {
     pub transports: Option<Vec<Ctap2Transport>>,
 }
 
-impl Into<Ctap2PublicKeyCredentialDescriptor> for PublicKeyCredentialDescriptorJSON {
-    fn into(self) -> Ctap2PublicKeyCredentialDescriptor {
+impl From<PublicKeyCredentialDescriptorJSON> for Ctap2PublicKeyCredentialDescriptor {
+    fn from(value: PublicKeyCredentialDescriptorJSON) -> Self {
         Ctap2PublicKeyCredentialDescriptor {
-            r#type: self.r#type,
-            id: ByteBuf::from(self.id),
-            transports: self.transports,
+            r#type: value.r#type,
+            id: ByteBuf::from(value.id),
+            transports: value.transports,
         }
     }
 }

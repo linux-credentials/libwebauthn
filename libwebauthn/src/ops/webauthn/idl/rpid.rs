@@ -12,9 +12,9 @@ impl Deref for RelyingPartyId {
     }
 }
 
-impl Into<String> for RelyingPartyId {
-    fn into(self) -> String {
-        self.0
+impl From<RelyingPartyId> for String {
+    fn from(rpid: RelyingPartyId) -> String {
+        rpid.0
     }
 }
 

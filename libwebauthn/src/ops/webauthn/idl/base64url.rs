@@ -54,9 +54,9 @@ impl Serialize for Base64UrlString {
     }
 }
 
-impl Into<Vec<u8>> for Base64UrlString {
-    fn into(self) -> Vec<u8> {
-        self.0
+impl From<Base64UrlString> for Vec<u8> {
+    fn from(b64: Base64UrlString) -> Vec<u8> {
+        b64.0
     }
 }
 
