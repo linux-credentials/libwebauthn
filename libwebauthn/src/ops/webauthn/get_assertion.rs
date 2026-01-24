@@ -105,11 +105,7 @@ impl FromInnerModel<PublicKeyCredentialRequestOptionsJSON, GetAssertionRequestPa
                     large_blob: extensions_opt
                         .large_blob
                         .clone()
-                        .map(Option::<GetAssertionLargeBlobExtension>::try_from)
-                        .transpose()
-                        .ok()
-                        .flatten()
-                        .flatten(),
+                        .and_then(|lb| GetAssertionLargeBlobExtension::try_from(lb).ok()),
                     hmac_or_prf: hmac_or_prf.clone(),
                 });
 
@@ -202,7 +198,7 @@ impl TryFrom<PrfInputJson> for PrfInput {
                         },
                     ))
                 })
-                .collect::<Result<HashMap<String, PRFValue>, GetAssertionRequestParsingError>>()?,
+                .collect::<Result<HashMap<_, _>, _>>()?,
             None => HashMap::new(),
         };
 
@@ -255,16 +251,18 @@ pub enum GetAssertionLargeBlobExtension {
     // Write(Vec<u8>),
 }
 
-impl TryFrom<LargeBlobInputJson> for Option<GetAssertionLargeBlobExtension> {
+impl TryFrom<LargeBlobInputJson> for GetAssertionLargeBlobExtension {
     type Error = GetAssertionRequestParsingError;
 
     fn try_from(value: LargeBlobInputJson) -> Result<Self, Self::Error> {
         match value.read {
-            Some(true) => Ok(Some(GetAssertionLargeBlobExtension::Read)),
+            Some(true) => Ok(GetAssertionLargeBlobExtension::Read),
             Some(false) => Err(GetAssertionRequestParsingError::NotSupported(
                 "largeBlob writes not supported".to_string(),
             )),
-            None => Ok(None),
+            None => Err(GetAssertionRequestParsingError::NotSupported(
+                "largeBlob read not requested".to_string(),
+            )),
         }
     }
 }

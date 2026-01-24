@@ -161,12 +161,11 @@ impl MakeCredentialsResponseUnsignedExtensions {
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub enum ResidentKeyRequirement {
-    #[serde(rename = "required")]
     Required,
-    #[serde(rename = "preferred")]
     Preferred,
-    #[serde(rename = "discouraged", other)]
+    #[serde(other)]
     Discouraged,
 }
 
@@ -337,10 +336,9 @@ pub struct MakeCredentialLargeBlobExtensionInput {
 }
 
 #[derive(Debug, Default, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub enum MakeCredentialLargeBlobExtension {
-    #[serde(rename = "preferred")]
     Preferred,
-    #[serde(rename = "required")]
     Required,
     #[default]
     #[serde(other)]
