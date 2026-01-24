@@ -7,12 +7,14 @@ mod timeout;
 use super::u2f::{RegisterRequest, SignRequest};
 use crate::webauthn::CtapError;
 pub use get_assertion::{
-    Assertion, Ctap2HMACGetSecretOutput, GetAssertionHmacOrPrfInput,
-    GetAssertionLargeBlobExtension, GetAssertionLargeBlobExtensionOutput, GetAssertionPrfOutput,
-    GetAssertionRequest, GetAssertionRequestExtensions, GetAssertionResponse,
-    GetAssertionResponseExtensions, GetAssertionResponseUnsignedExtensions, HMACGetSecretInput,
-    HMACGetSecretOutput, PRFValue, PrfInput,
+    Assertion, Ctap2HMACGetSecretOutput, GetAssertionLargeBlobExtension,
+    GetAssertionLargeBlobExtensionOutput, GetAssertionPrfOutput, GetAssertionRequest,
+    GetAssertionRequestExtensions, GetAssertionResponse, GetAssertionResponseExtensions,
+    GetAssertionResponseUnsignedExtensions, HMACGetSecretInput, HMACGetSecretOutput, PRFValue,
+    PrfInput,
 };
+// Internal re-export for CTAP layer
+pub(crate) use get_assertion::GetAssertionHmacOrPrfInput;
 pub use idl::{rpid::RelyingPartyId, Base64UrlString, WebAuthnIDL};
 pub use make_credential::{
     CredentialPropsExtension, CredentialProtectionExtension, CredentialProtectionPolicy,
@@ -29,11 +31,12 @@ pub enum Operation {
     GetAssertion,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum UserVerificationRequirement {
     Required,
     Discouraged,
+    #[default]
     #[serde(other)]
     Preferred,
 }

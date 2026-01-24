@@ -131,7 +131,7 @@ impl FromInnerModel<PublicKeyCredentialRequestOptionsJSON, GetAssertionRequestPa
                 .map(|c| c.into())
                 .collect(),
             extensions,
-            user_verification: inner.uv_requirement,
+            user_verification: inner.user_verification,
             timeout,
         })
     }

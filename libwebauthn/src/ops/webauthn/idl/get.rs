@@ -19,7 +19,8 @@ pub struct PublicKeyCredentialRequestOptionsJSON {
     pub relying_party_id: Option<String>,
     #[serde(default)]
     pub allow_credentials: Vec<PublicKeyCredentialDescriptorJSON>,
-    pub uv_requirement: UserVerificationRequirement,
+    #[serde(rename = "userVerification", default)]
+    pub user_verification: UserVerificationRequirement,
     #[serde(default)]
     pub hints: Vec<String>,
     pub extensions: Option<GetAssertionRequestExtensionsJSON>,
