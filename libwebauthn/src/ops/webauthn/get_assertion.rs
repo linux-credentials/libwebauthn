@@ -81,18 +81,11 @@ impl FromInnerModel<PublicKeyCredentialRequestOptionsJSON, GetAssertionRequestPa
         rpid: &RelyingPartyId,
         inner: PublicKeyCredentialRequestOptionsJSON,
     ) -> Result<Self, GetAssertionRequestParsingError> {
-        let hmac_or_prf = match inner.extensions.clone() {
-            Some(ext) => {
-                if let Some(prf) = ext.prf {
-                    let prf_input = PrfInput::try_from(prf)?;
-                    Some(GetAssertionHmacOrPrfInput::Prf(prf_input))
-                } else if let Some(hmac) = ext.hmac_get_secret {
-                    let hmac_input = HMACGetSecretInput::try_from(hmac)?;
-                    Some(GetAssertionHmacOrPrfInput::HmacGetSecret(hmac_input))
-                } else {
-                    None
-                }
-            }
+        let prf = match inner.extensions.as_ref() {
+            Some(ext) => match &ext.prf {
+                Some(prf_json) => Some(PrfInput::try_from(prf_json.clone())?),
+                None => None,
+            },
             None => None,
         };
 
@@ -106,7 +99,7 @@ impl FromInnerModel<PublicKeyCredentialRequestOptionsJSON, GetAssertionRequestPa
                         .large_blob
                         .clone()
                         .and_then(|lb| GetAssertionLargeBlobExtension::try_from(lb).ok()),
-                    hmac_or_prf: hmac_or_prf.clone(),
+                    prf: prf.clone(),
                 });
 
         let timeout: Duration = inner
@@ -137,6 +130,9 @@ impl FromInnerModel<PublicKeyCredentialRequestOptionsJSON, GetAssertionRequestPa
     }
 }
 
+/// Internal enum for CTAP-level HMAC/PRF handling.
+/// At WebAuthn level, only PRF is exposed. This enum is used internally
+/// to support both PRF (WebAuthn) and raw HMAC (CTAP testing).
 #[derive(Debug, Clone, PartialEq)]
 pub enum GetAssertionHmacOrPrfInput {
     HmacGetSecret(HMACGetSecretInput),
@@ -279,7 +275,8 @@ pub struct GetAssertionLargeBlobExtensionOutput {
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct GetAssertionRequestExtensions {
     pub cred_blob: bool,
-    pub hmac_or_prf: Option<GetAssertionHmacOrPrfInput>,
+    /// PRF extension input. At the CTAP level, this is converted to HMAC secret.
+    pub prf: Option<PrfInput>,
     pub large_blob: Option<GetAssertionLargeBlobExtension>,
 }
 
@@ -570,11 +567,11 @@ mod tests {
 
         let req: GetAssertionRequest = GetAssertionRequest::from_json(&rpid, &req_json).unwrap();
         if let Some(GetAssertionRequestExtensions {
-            hmac_or_prf:
-                Some(GetAssertionHmacOrPrfInput::Prf(PrfInput {
+            prf:
+                Some(PrfInput {
                     eval: Some(ref prf_value),
                     ..
-                })),
+                }),
             ..
         }) = &req.extensions
         {

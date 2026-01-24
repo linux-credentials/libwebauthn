@@ -198,7 +198,7 @@ pub struct Ctap2GetAssertionRequestExtensions {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub large_blob_key: Option<bool>,
     #[serde(skip)]
-    pub hmac_or_prf: Option<GetAssertionHmacOrPrfInput>,
+    pub(crate) hmac_or_prf: Option<GetAssertionHmacOrPrfInput>,
 }
 
 impl From<GetAssertionRequestExtensions> for Ctap2GetAssertionRequestExtensions {
@@ -206,7 +206,7 @@ impl From<GetAssertionRequestExtensions> for Ctap2GetAssertionRequestExtensions 
         Ctap2GetAssertionRequestExtensions {
             cred_blob: other.cred_blob,
             hmac_secret: None, // Gets calculated later
-            hmac_or_prf: other.hmac_or_prf,
+            hmac_or_prf: other.prf.map(GetAssertionHmacOrPrfInput::Prf),
             large_blob_key: if other.large_blob == Some(GetAssertionLargeBlobExtension::Read) {
                 Some(true)
             } else {
@@ -518,26 +518,27 @@ impl Ctap2GetAssertionResponseExtensions {
             }
         });
 
-        let (hmac_get_secret, prf) = if let Some(decrypted) = decrypted_hmac {
-            match request.extensions.as_ref().and_then(|ext| ext.hmac_or_prf.as_ref()) {
-                None => (None, None),
-                Some(GetAssertionHmacOrPrfInput::HmacGetSecret(..)) => (Some(decrypted), None),
-                Some(GetAssertionHmacOrPrfInput::Prf(..)) => (
-                    None,
-                    Some(GetAssertionPrfOutput {
-                        results: Some(PRFValue {
-                            first: decrypted.output1,
-                            second: decrypted.output2,
-                        }),
+        let prf = decrypted_hmac.and_then(|decrypted| {
+            // At WebAuthn level, we only support PRF (not raw HMAC).
+            // The PRF input was converted to HMAC internally.
+            request
+                .extensions
+                .as_ref()
+                .and_then(|ext| ext.prf.as_ref())
+                .map(|_| GetAssertionPrfOutput {
+                    results: Some(PRFValue {
+                        first: decrypted.output1,
+                        second: decrypted.output2,
                     }),
-                ),
-            }
-        } else {
-            (None, None)
-        };
+                })
+        });
 
         // LargeBlobs was requested
-        let large_blob = match request.extensions.as_ref().and_then(|ext| ext.large_blob.as_ref()) {
+        let large_blob = match request
+            .extensions
+            .as_ref()
+            .and_then(|ext| ext.large_blob.as_ref())
+        {
             None => None,
             Some(GetAssertionLargeBlobExtension::Read) => {
                 Some(GetAssertionLargeBlobExtensionOutput {
@@ -552,7 +553,7 @@ impl Ctap2GetAssertionResponseExtensions {
         };
 
         GetAssertionResponseUnsignedExtensions {
-            hmac_get_secret,
+            hmac_get_secret: None,
             large_blob,
             prf,
         }

@@ -2,9 +2,8 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use crate::ops::webauthn::{
-    GetAssertionHmacOrPrfInput, GetAssertionRequest, GetAssertionRequestExtensions,
-    MakeCredentialPrfInput, MakeCredentialPrfOutput, MakeCredentialsRequestExtensions, PRFValue,
-    PrfInput,
+    GetAssertionRequest, GetAssertionRequestExtensions, MakeCredentialPrfInput,
+    MakeCredentialPrfOutput, MakeCredentialsRequestExtensions, PRFValue, PrfInput,
 };
 use crate::pin::PinManagement;
 use crate::proto::ctap2::{Ctap2PinUvAuthProtocol, Ctap2PublicKeyCredentialDescriptor};
@@ -192,15 +191,15 @@ async fn run_test_battery(channel: &mut HidChannel<'_>, using_pin: bool) {
             second: None,
         },
     );
-    let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf(PrfInput {
+    let prf = PrfInput {
         eval,
         eval_by_credential,
-    });
+    };
     run_success_test(
         channel,
         &credential,
         &challenge,
-        hmac_or_prf,
+        prf,
         true,
         false,
         "eval_by_credential only",
@@ -221,15 +220,15 @@ async fn run_test_battery(channel: &mut HidChannel<'_>, using_pin: bool) {
             second: None,
         },
     );
-    let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf(PrfInput {
+    let prf = PrfInput {
         eval,
         eval_by_credential,
-    });
+    };
     run_success_test(
         channel,
         &credential,
         &challenge,
-        hmac_or_prf,
+        prf,
         true,
         false,
         "eval and eval_by_credential",
@@ -243,15 +242,15 @@ async fn run_test_battery(channel: &mut HidChannel<'_>, using_pin: bool) {
     });
 
     let eval_by_credential = HashMap::new();
-    let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf(PrfInput {
+    let prf = PrfInput {
         eval,
         eval_by_credential,
-    });
+    };
     run_success_test(
         channel,
         &credential,
         &challenge,
-        hmac_or_prf,
+        prf,
         true,
         false,
         "eval only",
@@ -293,15 +292,15 @@ async fn run_test_battery(channel: &mut HidChannel<'_>, using_pin: bool) {
             second: Some([7; 32]),
         },
     );
-    let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf(PrfInput {
+    let prf = PrfInput {
         eval,
         eval_by_credential,
-    });
+    };
     run_success_test(
         channel,
         &credential,
         &challenge,
-        hmac_or_prf,
+        prf,
         true,
         true,
         "eval and full list of eval_by_credential",
@@ -336,15 +335,15 @@ async fn run_test_battery(channel: &mut HidChannel<'_>, using_pin: bool) {
             second: Some([8; 32]),
         },
     );
-    let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf(PrfInput {
+    let prf = PrfInput {
         eval,
         eval_by_credential,
-    });
+    };
     run_success_test(
         channel,
         &credential,
         &challenge,
-        hmac_or_prf,
+        prf,
         true,
         false,
         "eval and non-fitting list of eval_by_credential",
@@ -376,15 +375,15 @@ async fn run_test_battery(channel: &mut HidChannel<'_>, using_pin: bool) {
             second: Some([8; 32]),
         },
     );
-    let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf(PrfInput {
+    let prf = PrfInput {
         eval,
         eval_by_credential,
-    });
+    };
     run_success_test(
         channel,
         &credential,
         &challenge,
-        hmac_or_prf,
+        prf,
         false,
         false,
         "No eval and non-fitting list of eval_by_credential (should have no extension output)",
@@ -405,15 +404,15 @@ async fn run_test_battery(channel: &mut HidChannel<'_>, using_pin: bool) {
             second: None,
         },
     );
-    let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf(PrfInput {
+    let prf = PrfInput {
         eval,
         eval_by_credential,
-    });
+    };
     run_failed_test(
         channel,
         Some(&credential),
         &challenge,
-        hmac_or_prf,
+        prf,
         "Wrongly encoded credential_id",
         WebAuthnError::Platform(PlatformError::SyntaxError),
     )
@@ -429,15 +428,15 @@ async fn run_test_battery(channel: &mut HidChannel<'_>, using_pin: bool) {
             second: None,
         },
     );
-    let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf(PrfInput {
+    let prf = PrfInput {
         eval,
         eval_by_credential,
-    });
+    };
     run_failed_test(
         channel,
         Some(&credential),
         &challenge,
-        hmac_or_prf,
+        prf,
         "Empty credential_id",
         WebAuthnError::Platform(PlatformError::SyntaxError),
     )
@@ -453,15 +452,15 @@ async fn run_test_battery(channel: &mut HidChannel<'_>, using_pin: bool) {
             second: None,
         },
     );
-    let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf(PrfInput {
+    let prf = PrfInput {
         eval,
         eval_by_credential,
-    });
+    };
     run_failed_test(
         channel,
         None,
         &challenge,
-        hmac_or_prf,
+        prf,
         "Empty allow_list, set eval_by_credential",
         WebAuthnError::Platform(PlatformError::NotSupported),
     )
@@ -476,7 +475,7 @@ async fn run_success_test(
     channel: &mut HidChannel<'_>,
     credential: &Ctap2PublicKeyCredentialDescriptor,
     challenge: &[u8; 32],
-    hmac_or_prf: GetAssertionHmacOrPrfInput,
+    prf: PrfInput,
     expect_extensions: bool,
     expect_prf_second: bool,
     printoutput: &str,
@@ -487,7 +486,7 @@ async fn run_success_test(
         allow: vec![credential.clone()],
         user_verification: UserVerificationRequirement::Preferred,
         extensions: Some(GetAssertionRequestExtensions {
-            hmac_or_prf: Some(hmac_or_prf),
+            prf: Some(prf),
             ..Default::default()
         }),
         timeout: TIMEOUT,
@@ -542,7 +541,7 @@ async fn run_failed_test(
     channel: &mut HidChannel<'_>,
     credential: Option<&Ctap2PublicKeyCredentialDescriptor>,
     challenge: &[u8; 32],
-    hmac_or_prf: GetAssertionHmacOrPrfInput,
+    prf: PrfInput,
     printoutput: &str,
     expected_error: WebAuthnError,
 ) {
@@ -552,7 +551,7 @@ async fn run_failed_test(
         allow: credential.map(|x| vec![x.clone()]).unwrap_or_default(),
         user_verification: UserVerificationRequirement::Discouraged,
         extensions: Some(GetAssertionRequestExtensions {
-            hmac_or_prf: Some(hmac_or_prf),
+            prf: Some(prf),
             ..Default::default()
         }),
         timeout: TIMEOUT,

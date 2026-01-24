@@ -10,9 +10,9 @@ use tokio::sync::broadcast::Receiver;
 use tracing_subscriber::{self, EnvFilter};
 
 use libwebauthn::ops::webauthn::{
-    CredentialProtectionExtension, CredentialProtectionPolicy, GetAssertionHmacOrPrfInput,
-    GetAssertionRequest, GetAssertionRequestExtensions, HMACGetSecretInput, MakeCredentialRequest,
-    MakeCredentialsRequestExtensions, ResidentKeyRequirement, UserVerificationRequirement,
+    CredentialProtectionExtension, CredentialProtectionPolicy, GetAssertionRequest,
+    GetAssertionRequestExtensions, MakeCredentialRequest, MakeCredentialsRequestExtensions,
+    PRFValue, PrfInput, ResidentKeyRequirement, UserVerificationRequirement,
 };
 use libwebauthn::pin::PinRequestReason;
 use libwebauthn::proto::ctap2::{
@@ -149,12 +149,13 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             user_verification: UserVerificationRequirement::Discouraged,
             extensions: Some(GetAssertionRequestExtensions {
                 cred_blob: true,
-                hmac_or_prf: Some(GetAssertionHmacOrPrfInput::HmacGetSecret(
-                    HMACGetSecretInput {
-                        salt1: [1; 32],
-                        salt2: None,
-                    },
-                )),
+                prf: Some(PrfInput {
+                    eval: Some(PRFValue {
+                        first: [1; 32],
+                        second: None,
+                    }),
+                    eval_by_credential: std::collections::HashMap::new(),
+                }),
                 ..Default::default()
             }),
             timeout: TIMEOUT,
