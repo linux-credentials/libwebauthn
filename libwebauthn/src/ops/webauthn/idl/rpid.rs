@@ -52,6 +52,7 @@ impl TryFrom<&str> for RelyingPartyId {
             return Err(Error::EmptyRelyingPartyId);
         }
 
+        // Check for IP addresses (both IPv4 and IPv6)
         if value.parse::<IpAddr>().is_ok() {
             return Err(Error::IpAddressNotAllowed(value.to_string()));
         }
@@ -128,9 +129,46 @@ mod tests {
     }
 
     #[test]
-    fn test_relying_party_id_rejects_ip_address() {
-        let result = RelyingPartyId::try_from("127.0.0.1");
-        assert!(matches!(result, Err(Error::IpAddressNotAllowed(_))));
+    fn test_relying_party_id_rejects_ipv4_address() {
+        let ipv4_addresses = ["127.0.0.1", "192.168.1.1", "10.0.0.1", "255.255.255.255"];
+        for ip in ipv4_addresses {
+            let result = RelyingPartyId::try_from(ip);
+            assert!(
+                matches!(result, Err(Error::IpAddressNotAllowed(_))),
+                "Expected IPv4 address '{}' to be rejected",
+                ip
+            );
+        }
+    }
+
+    #[test]
+    fn test_relying_party_id_rejects_ipv6_address() {
+        // Unbracketed format - must be rejected as IP address
+        let ipv6_addresses = ["::1", "2001:db8::1", "fe80::1", "::ffff:192.168.1.1"];
+        for ip in ipv6_addresses {
+            let result = RelyingPartyId::try_from(ip);
+            assert!(
+                matches!(result, Err(Error::IpAddressNotAllowed(_))),
+                "Expected IPv6 address '{}' to be rejected as IP address",
+                ip
+            );
+        }
+
+        // Bracketed format (RFC 2732) - must be rejected (either as IP or invalid domain)
+        let bracketed_ipv6 = [
+            "[::1]",
+            "[2001:db8::1]",
+            "[fe80::1]",
+            "[::ffff:192.168.1.1]",
+        ];
+        for ip in bracketed_ipv6 {
+            let result = RelyingPartyId::try_from(ip);
+            assert!(
+                result.is_err(),
+                "Expected bracketed IPv6 address '{}' to be rejected",
+                ip
+            );
+        }
     }
 
     #[test]
