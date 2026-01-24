@@ -198,7 +198,7 @@ impl TryFrom<PrfInputJson> for PrfInput {
                         },
                     ))
                 })
-                .collect::<Result<HashMap<_, _>, _>>()?,
+                .collect::<Result<HashMap<String, PRFValue>, GetAssertionRequestParsingError>>()?,
             None => HashMap::new(),
         };
 

@@ -30,12 +30,11 @@ pub enum Operation {
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
 pub enum UserVerificationRequirement {
-    #[serde(rename = "required")]
     Required,
-    #[serde(rename = "discouraged")]
     Discouraged,
-    #[serde(rename = "preferred", other)]
+    #[serde(other)]
     Preferred,
 }
 

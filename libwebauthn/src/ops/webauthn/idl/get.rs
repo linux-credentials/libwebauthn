@@ -11,15 +11,14 @@ use crate::{
 };
 
 #[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct PublicKeyCredentialRequestOptionsJSON {
     pub challenge: Base64UrlString,
     pub timeout: Option<u32>,
     #[serde(rename = "rpId")]
     pub relying_party_id: Option<String>,
-    #[serde(rename = "allowCredentials")]
     #[serde(default)]
     pub allow_credentials: Vec<PublicKeyCredentialDescriptorJSON>,
-    #[serde(rename = "userVerification")]
     pub uv_requirement: UserVerificationRequirement,
     #[serde(default)]
     pub hints: Vec<String>,
@@ -46,14 +45,13 @@ impl From<PublicKeyCredentialDescriptorJSON> for Ctap2PublicKeyCredentialDescrip
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GetAssertionRequestExtensionsJSON {
     #[serde(rename = "getCredBlob")]
     pub cred_blob: Option<bool>,
     #[serde(rename = "largeBlobKey")]
     pub large_blob: Option<LargeBlobInputJson>,
-    #[serde(rename = "hmacCreateSecret")]
     pub hmac_get_secret: Option<HmacGetSecretInputJson>,
-    #[serde(rename = "prf")]
     pub prf: Option<PrfInputJson>,
 }
 
