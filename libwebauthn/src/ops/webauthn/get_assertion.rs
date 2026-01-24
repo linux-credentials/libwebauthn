@@ -123,6 +123,7 @@ impl FromInnerModel<PublicKeyCredentialRequestOptionsJSON, GetAssertionRequestPa
             challenge: inner.challenge.to_vec(),
             origin: rpid.to_string(),
             cross_origin: None,
+            top_origin: None,
         };
 
         Ok(GetAssertionRequest {
@@ -463,6 +464,7 @@ mod tests {
             challenge: base64_url::decode("Y3JlZGVudGlhbHMtZm9yLWxpbnV4L2xpYndlYmF1dGhu").unwrap(),
             origin: "example.org".to_string(),
             cross_origin: None,
+            top_origin: None,
         };
         GetAssertionRequest {
             relying_party_id: "example.org".to_owned(),

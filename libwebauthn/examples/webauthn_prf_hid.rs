@@ -148,7 +148,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
                 second: None,
             },
         );
-        let hmac_or_prf: GetAssertionHmacOrPrfInput = GetAssertionHmacOrPrfInput::Prf(PrfInput {
+        let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf(PrfInput {
             eval,
             eval_by_credential,
         });

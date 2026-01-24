@@ -199,7 +199,7 @@ impl FromInnerModel<PublicKeyCredentialCreationOptionsJSON, MakeCredentialReques
         let resident_key = if inner
             .authenticator_selection
             .as_ref()
-            .and_then(|s| Some(s.require_resident_key))
+            .map(|s| s.require_resident_key)
             == Some(true)
         {
             Some(ResidentKeyRequirement::Required)
@@ -227,6 +227,7 @@ impl FromInnerModel<PublicKeyCredentialCreationOptionsJSON, MakeCredentialReques
             challenge: inner.challenge.to_vec(),
             origin: rpid.to_string(),
             cross_origin: None,
+            top_origin: None,
         };
 
         Ok(Self {
@@ -262,6 +263,9 @@ impl WebAuthnIDL<MakeCredentialRequestParsingError> for MakeCredentialRequest {
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct MakeCredentialPrfInput {
+    /// The `eval` field is parsed but not used during credential creation.
+    /// PRF evaluation only occurs during assertion (getAssertion), not registration.
+    /// We parse it here to accept valid WebAuthn JSON input without errors.
     #[serde(rename = "eval")]
     pub _eval: Option<JsonValue>,
 }
@@ -498,6 +502,7 @@ mod tests {
                     .unwrap(),
                 origin: "example.org".to_string(),
                 cross_origin: None,
+                top_origin: None,
             }
             .hash(),
             relying_party: Ctap2PublicKeyCredentialRpEntity::new("example.org", "example.org"),

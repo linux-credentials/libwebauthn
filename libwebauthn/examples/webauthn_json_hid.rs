@@ -76,7 +76,6 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         let mut channel = device.channel().await?;
         channel.wink(TIMEOUT).await?;
 
-        // Relying
         let rpid = RelyingPartyId("example.org".to_owned());
         let request_json = r#"
                 {
