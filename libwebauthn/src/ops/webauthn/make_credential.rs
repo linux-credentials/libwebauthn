@@ -273,20 +273,18 @@ pub struct MakeCredentialPrfOutput {
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct CredentialProtectionExtension {
-    #[serde(rename = "credentialProtectionPolicy")]
     pub policy: CredentialProtectionPolicy,
-    #[serde(rename = "enforceCredentialProtectionPolicy")]
     pub enforce_policy: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub enum CredentialProtectionPolicy {
-    #[serde(rename = "userVerificationOptional")]
     UserVerificationOptional = 1,
     #[serde(rename = "userVerificationOptionalWithCredentialIDList")]
     UserVerificationOptionalWithCredentialIDList = 2,
-    #[serde(rename = "userVerificationRequired")]
     UserVerificationRequired = 3,
 }
 
@@ -352,20 +350,14 @@ pub struct MakeCredentialLargeBlobExtensionOutput {
 }
 
 #[derive(Debug, Default, Clone, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct MakeCredentialsRequestExtensions {
-    #[serde(rename = "credProps")]
     pub cred_props: Option<bool>,
-    #[serde(rename = "credProtect")]
     pub cred_protect: Option<CredentialProtectionExtension>,
-    #[serde(rename = "credBlob")]
     pub cred_blob: Option<Base64UrlString>,
-    #[serde(rename = "largeBlob")]
     pub large_blob: Option<MakeCredentialLargeBlobExtensionInput>,
-    #[serde(rename = "minPinLength")]
     pub min_pin_length: Option<bool>,
-    #[serde(rename = "hmacCreateSecret")]
     pub hmac_create_secret: Option<bool>,
-    #[serde(rename = "prf")]
     pub prf: Option<MakeCredentialPrfInput>,
 }
 
