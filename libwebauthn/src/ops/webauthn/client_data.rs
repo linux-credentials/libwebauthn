@@ -17,7 +17,7 @@ pub struct ClientData {
 
 impl ClientData {
     /// Returns the canonical JSON representation of the client data.
-    pub fn to_json_bytes(&self) -> Vec<u8> {
+    pub fn to_json(&self) -> String {
         let op_str = match &self.operation {
             Operation::MakeCredential => "webauthn.create",
             Operation::GetAssertion => "webauthn.get",
@@ -29,13 +29,13 @@ impl ClientData {
         } else {
             "false"
         };
-        format!("{{\"type\":\"{op_str}\",\"challenge\":\"{challenge_str}\",\"origin\":\"{origin_str}\",\"crossOrigin\":{cross_origin_str}}}").into_bytes()
+        format!("{{\"type\":\"{op_str}\",\"challenge\":\"{challenge_str}\",\"origin\":\"{origin_str}\",\"crossOrigin\":{cross_origin_str}}}")
     }
 
     pub fn hash(&self) -> Vec<u8> {
-        let json_bytes = self.to_json_bytes();
+        let json = self.to_json();
         let mut hasher = Sha256::new();
-        hasher.update(&json_bytes);
+        hasher.update(json.as_bytes());
         hasher.finalize().to_vec()
     }
 }

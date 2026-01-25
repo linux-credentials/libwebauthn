@@ -114,7 +114,7 @@ impl WebAuthnIDLResponse for MakeCredentialResponse {
             id,
             raw_id,
             response: AuthenticatorAttestationResponseJSON {
-                client_data_json: Base64UrlString::from(request.client_data_json()),
+                client_data_json: Base64UrlString::from(request.client_data_json().into_bytes()),
                 authenticator_data: Base64UrlString::from(authenticator_data_bytes),
                 transports,
                 public_key,
@@ -355,9 +355,9 @@ impl MakeCredentialRequest {
         self.client_data().hash()
     }
 
-    /// Returns the client data JSON bytes for response serialization.
-    pub fn client_data_json(&self) -> Vec<u8> {
-        self.client_data().to_json_bytes()
+    /// Returns the canonical JSON representation of the client data.
+    pub fn client_data_json(&self) -> String {
+        self.client_data().to_json()
     }
 }
 

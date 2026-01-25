@@ -68,8 +68,9 @@ impl GetAssertionRequest {
         self.client_data().hash()
     }
 
-    pub fn client_data_json(&self) -> Vec<u8> {
-        self.client_data().to_json_bytes()
+    /// Returns the canonical JSON representation of the client data.
+    pub fn client_data_json(&self) -> String {
+        self.client_data().to_json()
     }
 }
 
@@ -436,7 +437,7 @@ impl WebAuthnIDLResponse for Assertion {
             id,
             raw_id,
             response: AuthenticatorAssertionResponseJSON {
-                client_data_json: Base64UrlString::from(request.client_data_json()),
+                client_data_json: Base64UrlString::from(request.client_data_json().into_bytes()),
                 authenticator_data: Base64UrlString::from(authenticator_data_bytes),
                 signature: Base64UrlString::from(self.signature.clone()),
                 user_handle,
