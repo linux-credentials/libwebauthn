@@ -2,11 +2,20 @@ use std::time::Duration;
 
 use ctap_types::ctap2::credential_management::CredentialProtectionPolicy as Ctap2CredentialProtectionPolicy;
 use serde::{Deserialize, Serialize};
+use serde_json::{self, Value as JsonValue};
 use sha2::{Digest, Sha256};
 use tracing::{debug, instrument, trace};
 
 use crate::{
     fido::AuthenticatorData,
+    ops::webauthn::{
+        client_data::ClientData,
+        idl::{
+            create::PublicKeyCredentialCreationOptionsJSON, Base64UrlString, FromInnerModel,
+            JsonError, WebAuthnIDL,
+        },
+        Operation, RelyingPartyId,
+    },
     proto::{
         ctap1::{Ctap1RegisteredKey, Ctap1Version},
         ctap2::{
@@ -18,6 +27,7 @@ use crate::{
     },
 };
 
+use super::timeout::DEFAULT_TIMEOUT;
 use super::{DowngradableRequest, RegisterRequest, UserVerificationRequirement};
 
 #[derive(Debug, Clone)]
@@ -62,22 +72,18 @@ impl MakeCredentialsResponseUnsignedExtensions {
         let mut hmac_create_secret = None;
         let mut prf = None;
         if let Some(signed_extensions) = signed_extensions {
-            (hmac_create_secret, prf) = if let Some(incoming_ext) = &request.extensions {
-                match &incoming_ext.hmac_or_prf {
-                    MakeCredentialHmacOrPrfInput::None => (None, None),
-                    MakeCredentialHmacOrPrfInput::HmacGetSecret => {
-                        (signed_extensions.hmac_secret, None)
-                    }
-                    MakeCredentialHmacOrPrfInput::Prf => (
-                        None,
-                        Some(MakeCredentialPrfOutput {
-                            enabled: signed_extensions.hmac_secret,
-                        }),
-                    ),
+            if let Some(incoming_ext) = &request.extensions {
+                // hmacCreateSecret and prf can both be requested and returned independently.
+                // Both map to the same underlying CTAP2 hmac-secret extension.
+                if incoming_ext.hmac_create_secret.is_some() {
+                    hmac_create_secret = signed_extensions.hmac_secret;
                 }
-            } else {
-                (None, None)
-            };
+                if incoming_ext.prf.is_some() {
+                    prf = Some(MakeCredentialPrfOutput {
+                        enabled: signed_extensions.hmac_secret,
+                    });
+                }
+            }
         }
 
         // credProps extension
@@ -126,7 +132,12 @@ impl MakeCredentialsResponseUnsignedExtensions {
 
         // largeBlob extension
         // https://www.w3.org/TR/webauthn-3/#sctn-large-blob-extension
-        let large_blob = match &request.extensions.as_ref().map(|x| &x.large_blob) {
+        let large_blob = match &request
+            .extensions
+            .as_ref()
+            .and_then(|x| x.large_blob.as_ref())
+            .map(|x| x.support)
+        {
             None | Some(MakeCredentialLargeBlobExtension::None) => None, // Not requested, so we don't give an answer
             Some(MakeCredentialLargeBlobExtension::Preferred)
             | Some(MakeCredentialLargeBlobExtension::Required) => {
@@ -149,14 +160,16 @@ impl MakeCredentialsResponseUnsignedExtensions {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub enum ResidentKeyRequirement {
     Required,
     Preferred,
+    #[serde(other)]
     Discouraged,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MakeCredentialRequest {
     pub hash: Vec<u8>,
     pub origin: String,
@@ -175,22 +188,85 @@ pub struct MakeCredentialRequest {
     pub timeout: Duration,
 }
 
-#[derive(Debug, Default, Clone)]
-pub enum MakeCredentialHmacOrPrfInput {
-    #[default]
-    None,
-    HmacGetSecret,
-    Prf,
-    // The spec tells us that in theory, we could hand in
-    // an `eval` here, IF the CTAP2 would get an additional
-    // extension to handle that. There is no such CTAP-extension
-    // right now, so we don't expose it for now, as it would just
-    // be ignored anyways.
-    // https://w3c.github.io/webauthn/#prf
-    // "If eval is present and a future extension to [FIDO-CTAP] permits evaluation of the PRF at creation time, configure hmac-secret inputs accordingly: .."
-    // Prf {
-    //     eval: Option<PRFValue>,
-    // },
+impl FromInnerModel<PublicKeyCredentialCreationOptionsJSON, MakeCredentialRequestParsingError>
+    for MakeCredentialRequest
+{
+    fn from_inner_model(
+        rpid: &RelyingPartyId,
+        inner: PublicKeyCredentialCreationOptionsJSON,
+    ) -> Result<Self, MakeCredentialRequestParsingError> {
+        let resident_key = if inner
+            .authenticator_selection
+            .as_ref()
+            .map(|s| s.require_resident_key)
+            == Some(true)
+        {
+            Some(ResidentKeyRequirement::Required)
+        } else {
+            inner
+                .authenticator_selection
+                .as_ref()
+                .and_then(|s| s.resident_key)
+        };
+
+        let user_verification = inner
+            .authenticator_selection
+            .as_ref()
+            .map_or(UserVerificationRequirement::Discouraged, |s| {
+                s.user_verification
+            });
+
+        let timeout: Duration = inner
+            .timeout
+            .map(|s| Duration::from_millis(s.into()))
+            .unwrap_or(DEFAULT_TIMEOUT);
+
+        let client_data_json = ClientData {
+            operation: Operation::MakeCredential,
+            challenge: inner.challenge.to_vec(),
+            origin: rpid.to_string(),
+            cross_origin: None,
+            top_origin: None,
+        };
+
+        Ok(Self {
+            hash: client_data_json.hash(),
+            origin: rpid.to_owned().into(),
+            relying_party: inner.rp,
+            user: inner.user.into(),
+            resident_key,
+            user_verification,
+            algorithms: inner.params,
+            exclude: if inner.exclude_credentials.is_empty() {
+                None
+            } else {
+                Some(inner.exclude_credentials)
+            },
+            extensions: inner.extensions,
+            timeout: timeout,
+        })
+    }
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum MakeCredentialRequestParsingError {
+    /// The client must throw an "EncodingError" DOMException.
+    #[error("Invalid JSON format: {0}")]
+    EncodingError(#[from] JsonError),
+}
+
+impl WebAuthnIDL<MakeCredentialRequestParsingError> for MakeCredentialRequest {
+    type Error = MakeCredentialRequestParsingError;
+    type InnerModel = PublicKeyCredentialCreationOptionsJSON;
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct MakeCredentialPrfInput {
+    /// The `eval` field is parsed but not used during credential creation.
+    /// PRF evaluation only occurs during assertion (getAssertion), not registration.
+    /// We parse it here to accept valid WebAuthn JSON input without errors.
+    #[serde(rename = "eval")]
+    pub _eval: Option<JsonValue>,
 }
 
 #[derive(Debug, Default, Clone, Serialize, PartialEq)]
@@ -199,19 +275,19 @@ pub struct MakeCredentialPrfOutput {
     pub enabled: Option<bool>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct CredentialProtectionExtension {
     pub policy: CredentialProtectionPolicy,
     pub enforce_policy: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub enum CredentialProtectionPolicy {
-    #[serde(rename = "userVerificationOptional")]
     UserVerificationOptional = 1,
     #[serde(rename = "userVerificationOptionalWithCredentialIDList")]
     UserVerificationOptionalWithCredentialIDList = 2,
-    #[serde(rename = "userVerificationRequired")]
     UserVerificationRequired = 3,
 }
 
@@ -254,13 +330,19 @@ pub struct CredentialPropsExtension {
     pub rk: Option<bool>,
 }
 
-#[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Deserialize, PartialEq)]
+pub struct MakeCredentialLargeBlobExtensionInput {
+    pub support: MakeCredentialLargeBlobExtension,
+}
+
+#[derive(Debug, Default, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum MakeCredentialLargeBlobExtension {
-    #[default]
-    None,
     Preferred,
     Required,
+    #[default]
+    #[serde(other)]
+    None,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize)]
@@ -269,14 +351,16 @@ pub struct MakeCredentialLargeBlobExtensionOutput {
     pub supported: Option<bool>,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct MakeCredentialsRequestExtensions {
     pub cred_props: Option<bool>,
     pub cred_protect: Option<CredentialProtectionExtension>,
-    pub cred_blob: Option<Vec<u8>>,
-    pub large_blob: MakeCredentialLargeBlobExtension,
+    pub cred_blob: Option<Base64UrlString>,
+    pub large_blob: Option<MakeCredentialLargeBlobExtensionInput>,
     pub min_pin_length: Option<bool>,
-    pub hmac_or_prf: MakeCredentialHmacOrPrfInput,
+    pub hmac_create_secret: Option<bool>,
+    pub prf: Option<MakeCredentialPrfInput>,
 }
 
 pub type MakeCredentialsResponseExtensions = Ctap2MakeCredentialsResponseExtensions;
@@ -365,5 +449,181 @@ impl DowngradableRequest<RegisterRequest> for MakeCredentialRequest {
         };
         trace!(?downgraded);
         Ok(downgraded)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use crate::ops::webauthn::MakeCredentialRequest;
+    use crate::ops::webauthn::RelyingPartyId;
+    use crate::proto::ctap2::Ctap2PublicKeyCredentialType;
+
+    use super::*;
+
+    pub const REQUEST_BASE_JSON: &str = r#"
+    {
+        "rp": {
+            "id": "example.org",
+            "name": "example.org"
+        },
+        "user": {
+            "id": "dXNlcmlk",
+            "name": "mario.rossi",
+            "displayName": "Mario Rossi"
+        },
+        "challenge": "Y3JlZGVudGlhbHMtZm9yLWxpbnV4L2xpYndlYmF1dGhu",
+        "pubKeyCredParams": [
+            {
+                "type": "public-key",
+                "alg": -7
+            }
+        ],
+        "timeout": 30000,
+        "excludeCredentials": [],
+        "authenticatorSelection": {
+            "residentKey": "discouraged",
+            "userVerification": "preferred"
+        },
+        "attestation": "none",
+        "attestationFormats": ["packed", "fido-u2f"]
+    }
+    "#;
+
+    fn request_base() -> MakeCredentialRequest {
+        MakeCredentialRequest {
+            origin: "example.org".to_string(),
+            hash: ClientData {
+                operation: Operation::MakeCredential,
+                challenge: base64_url::decode("Y3JlZGVudGlhbHMtZm9yLWxpbnV4L2xpYndlYmF1dGhu")
+                    .unwrap(),
+                origin: "example.org".to_string(),
+                cross_origin: None,
+                top_origin: None,
+            }
+            .hash(),
+            relying_party: Ctap2PublicKeyCredentialRpEntity::new("example.org", "example.org"),
+            user: Ctap2PublicKeyCredentialUserEntity::new(b"userid", "mario.rossi", "Mario Rossi"),
+            resident_key: Some(ResidentKeyRequirement::Discouraged),
+            user_verification: UserVerificationRequirement::Preferred,
+            algorithms: vec![Ctap2CredentialType::default()],
+            exclude: None,
+            extensions: None,
+            timeout: Duration::from_secs(30),
+        }
+    }
+
+    fn json_field_add(str: &str, field: &str, value: &str) -> String {
+        let mut v: serde_json::Value = serde_json::from_str(str).unwrap();
+        v.as_object_mut()
+            .unwrap()
+            .insert(field.to_owned(), serde_json::from_str(value).unwrap());
+        serde_json::to_string(&v).unwrap()
+    }
+
+    fn json_field_rm(str: &str, field: &str) -> String {
+        let mut v: serde_json::Value = serde_json::from_str(str).unwrap();
+        v.as_object_mut().unwrap().remove(field);
+        serde_json::to_string(&v).unwrap()
+    }
+
+    fn test_request_from_json_required_field(field: &str) {
+        let rpid = RelyingPartyId::try_from("example.org").unwrap();
+        let req_json = json_field_rm(REQUEST_BASE_JSON, field);
+
+        let result = MakeCredentialRequest::from_json(&rpid, &req_json);
+        assert!(matches!(
+            result,
+            Err(MakeCredentialRequestParsingError::EncodingError(_))
+        ));
+    }
+
+    #[test]
+    fn test_request_from_json_base() {
+        let rpid = RelyingPartyId::try_from("example.org").unwrap();
+        let req: MakeCredentialRequest =
+            MakeCredentialRequest::from_json(&rpid, REQUEST_BASE_JSON).unwrap();
+        assert_eq!(req, request_base());
+    }
+
+    #[test]
+    fn test_request_from_json_require_rp() {
+        test_request_from_json_required_field("rp");
+    }
+
+    #[test]
+    fn test_request_from_json_require_user() {
+        test_request_from_json_required_field("user");
+    }
+
+    #[test]
+    fn test_request_from_json_require_pub_key_cred_params() {
+        test_request_from_json_required_field("pubKeyCredParams");
+    }
+
+    #[test]
+    fn test_request_from_json_require_challenge() {
+        test_request_from_json_required_field("challenge");
+    }
+
+    #[test]
+    #[ignore] // FIXME(#134): Add validation for challenges
+    fn test_request_from_json_challenge_empty() {
+        let rpid = RelyingPartyId::try_from("example.org").unwrap();
+        let req_json: String = json_field_rm(REQUEST_BASE_JSON, "challenge");
+        let req_json = json_field_add(&req_json, "challenge", r#""""#);
+
+        let result = MakeCredentialRequest::from_json(&rpid, &req_json);
+        assert!(matches!(
+            result,
+            Err(MakeCredentialRequestParsingError::EncodingError(_))
+        ));
+    }
+
+    #[test]
+    fn test_request_from_json_prf_extension() {
+        let rpid = RelyingPartyId::try_from("example.org").unwrap();
+        let req_json = json_field_add(
+            REQUEST_BASE_JSON,
+            "extensions",
+            r#"{"prf": {"eval": {"first": "second"}}}"#,
+        );
+
+        let req: MakeCredentialRequest =
+            MakeCredentialRequest::from_json(&rpid, &req_json).unwrap();
+        assert!(matches!(
+            req.extensions,
+            Some(MakeCredentialsRequestExtensions { prf: Some(_), .. })
+        ));
+    }
+
+    #[test]
+    fn test_request_from_json_unknown_pub_key_cred_params() {
+        let rpid = RelyingPartyId::try_from("example.org").unwrap();
+        let req_json = json_field_add(
+            REQUEST_BASE_JSON,
+            "pubKeyCredParams",
+            r#"[{"type": "something", "alg": -12345}]"#,
+        );
+        let req: MakeCredentialRequest =
+            MakeCredentialRequest::from_json(&rpid, &req_json).unwrap();
+        assert_eq!(
+            req.algorithms,
+            vec![Ctap2CredentialType {
+                algorithm: Ctap2COSEAlgorithmIdentifier::Unknown, // FIXME(#148): Passhtrough unknown algorithms
+                public_key_type: Ctap2PublicKeyCredentialType::Unknown,
+            }]
+        );
+    }
+
+    #[test]
+    fn test_request_from_json_default_timeout() {
+        let rpid = RelyingPartyId::try_from("example.org").unwrap();
+        let req_json = json_field_rm(REQUEST_BASE_JSON, "timeout");
+
+        let req: MakeCredentialRequest =
+            MakeCredentialRequest::from_json(&rpid, &req_json).unwrap();
+        assert_eq!(req.timeout, DEFAULT_TIMEOUT);
     }
 }

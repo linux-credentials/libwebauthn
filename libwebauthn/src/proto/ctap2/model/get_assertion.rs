@@ -152,18 +152,19 @@ impl Ctap2GetAssertionRequest {
     ) -> Result<Self, Error> {
         // Cloning it, so we can modify it
         let mut req = req.clone();
-        if let Some(ext) = req.extensions.as_mut() {
-            // LargeBlob (NOTE: Not to be confused with LargeBlobKey)
-            // https://w3c.github.io/webauthn/#sctn-large-blob-extension
-            // If read is present and has the value true:
-            // [..]
-            // 3. If successful, set blob to the result.
-            //
-            // So we silently drop the extension if the device does not support it.
-            if !info.option_enabled("largeBlobs") {
-                ext.large_blob = GetAssertionLargeBlobExtension::None;
+        // LargeBlob (NOTE: Not to be confused with LargeBlobKey)
+        // https://w3c.github.io/webauthn/#sctn-large-blob-extension
+        // If read is present and has the value true:
+        // [..]
+        // 3. If successful, set blob to the result.
+        //
+        // So we silently drop the extension if the device does not support it.
+        if !info.option_enabled("largeBlobs") {
+            if let Some(ref mut ext) = req.extensions {
+                ext.large_blob = None;
             }
         }
+
         Ok(Ctap2GetAssertionRequest::from(req))
     }
 }
@@ -174,7 +175,7 @@ impl From<GetAssertionRequest> for Ctap2GetAssertionRequest {
             relying_party_id: op.relying_party_id,
             client_data_hash: ByteBuf::from(op.hash),
             allow: op.allow,
-            extensions: op.extensions.map(|x| x.into()),
+            extensions: op.extensions.map(|ext| ext.into()),
             options: Some(Ctap2GetAssertionOptions {
                 require_user_presence: true,
                 require_user_verification: op.user_verification.is_required(),
@@ -185,11 +186,11 @@ impl From<GetAssertionRequest> for Ctap2GetAssertionRequest {
     }
 }
 
-#[derive(Debug, Default, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Ctap2GetAssertionRequestExtensions {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cred_blob: Option<bool>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub cred_blob: bool,
     // Thanks, FIDO-spec for this consistent naming scheme...
     #[serde(rename = "hmac-secret", skip_serializing_if = "Option::is_none")]
     pub hmac_secret: Option<CalculatedHMACGetSecretInput>,
@@ -197,16 +198,16 @@ pub struct Ctap2GetAssertionRequestExtensions {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub large_blob_key: Option<bool>,
     #[serde(skip)]
-    pub hmac_or_prf: GetAssertionHmacOrPrfInput,
+    pub hmac_or_prf: Option<GetAssertionHmacOrPrfInput>,
 }
 
 impl From<GetAssertionRequestExtensions> for Ctap2GetAssertionRequestExtensions {
     fn from(other: GetAssertionRequestExtensions) -> Self {
         Ctap2GetAssertionRequestExtensions {
             cred_blob: other.cred_blob,
-            hmac_secret: None, // Get's calculated later
+            hmac_secret: None, // Gets calculated later
             hmac_or_prf: other.hmac_or_prf,
-            large_blob_key: if other.large_blob == GetAssertionLargeBlobExtension::Read {
+            large_blob_key: if other.large_blob == Some(GetAssertionLargeBlobExtension::Read) {
                 Some(true)
             } else {
                 None
@@ -217,7 +218,10 @@ impl From<GetAssertionRequestExtensions> for Ctap2GetAssertionRequestExtensions 
 
 impl Ctap2GetAssertionRequestExtensions {
     pub fn skip_serializing(&self) -> bool {
-        self.cred_blob.is_none() && self.hmac_secret.is_none()
+        !self.cred_blob
+            && self.hmac_secret.is_none()
+            && self.large_blob_key.is_none()
+            && self.hmac_or_prf.is_none()
     }
 
     pub fn calculate_hmac(
@@ -226,14 +230,13 @@ impl Ctap2GetAssertionRequestExtensions {
         auth_data: &AuthTokenData,
     ) -> Result<(), Error> {
         let input = match &self.hmac_or_prf {
-            GetAssertionHmacOrPrfInput::None => None,
-            GetAssertionHmacOrPrfInput::HmacGetSecret(hmacget_secret_input) => {
-                Some(hmacget_secret_input.clone())
+            None => None,
+            Some(GetAssertionHmacOrPrfInput::HmacGetSecret(hmac_get_secret_input)) => {
+                Some(hmac_get_secret_input.clone())
             }
-            GetAssertionHmacOrPrfInput::Prf {
-                eval,
-                eval_by_credential,
-            } => Self::prf_to_hmac_input(eval, eval_by_credential, allow_list)?,
+            Some(GetAssertionHmacOrPrfInput::Prf(prf_input)) => {
+                Self::prf_to_hmac_input(&prf_input.eval, &prf_input.eval_by_credential, allow_list)?
+            }
         };
 
         let input = match input {
@@ -451,7 +454,7 @@ impl Ctap2UserVerifiableRequest for Ctap2GetAssertionRequest {
         let hmac_requested = self
             .extensions
             .as_ref()
-            .map(|e| !matches!(e.hmac_or_prf, GetAssertionHmacOrPrfInput::None))
+            .map(|e| e.hmac_or_prf.is_some())
             .unwrap_or_default();
         hmac_requested && hmac_supported
     }
@@ -506,44 +509,37 @@ impl Ctap2GetAssertionResponseExtensions {
         response: &Ctap2GetAssertionResponse,
         auth_data: Option<&AuthTokenData>,
     ) -> GetAssertionResponseUnsignedExtensions {
-        let (hmac_get_secret, prf) = if let Some(orig_ext) = &request.extensions {
-            // Decrypt the raw HMAC extension
-            let decrypted_hmac = self.hmac_secret.as_ref().and_then(|x| {
-                if let Some(auth_data) = auth_data {
-                    let uv_proto = auth_data.protocol_version.create_protocol_object();
-                    x.decrypt_output(&auth_data.shared_secret, &uv_proto)
-                } else {
-                    None
-                }
-            });
-            if let Some(decrypted) = decrypted_hmac {
-                // Repackaging it into output
-                match &orig_ext.hmac_or_prf {
-                    GetAssertionHmacOrPrfInput::None => (None, None),
-                    GetAssertionHmacOrPrfInput::HmacGetSecret(..) => (Some(decrypted), None),
-                    GetAssertionHmacOrPrfInput::Prf { .. } => (
-                        None,
-                        Some(GetAssertionPrfOutput {
-                            results: Some(PRFValue {
-                                first: decrypted.output1,
-                                second: decrypted.output2,
-                            }),
-                        }),
-                    ),
-                }
+        let decrypted_hmac = self.hmac_secret.as_ref().and_then(|x| {
+            if let Some(auth_data) = auth_data {
+                let uv_proto = auth_data.protocol_version.create_protocol_object();
+                x.decrypt_output(&auth_data.shared_secret, &uv_proto)
             } else {
-                (None, None)
+                None
+            }
+        });
+
+        let (hmac_get_secret, prf) = if let Some(decrypted) = decrypted_hmac {
+            match request.extensions.as_ref().and_then(|ext| ext.hmac_or_prf.as_ref()) {
+                None => (None, None),
+                Some(GetAssertionHmacOrPrfInput::HmacGetSecret(..)) => (Some(decrypted), None),
+                Some(GetAssertionHmacOrPrfInput::Prf(..)) => (
+                    None,
+                    Some(GetAssertionPrfOutput {
+                        results: Some(PRFValue {
+                            first: decrypted.output1,
+                            second: decrypted.output2,
+                        }),
+                    }),
+                ),
             }
         } else {
             (None, None)
         };
 
         // LargeBlobs was requested
-        let large_blob = request
-            .extensions
-            .as_ref()
-            .filter(|x| x.large_blob != GetAssertionLargeBlobExtension::None)
-            .map(|_| {
+        let large_blob = match request.extensions.as_ref().and_then(|ext| ext.large_blob.as_ref()) {
+            None => None,
+            Some(GetAssertionLargeBlobExtension::Read) => {
                 Some(GetAssertionLargeBlobExtensionOutput {
                     blob: response
                         .large_blob_key
@@ -552,8 +548,8 @@ impl Ctap2GetAssertionResponseExtensions {
                     // Not yet supported
                     // written: None,
                 })
-            })
-            .unwrap_or_default();
+            }
+        };
 
         GetAssertionResponseUnsignedExtensions {
             hmac_get_secret,

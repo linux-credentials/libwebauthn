@@ -3,8 +3,8 @@ use std::time::Duration;
 
 use crate::ops::webauthn::{
     GetAssertionHmacOrPrfInput, GetAssertionRequest, GetAssertionRequestExtensions,
-    MakeCredentialHmacOrPrfInput, MakeCredentialPrfOutput, MakeCredentialsRequestExtensions,
-    PRFValue,
+    MakeCredentialPrfInput, MakeCredentialPrfOutput, MakeCredentialsRequestExtensions, PRFValue,
+    PrfInput,
 };
 use crate::pin::PinManagement;
 use crate::proto::ctap2::{Ctap2PinUvAuthProtocol, Ctap2PublicKeyCredentialDescriptor};
@@ -101,7 +101,7 @@ async fn run_test_battery(channel: &mut HidChannel<'_>, using_pin: bool) {
     let challenge: [u8; 32] = thread_rng().gen();
 
     let extensions = MakeCredentialsRequestExtensions {
-        hmac_or_prf: MakeCredentialHmacOrPrfInput::Prf,
+        prf: Some(MakeCredentialPrfInput { _eval: None }),
         ..Default::default()
     };
 
@@ -192,10 +192,10 @@ async fn run_test_battery(channel: &mut HidChannel<'_>, using_pin: bool) {
             second: None,
         },
     );
-    let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf {
+    let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf(PrfInput {
         eval,
         eval_by_credential,
-    };
+    });
     run_success_test(
         channel,
         &credential,
@@ -221,10 +221,10 @@ async fn run_test_battery(channel: &mut HidChannel<'_>, using_pin: bool) {
             second: None,
         },
     );
-    let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf {
+    let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf(PrfInput {
         eval,
         eval_by_credential,
-    };
+    });
     run_success_test(
         channel,
         &credential,
@@ -243,10 +243,10 @@ async fn run_test_battery(channel: &mut HidChannel<'_>, using_pin: bool) {
     });
 
     let eval_by_credential = HashMap::new();
-    let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf {
+    let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf(PrfInput {
         eval,
         eval_by_credential,
-    };
+    });
     run_success_test(
         channel,
         &credential,
@@ -293,10 +293,10 @@ async fn run_test_battery(channel: &mut HidChannel<'_>, using_pin: bool) {
             second: Some([7; 32]),
         },
     );
-    let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf {
+    let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf(PrfInput {
         eval,
         eval_by_credential,
-    };
+    });
     run_success_test(
         channel,
         &credential,
@@ -336,10 +336,10 @@ async fn run_test_battery(channel: &mut HidChannel<'_>, using_pin: bool) {
             second: Some([8; 32]),
         },
     );
-    let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf {
+    let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf(PrfInput {
         eval,
         eval_by_credential,
-    };
+    });
     run_success_test(
         channel,
         &credential,
@@ -376,10 +376,10 @@ async fn run_test_battery(channel: &mut HidChannel<'_>, using_pin: bool) {
             second: Some([8; 32]),
         },
     );
-    let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf {
+    let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf(PrfInput {
         eval,
         eval_by_credential,
-    };
+    });
     run_success_test(
         channel,
         &credential,
@@ -405,10 +405,10 @@ async fn run_test_battery(channel: &mut HidChannel<'_>, using_pin: bool) {
             second: None,
         },
     );
-    let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf {
+    let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf(PrfInput {
         eval,
         eval_by_credential,
-    };
+    });
     run_failed_test(
         channel,
         Some(&credential),
@@ -429,10 +429,10 @@ async fn run_test_battery(channel: &mut HidChannel<'_>, using_pin: bool) {
             second: None,
         },
     );
-    let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf {
+    let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf(PrfInput {
         eval,
         eval_by_credential,
-    };
+    });
     run_failed_test(
         channel,
         Some(&credential),
@@ -453,10 +453,10 @@ async fn run_test_battery(channel: &mut HidChannel<'_>, using_pin: bool) {
             second: None,
         },
     );
-    let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf {
+    let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf(PrfInput {
         eval,
         eval_by_credential,
-    };
+    });
     run_failed_test(
         channel,
         None,
@@ -487,7 +487,7 @@ async fn run_success_test(
         allow: vec![credential.clone()],
         user_verification: UserVerificationRequirement::Preferred,
         extensions: Some(GetAssertionRequestExtensions {
-            hmac_or_prf,
+            hmac_or_prf: Some(hmac_or_prf),
             ..Default::default()
         }),
         timeout: TIMEOUT,
@@ -552,7 +552,7 @@ async fn run_failed_test(
         allow: credential.map(|x| vec![x.clone()]).unwrap_or_default(),
         user_verification: UserVerificationRequirement::Discouraged,
         extensions: Some(GetAssertionRequestExtensions {
-            hmac_or_prf,
+            hmac_or_prf: Some(hmac_or_prf),
             ..Default::default()
         }),
         timeout: TIMEOUT,

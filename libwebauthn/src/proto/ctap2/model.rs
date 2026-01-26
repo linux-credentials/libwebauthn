@@ -1,5 +1,5 @@
-use crate::pin::PinUvAuthProtocol;
 use crate::proto::ctap1::Ctap1Transport;
+use crate::{ops::webauthn::idl::create::PublicKeyCredentialUserEntity, pin::PinUvAuthProtocol};
 
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use serde_bytes::ByteBuf;
@@ -116,6 +116,16 @@ impl Ctap2PublicKeyCredentialUserEntity {
     }
 }
 
+impl From<PublicKeyCredentialUserEntity> for Ctap2PublicKeyCredentialUserEntity {
+    fn from(user: PublicKeyCredentialUserEntity) -> Self {
+        Self {
+            id: ByteBuf::from(user.id),
+            name: Some(user.name),
+            display_name: Some(user.display_name),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum Ctap2PublicKeyCredentialType {
     #[serde(rename = "public-key")]
@@ -146,7 +156,7 @@ impl From<&Ctap1Transport> for Ctap2Transport {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Ctap2PublicKeyCredentialDescriptor {
     pub id: ByteBuf,
     pub r#type: Ctap2PublicKeyCredentialType,

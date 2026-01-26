@@ -1,24 +1,16 @@
-use std::convert::TryInto;
 use std::error::Error;
 use std::io::{self, Write};
 use std::time::Duration;
 
 use libwebauthn::UvUpdate;
-use rand::{thread_rng, Rng};
 use text_io::read;
 use tokio::sync::broadcast::Receiver;
 use tracing_subscriber::{self, EnvFilter};
 
 use libwebauthn::ops::webauthn::{
-    CredentialProtectionExtension, CredentialProtectionPolicy, GetAssertionHmacOrPrfInput,
-    GetAssertionRequest, GetAssertionRequestExtensions, HMACGetSecretInput, MakeCredentialRequest,
-    MakeCredentialsRequestExtensions, ResidentKeyRequirement, UserVerificationRequirement,
+    GetAssertionRequest, MakeCredentialRequest, RelyingPartyId, WebAuthnIDL as _,
 };
 use libwebauthn::pin::PinRequestReason;
-use libwebauthn::proto::ctap2::{
-    Ctap2CredentialType, Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialRpEntity,
-    Ctap2PublicKeyCredentialUserEntity,
-};
 use libwebauthn::transport::hid::list_devices;
 use libwebauthn::transport::{Channel as _, Device};
 use libwebauthn::webauthn::{Error as WebAuthnError, WebAuthn};
@@ -79,43 +71,46 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
     let devices = list_devices().await.unwrap();
     println!("Devices found: {:?}", devices);
 
-    let user_id: [u8; 32] = thread_rng().gen();
-    let challenge: [u8; 32] = thread_rng().gen();
-
-    let extensions = MakeCredentialsRequestExtensions {
-        cred_protect: Some(CredentialProtectionExtension {
-            policy: CredentialProtectionPolicy::UserVerificationRequired,
-            enforce_policy: true,
-        }),
-        cred_blob: Some("My own little blob".as_bytes().into()),
-        large_blob: None,
-        min_pin_length: Some(true),
-        hmac_create_secret: Some(true),
-        prf: None,
-        cred_props: Some(true),
-    };
-
     for mut device in devices {
         println!("Selected HID authenticator: {}", &device);
         let mut channel = device.channel().await?;
         channel.wink(TIMEOUT).await?;
 
+        let rpid = RelyingPartyId("example.org".to_owned());
+        let request_json = r#"
+                {
+                    "rp": {
+                        "id": "example.org",
+                        "name": "Example Relying Party"
+                    },
+                    "user": {
+                        "id": "MTIzNDU2NzgxMjM0NTY3ODEyMzQ1Njc4MTIzNDU2Nzg",
+                        "name": "Mario Rossi",
+                        "displayName": "Mario Rossi"
+                    },
+                    "challenge": "MTIzNDU2NzgxMjM0NTY3ODEyMzQ1Njc4MTIzNDU2Nzg",
+                    "pubKeyCredParams": [
+                        {"type": "public-key", "alg": -7}
+                    ],
+                    "timeout": 60000,
+                    "excludeCredentials": [],
+                    "authenticatorSelection": {
+                        "residentKey": "discouraged",
+                        "userVerification": "preferred"
+                    },
+                    "attestation": "none"
+                }
+                "#;
+        let make_credentials_request: MakeCredentialRequest =
+            MakeCredentialRequest::from_json(&rpid, request_json)
+                .expect("Failed to parse request JSON");
+        println!(
+            "WebAuthn MakeCredential request: {:?}",
+            make_credentials_request
+        );
+
         let state_recv = channel.get_ux_update_receiver();
         tokio::spawn(handle_updates(state_recv));
-
-        // Make Credentials ceremony
-        let make_credentials_request = MakeCredentialRequest {
-            origin: "example.org".to_owned(),
-            hash: Vec::from(challenge),
-            relying_party: Ctap2PublicKeyCredentialRpEntity::new("example.org", "example.org"),
-            user: Ctap2PublicKeyCredentialUserEntity::new(&user_id, "mario.rossi", "Mario Rossi"),
-            resident_key: Some(ResidentKeyRequirement::Required),
-            user_verification: UserVerificationRequirement::Preferred,
-            algorithms: vec![Ctap2CredentialType::default()],
-            exclude: None,
-            extensions: Some(extensions.clone()),
-            timeout: TIMEOUT,
-        };
 
         let response = loop {
             match channel
@@ -134,31 +129,20 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             };
         }
         .unwrap();
-        // println!("WebAuthn MakeCredential response: {:?}", response);
-        println!(
-            "WebAuthn MakeCredential extensions: {:?}",
-            response.authenticator_data.extensions
-        );
+        println!("WebAuthn MakeCredential response: {:?}", response);
 
-        let credential: Ctap2PublicKeyCredentialDescriptor =
-            (&response.authenticator_data).try_into().unwrap();
-        let get_assertion = GetAssertionRequest {
-            relying_party_id: "example.org".to_owned(),
-            hash: Vec::from(challenge),
-            allow: vec![credential],
-            user_verification: UserVerificationRequirement::Discouraged,
-            extensions: Some(GetAssertionRequestExtensions {
-                cred_blob: true,
-                hmac_or_prf: Some(GetAssertionHmacOrPrfInput::HmacGetSecret(
-                    HMACGetSecretInput {
-                        salt1: [1; 32],
-                        salt2: None,
-                    },
-                )),
-                ..Default::default()
-            }),
-            timeout: TIMEOUT,
-        };
+        let request_json = r#"
+                {
+                    "challenge": "Y3JlZGVudGlhbHMtZm9yLWxpbnV4L2xpYndlYmF1dGhu",
+                    "timeout": 30000,
+                    "rpId": "example.org",
+                    "userVerification": "discouraged"
+                }
+                "#;
+        let get_assertion: GetAssertionRequest =
+            GetAssertionRequest::from_json(&rpid, request_json)
+                .expect("Failed to parse request JSON");
+        println!("WebAuthn GetAssertion request: {:?}", get_assertion);
 
         let response = loop {
             match channel.webauthn_get_assertion(&get_assertion).await {
@@ -174,19 +158,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             };
         }
         .unwrap();
-        // println!("WebAuthn GetAssertion response: {:?}", response);
-        println!(
-            "WebAuthn GetAssertion extensions: {:?}",
-            response.assertions[0].authenticator_data.extensions
-        );
-        let blob = if let Some(ext) = &response.assertions[0].authenticator_data.extensions {
-            ext.cred_blob
-                .clone()
-                .map(|x| String::from_utf8_lossy(&x).to_string())
-        } else {
-            None
-        };
-        println!("Credential blob: {blob:?}");
+        println!("WebAuthn GetAssertion response: {:?}", response);
     }
 
     Ok(())
