@@ -433,8 +433,8 @@ mod test {
 
     use crate::{
         ops::webauthn::{
-            GetAssertionHmacOrPrfInput, GetAssertionRequest, GetAssertionRequestExtensions,
-            HMACGetSecretInput, UserVerificationRequirement,
+            GetAssertionRequest, GetAssertionRequestExtensions, PRFValue, PrfInput,
+            UserVerificationRequirement,
         },
         pin::{pin_hash, PinUvAuthProtocol, PinUvAuthProtocolOne},
         proto::{
@@ -610,12 +610,13 @@ mod test {
                 info_extensions.as_deref(),
                 UserVerificationRequirement::Discouraged,
                 Some(GetAssertionRequestExtensions {
-                    hmac_or_prf: Some(GetAssertionHmacOrPrfInput::HmacGetSecret(
-                        HMACGetSecretInput {
-                            salt1: [0; 32],
-                            salt2: None,
-                        },
-                    )),
+                    prf: Some(PrfInput {
+                        eval: Some(PRFValue {
+                            first: [0; 32],
+                            second: None,
+                        }),
+                        eval_by_credential: HashMap::new(),
+                    }),
                     ..Default::default()
                 }),
                 Ok(UsedPinUvAuthToken::None),
@@ -655,12 +656,13 @@ mod test {
                 Some(&["hmac-secret"]),
                 UserVerificationRequirement::Preferred,
                 Some(GetAssertionRequestExtensions {
-                    hmac_or_prf: Some(GetAssertionHmacOrPrfInput::HmacGetSecret(
-                        HMACGetSecretInput {
-                            salt1: [0; 32],
-                            salt2: None,
-                        },
-                    )),
+                    prf: Some(PrfInput {
+                        eval: Some(PRFValue {
+                            first: [0; 32],
+                            second: None,
+                        }),
+                        eval_by_credential: HashMap::new(),
+                    }),
                     ..Default::default()
                 }),
                 Ok(UsedPinUvAuthToken::LegacyUV),
@@ -726,12 +728,13 @@ mod test {
 
         for (info_options, uv_requirement) in testcases {
             let extensions = Some(GetAssertionRequestExtensions {
-                hmac_or_prf: Some(GetAssertionHmacOrPrfInput::HmacGetSecret(
-                    HMACGetSecretInput {
-                        salt1: [0; 32],
-                        salt2: None,
-                    },
-                )),
+                prf: Some(PrfInput {
+                    eval: Some(PRFValue {
+                        first: [0; 32],
+                        second: None,
+                    }),
+                    eval_by_credential: HashMap::new(),
+                }),
                 ..Default::default()
             });
 
@@ -795,12 +798,13 @@ mod test {
 
         for (info_options, uv_requirement) in testcases {
             let extensions = Some(GetAssertionRequestExtensions {
-                hmac_or_prf: Some(GetAssertionHmacOrPrfInput::HmacGetSecret(
-                    HMACGetSecretInput {
-                        salt1: [0; 32],
-                        salt2: None,
-                    },
-                )),
+                prf: Some(PrfInput {
+                    eval: Some(PRFValue {
+                        first: [0; 32],
+                        second: None,
+                    }),
+                    eval_by_credential: HashMap::new(),
+                }),
                 ..Default::default()
             });
 
@@ -911,12 +915,13 @@ mod test {
 
         for (info_options, uv_requirement) in testcases {
             let extensions = Some(GetAssertionRequestExtensions {
-                hmac_or_prf: Some(GetAssertionHmacOrPrfInput::HmacGetSecret(
-                    HMACGetSecretInput {
-                        salt1: [0; 32],
-                        salt2: None,
-                    },
-                )),
+                prf: Some(PrfInput {
+                    eval: Some(PRFValue {
+                        first: [0; 32],
+                        second: None,
+                    }),
+                    eval_by_credential: HashMap::new(),
+                }),
                 ..Default::default()
             });
 
