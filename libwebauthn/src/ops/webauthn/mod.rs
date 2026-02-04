@@ -3,6 +3,7 @@ mod get_assertion;
 pub mod idl;
 mod make_credential;
 mod timeout;
+pub mod related_origins;
 
 use super::u2f::{RegisterRequest, SignRequest};
 use crate::webauthn::CtapError;
