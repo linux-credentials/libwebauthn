@@ -12,9 +12,9 @@ use tokio::sync::broadcast::Receiver;
 use tracing_subscriber::{self, EnvFilter};
 
 use libwebauthn::ops::webauthn::{
-    GetAssertionHmacOrPrfInput, GetAssertionRequest, GetAssertionRequestExtensions,
-    MakeCredentialHmacOrPrfInput, MakeCredentialRequest, MakeCredentialsRequestExtensions,
-    PRFValue, ResidentKeyRequirement, UserVerificationRequirement,
+    GetAssertionRequest, GetAssertionRequestExtensions, MakeCredentialPrfInput,
+    MakeCredentialRequest, MakeCredentialsRequestExtensions, PRFValue, PrfInput,
+    ResidentKeyRequirement, UserVerificationRequirement,
 };
 use libwebauthn::pin::PinRequestReason;
 use libwebauthn::proto::ctap2::{
@@ -85,7 +85,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
     let challenge: [u8; 32] = thread_rng().gen();
 
     let extensions = MakeCredentialsRequestExtensions {
-        hmac_or_prf: MakeCredentialHmacOrPrfInput::Prf,
+        prf: Some(MakeCredentialPrfInput { _eval: None }),
         ..Default::default()
     };
 
@@ -148,7 +148,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
                 second: None,
             },
         );
-        let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf {
+        let prf = PrfInput {
             eval,
             eval_by_credential,
         };
@@ -156,7 +156,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             &mut channel,
             &credential,
             &challenge,
-            hmac_or_prf,
+            prf,
             "eval_by_credential only",
         )
         .await;
@@ -175,7 +175,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
                 second: None,
             },
         );
-        let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf {
+        let prf = PrfInput {
             eval,
             eval_by_credential,
         };
@@ -183,7 +183,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             &mut channel,
             &credential,
             &challenge,
-            hmac_or_prf,
+            prf,
             "eval and eval_by_credential",
         )
         .await;
@@ -195,7 +195,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         });
 
         let eval_by_credential = HashMap::new();
-        let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf {
+        let prf = PrfInput {
             eval,
             eval_by_credential,
         };
@@ -203,7 +203,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             &mut channel,
             &credential,
             &challenge,
-            hmac_or_prf,
+            prf,
             "eval only",
         )
         .await;
@@ -243,7 +243,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
                 second: None,
             },
         );
-        let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf {
+        let prf = PrfInput {
             eval,
             eval_by_credential,
         };
@@ -251,7 +251,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             &mut channel,
             &credential,
             &challenge,
-            hmac_or_prf,
+            prf,
             "eval and full list of eval_by_credential",
         )
         .await;
@@ -284,7 +284,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
                 second: Some([8; 32]),
             },
         );
-        let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf {
+        let prf = PrfInput {
             eval,
             eval_by_credential,
         };
@@ -292,7 +292,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             &mut channel,
             &credential,
             &challenge,
-            hmac_or_prf,
+            prf,
             "eval and non-fitting list of eval_by_credential",
         )
         .await;
@@ -322,7 +322,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
                 second: Some([8; 32]),
             },
         );
-        let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf {
+        let prf = PrfInput {
             eval,
             eval_by_credential,
         };
@@ -330,7 +330,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             &mut channel,
             &credential,
             &challenge,
-            hmac_or_prf,
+            prf,
             "No eval and non-fitting list of eval_by_credential (should have no extension output)",
         )
         .await;
@@ -349,7 +349,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
                 second: None,
             },
         );
-        let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf {
+        let prf = PrfInput {
             eval,
             eval_by_credential,
         };
@@ -357,7 +357,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             &mut channel,
             Some(&credential),
             &challenge,
-            hmac_or_prf,
+            prf,
             "Wrongly encoded credential_id",
             WebAuthnError::Platform(PlatformError::SyntaxError),
         )
@@ -373,7 +373,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
                 second: None,
             },
         );
-        let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf {
+        let prf = PrfInput {
             eval,
             eval_by_credential,
         };
@@ -381,7 +381,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             &mut channel,
             Some(&credential),
             &challenge,
-            hmac_or_prf,
+            prf,
             "Empty credential_id",
             WebAuthnError::Platform(PlatformError::SyntaxError),
         )
@@ -397,7 +397,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
                 second: None,
             },
         );
-        let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf {
+        let prf = PrfInput {
             eval,
             eval_by_credential,
         };
@@ -405,7 +405,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             &mut channel,
             None,
             &challenge,
-            hmac_or_prf,
+            prf,
             "Empty allow_list, set eval_by_credential",
             WebAuthnError::Platform(PlatformError::NotSupported),
         )
@@ -418,7 +418,7 @@ async fn run_success_test(
     channel: &mut HidChannel<'_>,
     credential: &Ctap2PublicKeyCredentialDescriptor,
     challenge: &[u8; 32],
-    hmac_or_prf: GetAssertionHmacOrPrfInput,
+    prf: PrfInput,
     printoutput: &str,
 ) {
     let get_assertion = GetAssertionRequest {
@@ -427,7 +427,7 @@ async fn run_success_test(
         allow: vec![credential.clone()],
         user_verification: UserVerificationRequirement::Discouraged,
         extensions: Some(GetAssertionRequestExtensions {
-            hmac_or_prf,
+            prf: Some(prf),
             ..Default::default()
         }),
         timeout: TIMEOUT,
@@ -444,7 +444,7 @@ async fn run_success_test(
                 break Err(WebAuthnError::Ctap(ctap_error));
             }
             Err(err) => break Err(err),
-        };
+        }
     }
     .unwrap();
     for (num, assertion) in response.assertions.iter().enumerate() {
@@ -459,7 +459,7 @@ async fn run_failed_test(
     channel: &mut HidChannel<'_>,
     credential: Option<&Ctap2PublicKeyCredentialDescriptor>,
     challenge: &[u8; 32],
-    hmac_or_prf: GetAssertionHmacOrPrfInput,
+    prf: PrfInput,
     printoutput: &str,
     expected_error: WebAuthnError,
 ) {
@@ -469,7 +469,7 @@ async fn run_failed_test(
         allow: credential.map(|x| vec![x.clone()]).unwrap_or_default(),
         user_verification: UserVerificationRequirement::Discouraged,
         extensions: Some(GetAssertionRequestExtensions {
-            hmac_or_prf,
+            prf: Some(prf),
             ..Default::default()
         }),
         timeout: TIMEOUT,
@@ -486,7 +486,7 @@ async fn run_failed_test(
                 break Err(WebAuthnError::Ctap(ctap_error));
             }
             Err(err) => break Err(err),
-        };
+        }
     };
 
     assert_eq!(response, Err(expected_error), "{printoutput}:");

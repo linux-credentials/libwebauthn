@@ -13,7 +13,7 @@ use tokio::sync::broadcast::Receiver;
 use tracing_subscriber::{self, EnvFilter};
 
 use libwebauthn::ops::webauthn::{
-    GetAssertionHmacOrPrfInput, GetAssertionRequest, GetAssertionRequestExtensions, PRFValue,
+    GetAssertionRequest, GetAssertionRequestExtensions, PRFValue, PrfInput,
     UserVerificationRequirement,
 };
 use libwebauthn::pin::PinRequestReason;
@@ -126,15 +126,16 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         });
 
         let eval_by_credential = HashMap::new();
-        let hmac_or_prf = GetAssertionHmacOrPrfInput::Prf {
+        let prf = PrfInput {
             eval,
             eval_by_credential,
         };
+
         run_success_test(
             &mut channel,
             &credential,
             &challenge,
-            hmac_or_prf,
+            prf,
             "PRF output: ",
         )
         .await;
@@ -146,7 +147,7 @@ async fn run_success_test(
     channel: &mut HidChannel<'_>,
     credential: &Ctap2PublicKeyCredentialDescriptor,
     challenge: &[u8; 32],
-    hmac_or_prf: GetAssertionHmacOrPrfInput,
+    prf: PrfInput,
     printoutput: &str,
 ) {
     let get_assertion = GetAssertionRequest {
@@ -155,7 +156,7 @@ async fn run_success_test(
         allow: vec![credential.clone()],
         user_verification: UserVerificationRequirement::Preferred,
         extensions: Some(GetAssertionRequestExtensions {
-            hmac_or_prf,
+            prf: Some(prf),
             ..Default::default()
         }),
         timeout: TIMEOUT,
