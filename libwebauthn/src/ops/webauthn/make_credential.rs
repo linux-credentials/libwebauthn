@@ -68,6 +68,7 @@ impl MakeCredentialsResponseUnsignedExtensions {
         signed_extensions: &Option<Ctap2MakeCredentialsResponseExtensions>,
         request: &MakeCredentialRequest,
         info: Option<&Ctap2GetInfoResponse>,
+        auth_data: Option<&crate::transport::AuthTokenData>,
     ) -> MakeCredentialsResponseUnsignedExtensions {
         let mut hmac_create_secret = None;
         let mut prf = None;
@@ -79,8 +80,26 @@ impl MakeCredentialsResponseUnsignedExtensions {
                     hmac_create_secret = signed_extensions.hmac_secret;
                 }
                 if incoming_ext.prf.is_some() {
+                    // Decrypt hmac-secret-mc output if available
+                    let mc_results = signed_extensions.hmac_secret_mc.as_ref().and_then(|x| {
+                        if let Some(auth_data) = auth_data {
+                            let uv_proto = auth_data.protocol_version.create_protocol_object();
+                            x.decrypt_output(&auth_data.shared_secret, &uv_proto)
+                        } else {
+                            None
+                        }
+                    });
+
+                    let results = mc_results.map(|decrypted| {
+                        super::PRFValue {
+                            first: decrypted.output1,
+                            second: decrypted.output2,
+                        }
+                    });
+
                     prf = Some(MakeCredentialPrfOutput {
                         enabled: signed_extensions.hmac_secret,
+                        results,
                     });
                 }
             }
@@ -280,17 +299,23 @@ impl WebAuthnIDL<MakeCredentialRequestParsingError> for MakeCredentialRequest {
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct MakeCredentialPrfInput {
-    /// The `eval` field is parsed but not used during credential creation.
-    /// PRF evaluation only occurs during assertion (getAssertion), not registration.
-    /// We parse it here to accept valid WebAuthn JSON input without errors.
+    /// The `eval` field was previously not used during credential creation.
+    /// With hmac-secret-mc (CTAP 2.2), PRF evaluation can occur at registration time.
+    /// We still accept the raw JSON value for backward compatibility.
     #[serde(rename = "eval")]
     pub _eval: Option<JsonValue>,
+    /// Parsed eval values for use with hmac-secret-mc.
+    /// Populated when constructing from Rust code directly (not from JSON).
+    #[serde(skip)]
+    pub eval: Option<super::PRFValue>,
 }
 
 #[derive(Debug, Default, Clone, Serialize, PartialEq)]
 pub struct MakeCredentialPrfOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub results: Option<super::PRFValue>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]

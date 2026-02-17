@@ -7,19 +7,23 @@ use super::{
 use crate::{
     fido::AuthenticatorData,
     ops::webauthn::{
-        CredentialProtectionPolicy, MakeCredentialLargeBlobExtension, MakeCredentialRequest,
-        MakeCredentialResponse, MakeCredentialsRequestExtensions,
-        MakeCredentialsResponseUnsignedExtensions, ResidentKeyRequirement,
+        CredentialProtectionPolicy, Ctap2HMACGetSecretOutput, HMACGetSecretInput,
+        MakeCredentialLargeBlobExtension, MakeCredentialRequest, MakeCredentialResponse,
+        MakeCredentialsRequestExtensions, MakeCredentialsResponseUnsignedExtensions,
+        ResidentKeyRequirement,
     },
     pin::PinUvAuthProtocol,
     proto::CtapError,
+    transport::AuthTokenData,
     webauthn::Error,
 };
+use super::get_assertion::CalculatedHMACGetSecretInput;
 use ctap_types::ctap2::credential_management::CredentialProtectionPolicy as Ctap2CredentialProtectionPolicy;
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 use serde_indexed::{DeserializeIndexed, SerializeIndexed};
-use tracing::warn;
+use sha2::{Digest, Sha256};
+use tracing::{error, warn};
 
 #[derive(Debug, Default, Clone, Copy, Serialize)]
 pub struct Ctap2MakeCredentialOptions {
@@ -189,6 +193,12 @@ pub struct Ctap2MakeCredentialsRequestExtensions {
     // Thanks, FIDO-spec for this consistent naming scheme...
     #[serde(rename = "hmac-secret", skip_serializing_if = "Option::is_none")]
     pub hmac_secret: Option<bool>,
+    // CTAP 2.2 hmac-secret-mc: allows sending salts at MakeCredential time
+    #[serde(rename = "hmac-secret-mc", skip_serializing_if = "Option::is_none")]
+    pub hmac_secret_mc: Option<CalculatedHMACGetSecretInput>,
+    // Internal: stores PRF eval input for hmac-secret-mc calculation
+    #[serde(skip)]
+    pub(crate) prf_input: Option<HMACGetSecretInput>,
 }
 
 impl Ctap2MakeCredentialsRequestExtensions {
@@ -198,6 +208,68 @@ impl Ctap2MakeCredentialsRequestExtensions {
             && self.large_blob_key.is_none()
             && self.min_pin_length.is_none()
             && self.hmac_secret.is_none()
+            && self.hmac_secret_mc.is_none()
+    }
+
+    pub fn calculate_hmac_secret_mc(
+        &mut self,
+        auth_data: &AuthTokenData,
+    ) {
+        let input = match self.prf_input.take() {
+            None => return,
+            Some(i) => i,
+        };
+
+        let uv_proto = auth_data.protocol_version.create_protocol_object();
+        let public_key = auth_data.key_agreement.clone();
+
+        let mut salts = input.salt1.to_vec();
+        if let Some(salt2) = input.salt2 {
+            salts.extend(salt2);
+        }
+        let salt_enc = if let Ok(res) = uv_proto.encrypt(&auth_data.shared_secret, &salts) {
+            ByteBuf::from(res)
+        } else {
+            error!("Failed to encrypt HMAC salts with shared secret! Skipping hmac-secret-mc");
+            return;
+        };
+
+        let salt_auth = ByteBuf::from(uv_proto.authenticate(&auth_data.shared_secret, &salt_enc));
+
+        self.hmac_secret_mc = Some(CalculatedHMACGetSecretInput {
+            public_key,
+            salt_enc,
+            salt_auth,
+            pin_auth_proto: Some(auth_data.protocol_version as u32),
+        });
+    }
+
+    fn prf_eval_to_hmac_input(
+        eval: &crate::ops::webauthn::PRFValue,
+    ) -> HMACGetSecretInput {
+        let mut prefix = String::from("WebAuthn PRF").into_bytes();
+        prefix.push(0x00);
+
+        let mut salt1_input = prefix.clone();
+        salt1_input.extend(eval.first);
+        let mut hasher = Sha256::default();
+        hasher.update(salt1_input);
+        let salt1_hash = hasher.finalize().to_vec();
+        let mut salt1 = [0u8; 32];
+        salt1.copy_from_slice(&salt1_hash[..32]);
+
+        let salt2 = eval.second.map(|second| {
+            let mut salt2_input = prefix.clone();
+            salt2_input.extend(second);
+            let mut hasher = Sha256::default();
+            hasher.update(salt2_input);
+            let salt2_hash = hasher.finalize().to_vec();
+            let mut salt2 = [0u8; 32];
+            salt2.copy_from_slice(&salt2_hash[..32]);
+            salt2
+        });
+
+        HMACGetSecretInput { salt1, salt2 }
     }
 }
 
@@ -260,12 +332,47 @@ impl Ctap2MakeCredentialsRequestExtensions {
             None
         };
 
+        // hmac-secret-mc: If the authenticator supports hmac-secret-mc and PRF eval is provided,
+        // prepare the salts for encryption (will be calculated later when shared secret is available).
+        let hmac_secret_mc_supported = info
+            .extensions
+            .as_ref()
+            .map(|e| e.contains(&String::from("hmac-secret-mc")))
+            .unwrap_or_default();
+
+        let prf_input = if hmac_secret_mc_supported {
+            if let Some(prf) = requested_extensions.prf.as_ref() {
+                // Try the parsed `eval` field first (Rust API path)
+                if let Some(eval) = &prf.eval {
+                    Some(Self::prf_eval_to_hmac_input(eval))
+                }
+                // Otherwise try parsing from the raw `_eval` JSON value (IDL/JSON path)
+                else if let Some(eval_json) = &prf._eval {
+                    serde_json::from_value::<crate::ops::webauthn::idl::get::PrfValuesJson>(eval_json.clone())
+                        .ok()
+                        .and_then(|prf_values| {
+                            let first: [u8; 32] = prf_values.first.as_slice().try_into().ok()?;
+                            let second = prf_values.second.and_then(|s| s.as_slice().try_into().ok());
+                            Some(Self::prf_eval_to_hmac_input(&crate::ops::webauthn::PRFValue { first, second }))
+                        })
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         Ok(Ctap2MakeCredentialsRequestExtensions {
             cred_blob: requested_extensions
                 .cred_blob
                 .as_ref()
                 .map(|inner| inner.0.clone()),
             hmac_secret,
+            hmac_secret_mc: None, // Calculated later when shared secret is available
+            prf_input,
             cred_protect: requested_extensions
                 .cred_protect
                 .as_ref()
@@ -301,12 +408,14 @@ impl Ctap2MakeCredentialResponse {
         self,
         request: &MakeCredentialRequest,
         info: Option<&Ctap2GetInfoResponse>,
+        auth_data: Option<&AuthTokenData>,
     ) -> MakeCredentialResponse {
         let unsigned_extensions_output =
             MakeCredentialsResponseUnsignedExtensions::from_signed_extensions(
                 &self.authenticator_data.extensions,
                 request,
                 info,
+                auth_data,
             );
         MakeCredentialResponse {
             format: self.format,
@@ -358,8 +467,18 @@ impl Ctap2UserVerifiableRequest for Ctap2MakeCredentialRequest {
         // No-op
     }
 
-    fn needs_shared_secret(&self, _get_info_response: &Ctap2GetInfoResponse) -> bool {
-        false
+    fn needs_shared_secret(&self, get_info_response: &Ctap2GetInfoResponse) -> bool {
+        let hmac_secret_mc_supported = get_info_response
+            .extensions
+            .as_ref()
+            .map(|e| e.contains(&String::from("hmac-secret-mc")))
+            .unwrap_or_default();
+        let hmac_secret_mc_requested = self
+            .extensions
+            .as_ref()
+            .map(|e| e.prf_input.is_some())
+            .unwrap_or_default();
+        hmac_secret_mc_requested && hmac_secret_mc_supported
     }
 }
 
@@ -378,6 +497,13 @@ pub struct Ctap2MakeCredentialsResponseExtensions {
         skip_serializing_if = "Option::is_none"
     )]
     pub hmac_secret: Option<bool>,
+    // CTAP 2.2 hmac-secret-mc: encrypted HMAC output from MakeCredential
+    #[serde(
+        rename = "hmac-secret-mc",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub hmac_secret_mc: Option<Ctap2HMACGetSecretOutput>,
     // Current min PIN lenght
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_pin_length: Option<u32>,
