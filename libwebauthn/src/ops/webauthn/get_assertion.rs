@@ -790,17 +790,20 @@ mod tests {
         let json_str = json.unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
 
-        // Verify required fields
-        assert!(parsed.get("id").is_some());
-        assert!(parsed.get("rawId").is_some());
-        assert!(parsed.get("type").is_some());
+        // Verify credential ID fields match test data
+        let expected_credential_id = base64_url::encode(&[0x01, 0x02, 0x03, 0x04]);
+        assert_eq!(parsed.get("id").unwrap(), &expected_credential_id);
+        assert_eq!(parsed.get("rawId").unwrap(), &expected_credential_id);
         assert_eq!(parsed.get("type").unwrap(), "public-key");
 
         // Verify response object
         let response_obj = parsed.get("response").unwrap();
         assert!(response_obj.get("clientDataJSON").is_some());
         assert!(response_obj.get("authenticatorData").is_some());
-        assert!(response_obj.get("signature").is_some());
+
+        // Verify signature matches test data
+        let expected_signature = base64_url::encode(&[0xDE, 0xAD, 0xC0, 0xDE]);
+        assert_eq!(response_obj.get("signature").unwrap(), &expected_signature);
     }
 
     #[test]
@@ -856,7 +859,11 @@ mod tests {
         let request = create_test_request();
         let model = assertion.to_inner_model(&request).unwrap();
 
-        // Verify extension outputs - PRF should be set
-        assert!(model.client_extension_results.prf.is_some());
+        // Verify extension outputs - PRF should be set with correct values
+        let prf = model.client_extension_results.prf.as_ref().unwrap();
+        assert!(prf.enabled.is_none()); // enabled is only set on registration
+        let results = prf.results.as_ref().unwrap();
+        assert_eq!(results.first.0, vec![0x01u8; 32]);
+        assert!(results.second.is_none());
     }
 }

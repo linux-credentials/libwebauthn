@@ -942,10 +942,10 @@ mod tests {
         let json_str = json.unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
 
-        // Verify required fields
-        assert!(parsed.get("id").is_some());
-        assert!(parsed.get("rawId").is_some());
-        assert!(parsed.get("type").is_some());
+        // Verify credential ID fields match test data
+        let expected_credential_id = base64_url::encode(&[0x01, 0x02, 0x03, 0x04]);
+        assert_eq!(parsed.get("id").unwrap(), &expected_credential_id);
+        assert_eq!(parsed.get("rawId").unwrap(), &expected_credential_id);
         assert_eq!(parsed.get("type").unwrap(), "public-key");
 
         // Verify response object
@@ -953,7 +953,6 @@ mod tests {
         assert!(response_obj.get("clientDataJSON").is_some());
         assert!(response_obj.get("authenticatorData").is_some());
         assert!(response_obj.get("attestationObject").is_some());
-        assert!(response_obj.get("publicKeyAlgorithm").is_some());
 
         // Verify algorithm is ES256 (-7) for P256 key
         assert_eq!(
@@ -1030,25 +1029,19 @@ mod tests {
         let request = create_test_request();
         let model = response.to_inner_model(&request).unwrap();
 
-        // Verify extension outputs
-        assert!(model.client_extension_results.cred_props.is_some());
-        assert_eq!(
-            model
-                .client_extension_results
-                .cred_props
-                .as_ref()
-                .unwrap()
-                .rk,
-            Some(true)
-        );
+        // Verify cred_props extension
+        let cred_props = model.client_extension_results.cred_props.as_ref().unwrap();
+        assert_eq!(cred_props.rk, Some(true));
+
+        // Verify hmac_create_secret extension
         assert_eq!(
             model.client_extension_results.hmac_create_secret,
             Some(true)
         );
-        assert!(model.client_extension_results.prf.is_some());
-        assert_eq!(
-            model.client_extension_results.prf.as_ref().unwrap().enabled,
-            Some(true)
-        );
+
+        // Verify PRF extension - on registration, only 'enabled' is set, not 'results'
+        let prf = model.client_extension_results.prf.as_ref().unwrap();
+        assert_eq!(prf.enabled, Some(true));
+        assert!(prf.results.is_none()); // results only returned on authentication
     }
 }

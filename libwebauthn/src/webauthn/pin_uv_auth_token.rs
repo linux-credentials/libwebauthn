@@ -481,11 +481,13 @@ mod test {
         Ctap2GetAssertionRequest::from_webauthn_request(
             &GetAssertionRequest {
                 relying_party_id: String::from("example.com"),
-                hash: vec![9; 32],
+                origin: String::from("example.com"),
+                challenge: vec![9; 32],
                 allow: vec![],
                 extensions,
                 user_verification: UserVerificationRequirement::Preferred,
                 timeout: TIMEOUT,
+                cross_origin: None,
             },
             info,
         )
