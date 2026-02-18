@@ -639,8 +639,31 @@ mod tests {
             MakeCredentialRequest::from_json(&rpid, &req_json).unwrap();
         assert!(matches!(
             req.extensions,
-            Some(MakeCredentialsRequestExtensions { prf: Some(_), .. })
+            Some(MakeCredentialsRequestExtensions {
+                prf: Some(MakeCredentialPrfInput { eval: None }),
+                ..
+            })
         ));
+    }
+
+    #[test]
+    fn test_request_from_json_prf_extension_with_eval() {
+        let rpid = RelyingPartyId::try_from("example.org").unwrap();
+        // PRF eval values as JSON arrays of bytes (serde_bytes format)
+        let first_bytes = (1..=32)
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        let eval_json = format!(r#"{{"prf": {{"eval": {{"first": [{}]}}}}}}"#, first_bytes);
+        let req_json = json_field_add(REQUEST_BASE_JSON, "extensions", &eval_json);
+
+        let req: MakeCredentialRequest =
+            MakeCredentialRequest::from_json(&rpid, &req_json).unwrap();
+        let prf = req.extensions.unwrap().prf.unwrap();
+        assert!(prf.eval.is_some());
+        let eval = prf.eval.unwrap();
+        assert_eq!(eval.first, (1..=32).collect::<Vec<u8>>().as_slice());
+        assert!(eval.second.is_none());
     }
 
     #[test]
