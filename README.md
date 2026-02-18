@@ -63,6 +63,10 @@ $ cargo run --example u2f_hid
 ## Package Requirements
 
 - libhidapi-dev/hidapi-devel
+- libudev-dev/libudev-devel
+- libdbus-1-dev/dbus-devel
+- libsodium-dev/libsodium-devel
+- pkg-config
 
 ## Contributing
 
