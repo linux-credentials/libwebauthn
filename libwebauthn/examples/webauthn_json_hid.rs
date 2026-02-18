@@ -134,7 +134,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
 
         // Serialize the response back to JSON using the original request as context.
         // The request contains the client_data_json bytes that were built during parsing.
-        match response.to_json(&make_credentials_request, JsonFormat::Prettified) {
+        match response.to_json_string(&make_credentials_request, JsonFormat::Prettified) {
             Ok(response_json) => {
                 println!(
                     "WebAuthn MakeCredential response (JSON):\n{}",
@@ -177,7 +177,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
 
         // Serialize the response back to JSON using the original request as context.
         for assertion in &response.assertions {
-            match assertion.to_json(&get_assertion, JsonFormat::Prettified) {
+            match assertion.to_json_string(&get_assertion, JsonFormat::Prettified) {
                 Ok(assertion_json) => {
                     println!("WebAuthn GetAssertion response (JSON):\n{}", assertion_json);
                 }

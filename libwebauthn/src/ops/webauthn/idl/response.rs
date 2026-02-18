@@ -61,16 +61,25 @@ pub trait WebAuthnIDLResponse: Sized {
         ctx: &Self::Context,
     ) -> Result<Self::InnerModel, ResponseSerializationError>;
 
+    /// Serializes this response to a `serde_json::Value`.
+    fn to_json_value(
+        &self,
+        ctx: &Self::Context,
+    ) -> Result<serde_json::Value, ResponseSerializationError> {
+        let model = self.to_inner_model(ctx)?;
+        Ok(serde_json::to_value(&model)?)
+    }
+
     /// Serializes this response to a JSON string.
-    fn to_json(
+    fn to_json_string(
         &self,
         ctx: &Self::Context,
         format: JsonFormat,
     ) -> Result<String, ResponseSerializationError> {
-        let model = self.to_inner_model(ctx)?;
+        let value = self.to_json_value(ctx)?;
         match format {
-            JsonFormat::Minified => Ok(serde_json::to_string(&model)?),
-            JsonFormat::Prettified => Ok(serde_json::to_string_pretty(&model)?),
+            JsonFormat::Minified => Ok(serde_json::to_string(&value)?),
+            JsonFormat::Prettified => Ok(serde_json::to_string_pretty(&value)?),
         }
     }
 }

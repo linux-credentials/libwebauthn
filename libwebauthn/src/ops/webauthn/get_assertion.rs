@@ -785,7 +785,7 @@ mod tests {
 
         let assertion = create_test_assertion();
         let request = create_test_request();
-        let json = assertion.to_json(&request, JsonFormat::default());
+        let json = assertion.to_json_string(&request, JsonFormat::default());
         assert!(json.is_ok());
 
         let json_str = json.unwrap();
