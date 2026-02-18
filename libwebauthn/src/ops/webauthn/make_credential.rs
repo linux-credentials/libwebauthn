@@ -2,7 +2,6 @@ use std::time::Duration;
 
 use ctap_types::ctap2::credential_management::CredentialProtectionPolicy as Ctap2CredentialProtectionPolicy;
 use serde::{Deserialize, Serialize};
-use serde_json::{self, Value as JsonValue};
 use sha2::{Digest, Sha256};
 use tracing::{debug, instrument, trace};
 
@@ -297,17 +296,20 @@ impl WebAuthnIDL<MakeCredentialRequestParsingError> for MakeCredentialRequest {
     type InnerModel = PublicKeyCredentialCreationOptionsJSON;
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
 pub struct MakeCredentialPrfInput {
-    /// The `eval` field was previously not used during credential creation.
-    /// With hmac-secret-mc (CTAP 2.2), PRF evaluation can occur at registration time.
-    /// We still accept the raw JSON value for backward compatibility.
-    #[serde(rename = "eval")]
-    pub _eval: Option<JsonValue>,
-    /// Parsed eval values for use with hmac-secret-mc.
-    /// Populated when constructing from Rust code directly (not from JSON).
-    #[serde(skip)]
+    /// PRF eval values for hmac-secret-mc (CTAP 2.2).
+    /// At MC time, only a single eval value is supported (no eval_by_credential).
+    /// Accepts both base64url-encoded (JSON IDL) and raw PRFValue (Rust API).
+    #[serde(default)]
     pub eval: Option<super::PRFValue>,
+}
+
+impl MakeCredentialPrfInput {
+    /// Create a new MakeCredentialPrfInput with the given eval value.
+    pub fn new(eval: Option<super::PRFValue>) -> Self {
+        Self { eval }
+    }
 }
 
 #[derive(Debug, Default, Clone, Serialize, PartialEq)]
@@ -630,7 +632,7 @@ mod tests {
         let req_json = json_field_add(
             REQUEST_BASE_JSON,
             "extensions",
-            r#"{"prf": {"eval": {"first": "second"}}}"#,
+            r#"{"prf": {}}"#,
         );
 
         let req: MakeCredentialRequest =

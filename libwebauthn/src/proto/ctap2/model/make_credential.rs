@@ -17,12 +17,11 @@ use crate::{
     transport::AuthTokenData,
     webauthn::Error,
 };
-use super::get_assertion::CalculatedHMACGetSecretInput;
+use super::get_assertion::{prf_value_to_hmac_input, CalculatedHMACGetSecretInput};
 use ctap_types::ctap2::credential_management::CredentialProtectionPolicy as Ctap2CredentialProtectionPolicy;
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 use serde_indexed::{DeserializeIndexed, SerializeIndexed};
-use sha2::{Digest, Sha256};
 use tracing::{error, warn};
 
 #[derive(Debug, Default, Clone, Copy, Serialize)]
@@ -243,34 +242,6 @@ impl Ctap2MakeCredentialsRequestExtensions {
             pin_auth_proto: Some(auth_data.protocol_version as u32),
         });
     }
-
-    fn prf_eval_to_hmac_input(
-        eval: &crate::ops::webauthn::PRFValue,
-    ) -> HMACGetSecretInput {
-        let mut prefix = String::from("WebAuthn PRF").into_bytes();
-        prefix.push(0x00);
-
-        let mut salt1_input = prefix.clone();
-        salt1_input.extend(eval.first);
-        let mut hasher = Sha256::default();
-        hasher.update(salt1_input);
-        let salt1_hash = hasher.finalize().to_vec();
-        let mut salt1 = [0u8; 32];
-        salt1.copy_from_slice(&salt1_hash[..32]);
-
-        let salt2 = eval.second.map(|second| {
-            let mut salt2_input = prefix.clone();
-            salt2_input.extend(second);
-            let mut hasher = Sha256::default();
-            hasher.update(salt2_input);
-            let salt2_hash = hasher.finalize().to_vec();
-            let mut salt2 = [0u8; 32];
-            salt2.copy_from_slice(&salt2_hash[..32]);
-            salt2
-        });
-
-        HMACGetSecretInput { salt1, salt2 }
-    }
 }
 
 impl Ctap2MakeCredentialsRequestExtensions {
@@ -341,26 +312,11 @@ impl Ctap2MakeCredentialsRequestExtensions {
             .unwrap_or_default();
 
         let prf_input = if hmac_secret_mc_supported {
-            if let Some(prf) = requested_extensions.prf.as_ref() {
-                // Try the parsed `eval` field first (Rust API path)
-                if let Some(eval) = &prf.eval {
-                    Some(Self::prf_eval_to_hmac_input(eval))
-                }
-                // Otherwise try parsing from the raw `_eval` JSON value (IDL/JSON path)
-                else if let Some(eval_json) = &prf._eval {
-                    serde_json::from_value::<crate::ops::webauthn::idl::get::PrfValuesJson>(eval_json.clone())
-                        .ok()
-                        .and_then(|prf_values| {
-                            let first: [u8; 32] = prf_values.first.as_slice().try_into().ok()?;
-                            let second = prf_values.second.and_then(|s| s.as_slice().try_into().ok());
-                            Some(Self::prf_eval_to_hmac_input(&crate::ops::webauthn::PRFValue { first, second }))
-                        })
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
+            requested_extensions
+                .prf
+                .as_ref()
+                .and_then(|prf| prf.eval.as_ref())
+                .map(prf_value_to_hmac_input)
         } else {
             None
         };

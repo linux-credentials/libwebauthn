@@ -100,7 +100,7 @@ async fn run_test_battery(channel: &mut HidChannel<'_>, using_pin: bool) {
     let challenge: [u8; 32] = thread_rng().gen();
 
     let extensions = MakeCredentialsRequestExtensions {
-        prf: Some(MakeCredentialPrfInput { _eval: None, eval: None }),
+        prf: Some(MakeCredentialPrfInput { eval: None }),
         ..Default::default()
     };
 

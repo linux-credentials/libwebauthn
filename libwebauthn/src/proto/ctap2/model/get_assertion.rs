@@ -319,38 +319,47 @@ impl Ctap2GetAssertionRequestExtensions {
 
         // 5. If ev is not null:
         if let Some(ev) = ev {
-            // SHA-256(UTF8Encode("WebAuthn PRF") || 0x00 || ev.first).
-            let mut prefix = String::from("WebAuthn PRF").into_bytes();
-            prefix.push(0x00);
-
-            let mut input = HMACGetSecretInput::default();
-            // 5.1 Let salt1 be the value of SHA-256(UTF8Encode("WebAuthn PRF") || 0x00 || ev.first).
-            let mut salt1_input = prefix.clone();
-            salt1_input.extend(ev.first);
-
-            let mut hasher = Sha256::default();
-            hasher.update(salt1_input);
-            let salt1_hash = hasher.finalize().to_vec();
-            input.salt1.copy_from_slice(&salt1_hash[..32]);
-
-            // 5.2 If ev.second is present, let salt2 be the value of SHA-256(UTF8Encode("WebAuthn PRF") || 0x00 || ev.second).
-            if let Some(second) = ev.second {
-                let mut salt2_input = prefix.clone();
-                salt2_input.extend(second);
-                let mut hasher = Sha256::default();
-                hasher.update(salt2_input);
-                let salt2_hash = hasher.finalize().to_vec();
-                let mut salt2 = [0u8; 32];
-                salt2.copy_from_slice(&salt2_hash[..32]);
-                input.salt2 = Some(salt2);
-            };
-
-            Ok(Some(input))
+            Ok(Some(prf_value_to_hmac_input(ev)))
         } else {
             // We don't have a usable PRF, so we don't do any HMAC
             Ok(None)
         }
     }
+}
+
+/// Converts a PRFValue to HMACGetSecretInput by hashing the PRF values with the
+/// "WebAuthn PRF" prefix as specified in the WebAuthn PRF extension.
+/// https://w3c.github.io/webauthn/#prf
+///
+/// Shared between GetAssertion (hmac-secret) and MakeCredential (hmac-secret-mc).
+pub(crate) fn prf_value_to_hmac_input(ev: &PRFValue) -> HMACGetSecretInput {
+    // SHA-256(UTF8Encode("WebAuthn PRF") || 0x00 || ev.first).
+    let mut prefix = String::from("WebAuthn PRF").into_bytes();
+    prefix.push(0x00);
+
+    let mut input = HMACGetSecretInput::default();
+    // 5.1 Let salt1 be the value of SHA-256(UTF8Encode("WebAuthn PRF") || 0x00 || ev.first).
+    let mut salt1_input = prefix.clone();
+    salt1_input.extend(ev.first);
+
+    let mut hasher = Sha256::default();
+    hasher.update(salt1_input);
+    let salt1_hash = hasher.finalize().to_vec();
+    input.salt1.copy_from_slice(&salt1_hash[..32]);
+
+    // 5.2 If ev.second is present, let salt2 be the value of SHA-256(UTF8Encode("WebAuthn PRF") || 0x00 || ev.second).
+    if let Some(second) = ev.second {
+        let mut salt2_input = prefix.clone();
+        salt2_input.extend(second);
+        let mut hasher = Sha256::default();
+        hasher.update(salt2_input);
+        let salt2_hash = hasher.finalize().to_vec();
+        let mut salt2 = [0u8; 32];
+        salt2.copy_from_slice(&salt2_hash[..32]);
+        input.salt2 = Some(salt2);
+    };
+
+    input
 }
 
 #[derive(Debug, Clone, SerializeIndexed)]
