@@ -300,16 +300,8 @@ impl WebAuthnIDL<MakeCredentialRequestParsingError> for MakeCredentialRequest {
 pub struct MakeCredentialPrfInput {
     /// PRF eval values for hmac-secret-mc (CTAP 2.2).
     /// At MC time, only a single eval value is supported (no eval_by_credential).
-    /// Accepts both base64url-encoded (JSON IDL) and raw PRFValue (Rust API).
     #[serde(default)]
     pub eval: Option<super::PRFValue>,
-}
-
-impl MakeCredentialPrfInput {
-    /// Create a new MakeCredentialPrfInput with the given eval value.
-    pub fn new(eval: Option<super::PRFValue>) -> Self {
-        Self { eval }
-    }
 }
 
 #[derive(Debug, Default, Clone, Serialize, PartialEq)]

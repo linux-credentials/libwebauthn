@@ -13,11 +13,13 @@ use crate::{
         ResidentKeyRequirement,
     },
     pin::PinUvAuthProtocol,
-    proto::CtapError,
+    proto::{
+        extensions::prf::{prf_value_to_hmac_input, CalculatedHMACGetSecretInput},
+        CtapError,
+    },
     transport::AuthTokenData,
     webauthn::Error,
 };
-use super::get_assertion::{prf_value_to_hmac_input, CalculatedHMACGetSecretInput};
 use ctap_types::ctap2::credential_management::CredentialProtectionPolicy as Ctap2CredentialProtectionPolicy;
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
