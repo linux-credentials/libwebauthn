@@ -42,7 +42,7 @@ impl Ctap2GetAssertionOptions {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PackedAttestationStmt {
     #[serde(rename = "alg")]
     pub algorithm: Ctap2COSEAlgorithmIdentifier,
@@ -50,20 +50,21 @@ pub struct PackedAttestationStmt {
     #[serde(rename = "sig")]
     pub signature: ByteBuf,
 
-    #[serde(rename = "x5c")]
+    #[serde(rename = "x5c", skip_serializing_if = "Vec::is_empty", default)]
     pub certificates: Vec<ByteBuf>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct FidoU2fAttestationStmt {
     #[serde(rename = "sig")]
     pub signature: ByteBuf,
 
+    /// Certificate chain as an array (spec requires array even for single cert).
     #[serde(rename = "x5c")]
-    pub certificate: ByteBuf,
+    pub certificates: Vec<ByteBuf>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TpmAttestationStmt {
     #[serde(rename = "ver")]
     pub version: String,
@@ -74,7 +75,7 @@ pub struct TpmAttestationStmt {
     #[serde(rename = "sig")]
     pub signature: ByteBuf,
 
-    #[serde(rename = "x5c")]
+    #[serde(rename = "x5c", skip_serializing_if = "Vec::is_empty", default)]
     pub certificates: Vec<ByteBuf>,
 
     #[serde(rename = "certInfo")]
@@ -84,13 +85,13 @@ pub struct TpmAttestationStmt {
     pub public_area: ByteBuf,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AppleAnonymousAttestationStmt {
-    #[serde(rename = "x5c")]
+    #[serde(rename = "x5c", skip_serializing_if = "Vec::is_empty", default)]
     pub certificates: Vec<ByteBuf>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum Ctap2AttestationStatement {
     PackedOrAndroid(PackedAttestationStmt),
@@ -171,9 +172,10 @@ impl Ctap2GetAssertionRequest {
 
 impl From<GetAssertionRequest> for Ctap2GetAssertionRequest {
     fn from(op: GetAssertionRequest) -> Self {
+        let client_data_hash = ByteBuf::from(op.client_data_hash());
         Self {
             relying_party_id: op.relying_party_id,
-            client_data_hash: ByteBuf::from(op.hash),
+            client_data_hash,
             allow: op.allow,
             extensions: op.extensions.map(|ext| ext.into()),
             options: Some(Ctap2GetAssertionOptions {

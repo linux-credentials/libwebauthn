@@ -11,15 +11,20 @@ use crate::{
     ops::webauthn::{
         client_data::ClientData,
         idl::{
-            create::PublicKeyCredentialCreationOptionsJSON, Base64UrlString, FromInnerModel,
-            JsonError, WebAuthnIDL,
+            create::PublicKeyCredentialCreationOptionsJSON,
+            response::{
+                AuthenticationExtensionsClientOutputsJSON, AuthenticatorAttestationResponseJSON,
+                CredentialPropertiesOutputJSON, LargeBlobOutputJSON, PRFOutputJSON,
+                RegistrationResponseJSON, ResponseSerializationError, WebAuthnIDLResponse,
+            },
+            Base64UrlString, FromInnerModel, JsonError, WebAuthnIDL,
         },
         Operation, RelyingPartyId,
     },
     proto::{
         ctap1::{Ctap1RegisteredKey, Ctap1Version},
         ctap2::{
-            Ctap2AttestationStatement, Ctap2COSEAlgorithmIdentifier, Ctap2CredentialType,
+            cbor, Ctap2AttestationStatement, Ctap2COSEAlgorithmIdentifier, Ctap2CredentialType,
             Ctap2GetInfoResponse, Ctap2MakeCredentialsResponseExtensions,
             Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialRpEntity,
             Ctap2PublicKeyCredentialUserEntity,
@@ -38,6 +43,147 @@ pub struct MakeCredentialResponse {
     pub enterprise_attestation: Option<bool>,
     pub large_blob_key: Option<Vec<u8>>,
     pub unsigned_extensions_output: MakeCredentialsResponseUnsignedExtensions,
+}
+
+/// Serializable attestation object for CBOR encoding.
+#[derive(Debug, Clone, Serialize)]
+struct AttestationObject<'a> {
+    #[serde(rename = "fmt")]
+    format: &'a str,
+    #[serde(rename = "authData", with = "serde_bytes")]
+    auth_data: &'a [u8],
+    #[serde(rename = "attStmt")]
+    attestation_statement: &'a Ctap2AttestationStatement,
+}
+
+impl WebAuthnIDLResponse for MakeCredentialResponse {
+    type InnerModel = RegistrationResponseJSON;
+    type Context = MakeCredentialRequest;
+
+    fn to_inner_model(
+        &self,
+        request: &Self::Context,
+    ) -> Result<Self::InnerModel, ResponseSerializationError> {
+        // Get credential ID from attested credential data
+        let credential_id_bytes = self
+            .authenticator_data
+            .attested_credential
+            .as_ref()
+            .map(|cred| cred.credential_id.clone())
+            .unwrap_or_default();
+
+        let id = base64_url::encode(&credential_id_bytes);
+        let raw_id = Base64UrlString::from(credential_id_bytes);
+
+        // Serialize authenticator data
+        let authenticator_data_bytes = self
+            .authenticator_data
+            .to_response_bytes()
+            .map_err(|e| ResponseSerializationError::AuthenticatorDataError(e.to_string()))?;
+
+        // Get public key algorithm from attested credential data
+        let public_key_algorithm = self
+            .authenticator_data
+            .attested_credential
+            .as_ref()
+            .map(|cred| Self::get_public_key_algorithm(&cred.credential_public_key))
+            .unwrap_or(Ctap2COSEAlgorithmIdentifier::ES256 as i64);
+
+        // Serialize public key to COSE key format
+        let public_key = self
+            .authenticator_data
+            .attested_credential
+            .as_ref()
+            .map(|cred| {
+                cbor::to_vec(&cred.credential_public_key)
+                    .map(Base64UrlString::from)
+                    .map_err(|e| ResponseSerializationError::PublicKeyError(e.to_string()))
+            })
+            .transpose()?;
+
+        // Build attestation object (CBOR map with authData, fmt, attStmt)
+        let attestation_object_bytes = self.build_attestation_object(&authenticator_data_bytes)?;
+
+        // Get transports (we don't have direct access, so return empty for now)
+        let transports = Vec::new();
+
+        // Build client extension results
+        let client_extension_results = self.build_client_extension_results();
+
+        Ok(RegistrationResponseJSON {
+            id,
+            raw_id,
+            response: AuthenticatorAttestationResponseJSON {
+                client_data_json: Base64UrlString::from(request.client_data_json().into_bytes()),
+                authenticator_data: Base64UrlString::from(authenticator_data_bytes),
+                transports,
+                public_key,
+                public_key_algorithm,
+                attestation_object: Base64UrlString::from(attestation_object_bytes),
+            },
+            authenticator_attachment: None,
+            client_extension_results,
+            r#type: "public-key".to_string(),
+        })
+    }
+}
+
+impl MakeCredentialResponse {
+    /// Get the COSE algorithm identifier from the public key variant
+    fn get_public_key_algorithm(key: &cosey::PublicKey) -> i64 {
+        match key {
+            cosey::PublicKey::P256Key(_) => Ctap2COSEAlgorithmIdentifier::ES256 as i64,
+            cosey::PublicKey::EcdhEsHkdf256Key(_) => -25, // ECDH-ES + HKDF-256
+            cosey::PublicKey::Ed25519Key(_) => Ctap2COSEAlgorithmIdentifier::EDDSA as i64,
+            cosey::PublicKey::TotpKey(_) => 0, // No standard algorithm for TOTP
+        }
+    }
+
+    fn build_attestation_object(
+        &self,
+        authenticator_data_bytes: &[u8],
+    ) -> Result<Vec<u8>, ResponseSerializationError> {
+        let attestation_object = AttestationObject {
+            format: &self.format,
+            auth_data: authenticator_data_bytes,
+            attestation_statement: &self.attestation_statement,
+        };
+
+        cbor::to_vec(&attestation_object)
+            .map_err(|e| ResponseSerializationError::AttestationObjectError(e.to_string()))
+    }
+
+    fn build_client_extension_results(&self) -> AuthenticationExtensionsClientOutputsJSON {
+        let mut results = AuthenticationExtensionsClientOutputsJSON::default();
+        let unsigned_ext = &self.unsigned_extensions_output;
+
+        // Credential properties extension
+        if let Some(cred_props) = &unsigned_ext.cred_props {
+            results.cred_props = Some(CredentialPropertiesOutputJSON { rk: cred_props.rk });
+        }
+
+        // HMAC-secret extension (hmacCreateSecret)
+        results.hmac_create_secret = unsigned_ext.hmac_create_secret;
+
+        // Large blob extension
+        if let Some(large_blob) = &unsigned_ext.large_blob {
+            results.large_blob = Some(LargeBlobOutputJSON {
+                supported: large_blob.supported,
+                blob: None,
+                written: None,
+            });
+        }
+
+        // PRF extension
+        if let Some(prf) = &unsigned_ext.prf {
+            results.prf = Some(PRFOutputJSON {
+                enabled: prf.enabled,
+                results: None,
+            });
+        }
+
+        results
+    }
 }
 
 #[derive(Debug, Default, Clone, Serialize)]
@@ -171,8 +317,12 @@ pub enum ResidentKeyRequirement {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct MakeCredentialRequest {
-    pub hash: Vec<u8>,
+    /// The challenge from the relying party.
+    pub challenge: Vec<u8>,
+    /// The origin of the request.
     pub origin: String,
+    /// Whether the request is cross-origin (optional per WebAuthn spec).
+    pub cross_origin: Option<bool>,
     /// rpEntity
     pub relying_party: Ctap2PublicKeyCredentialRpEntity,
     /// userEntity
@@ -186,6 +336,29 @@ pub struct MakeCredentialRequest {
     /// extensions
     pub extensions: Option<MakeCredentialsRequestExtensions>,
     pub timeout: Duration,
+}
+
+impl MakeCredentialRequest {
+    /// Builds the ClientData for this request.
+    fn client_data(&self) -> ClientData {
+        ClientData {
+            operation: Operation::MakeCredential,
+            challenge: self.challenge.clone(),
+            origin: self.origin.clone(),
+            cross_origin: self.cross_origin,
+            top_origin: None,
+        }
+    }
+
+    /// Computes the client data hash (SHA-256 of the client data JSON).
+    pub fn client_data_hash(&self) -> Vec<u8> {
+        self.client_data().hash()
+    }
+
+    /// Returns the canonical JSON representation of the client data.
+    pub fn client_data_json(&self) -> String {
+        self.client_data().to_json()
+    }
 }
 
 impl FromInnerModel<PublicKeyCredentialCreationOptionsJSON, MakeCredentialRequestParsingError>
@@ -235,17 +408,10 @@ impl FromInnerModel<PublicKeyCredentialCreationOptionsJSON, MakeCredentialReques
             .map(|s| Duration::from_millis(s.into()))
             .unwrap_or(DEFAULT_TIMEOUT);
 
-        let client_data_json = ClientData {
-            operation: Operation::MakeCredential,
-            challenge: inner.challenge.to_vec(),
-            origin: rpid.to_string(),
-            cross_origin: None,
-            top_origin: None,
-        };
-
         Ok(Self {
-            hash: client_data_json.hash(),
+            challenge: inner.challenge.to_vec(),
             origin: rpid.to_owned().into(),
+            cross_origin: None,
             relying_party,
             user: inner.user.into(),
             resident_key,
@@ -257,7 +423,7 @@ impl FromInnerModel<PublicKeyCredentialCreationOptionsJSON, MakeCredentialReques
                 Some(inner.exclude_credentials)
             },
             extensions: inner.extensions,
-            timeout: timeout,
+            timeout,
         })
     }
 }
@@ -386,13 +552,14 @@ pub type MakeCredentialsResponseExtensions = Ctap2MakeCredentialsResponseExtensi
 impl MakeCredentialRequest {
     pub fn dummy() -> Self {
         Self {
-            hash: vec![0; 32],
+            challenge: Vec::new(),
+            origin: "example.org".to_owned(),
+            cross_origin: Some(false),
             relying_party: Ctap2PublicKeyCredentialRpEntity::dummy(),
             user: Ctap2PublicKeyCredentialUserEntity::dummy(),
             algorithms: vec![Ctap2CredentialType::default()],
             exclude: None,
             extensions: None,
-            origin: "example.org".to_owned(),
             resident_key: None,
             user_verification: UserVerificationRequirement::Discouraged,
             timeout: Duration::from_secs(10),
@@ -440,7 +607,7 @@ impl DowngradableRequest<RegisterRequest> for MakeCredentialRequest {
         let downgraded = RegisterRequest {
             version: Ctap1Version::U2fV2,
             app_id_hash: rp_id_hash,
-            challenge: self.hash.clone(),
+            challenge: self.client_data_hash(),
             registered_keys: self
                 .exclude
                 .as_ref()
@@ -511,16 +678,9 @@ mod tests {
 
     fn request_base() -> MakeCredentialRequest {
         MakeCredentialRequest {
+            challenge: base64_url::decode("Y3JlZGVudGlhbHMtZm9yLWxpbnV4L2xpYndlYmF1dGhu").unwrap(),
             origin: "example.org".to_string(),
-            hash: ClientData {
-                operation: Operation::MakeCredential,
-                challenge: base64_url::decode("Y3JlZGVudGlhbHMtZm9yLWxpbnV4L2xpYndlYmF1dGhu")
-                    .unwrap(),
-                origin: "example.org".to_string(),
-                cross_origin: None,
-                top_origin: None,
-            }
-            .hash(),
+            cross_origin: None,
             relying_party: Ctap2PublicKeyCredentialRpEntity::new("example.org", "example.org"),
             user: Ctap2PublicKeyCredentialUserEntity::new(b"userid", "mario.rossi", "Mario Rossi"),
             resident_key: Some(ResidentKeyRequirement::Discouraged),
@@ -711,5 +871,177 @@ mod tests {
             result,
             Err(MakeCredentialRequestParsingError::MismatchingRelyingPartyId(_, _))
         ));
+    }
+
+    // Tests for response JSON serialization
+
+    fn create_test_response() -> MakeCredentialResponse {
+        use crate::fido::{AttestedCredentialData, AuthenticatorData, AuthenticatorDataFlags};
+        use cosey::Bytes;
+        use std::collections::BTreeMap;
+
+        // Create a simple attested credential with a P256 key
+        let credential_id = vec![0x01, 0x02, 0x03, 0x04];
+        let aaguid = [0u8; 16];
+
+        // Create a P256 public key for testing
+        let public_key = cosey::PublicKey::P256Key(cosey::P256PublicKey {
+            x: Bytes::from_slice(&[0u8; 32]).unwrap(),
+            y: Bytes::from_slice(&[0u8; 32]).unwrap(),
+        });
+
+        let attested_credential = AttestedCredentialData {
+            aaguid,
+            credential_id,
+            credential_public_key: public_key,
+        };
+
+        let authenticator_data = AuthenticatorData {
+            rp_id_hash: [0u8; 32],
+            flags: AuthenticatorDataFlags::USER_PRESENT,
+            signature_count: 0,
+            attested_credential: Some(attested_credential),
+            extensions: None,
+        };
+
+        MakeCredentialResponse {
+            format: "none".to_string(),
+            authenticator_data,
+            attestation_statement: Ctap2AttestationStatement::None(BTreeMap::new()),
+            enterprise_attestation: None,
+            large_blob_key: None,
+            unsigned_extensions_output: MakeCredentialsResponseUnsignedExtensions::default(),
+        }
+    }
+
+    fn create_test_request() -> MakeCredentialRequest {
+        MakeCredentialRequest {
+            challenge: b"DEADCODE_challenge".to_vec(),
+            origin: "example.org".to_string(),
+            cross_origin: None,
+            relying_party: Ctap2PublicKeyCredentialRpEntity::new("example.org", "example.org"),
+            user: Ctap2PublicKeyCredentialUserEntity::new(b"userid", "mario.rossi", "Mario Rossi"),
+            resident_key: Some(ResidentKeyRequirement::Discouraged),
+            user_verification: UserVerificationRequirement::Preferred,
+            algorithms: vec![Ctap2CredentialType::default()],
+            exclude: None,
+            extensions: None,
+            timeout: Duration::from_secs(30),
+        }
+    }
+
+    #[test]
+    fn test_response_to_json() {
+        use crate::ops::webauthn::idl::response::JsonFormat;
+
+        let response = create_test_response();
+        let request = create_test_request();
+        let json = response.to_json(&request, JsonFormat::default());
+        assert!(json.is_ok());
+
+        let json_str = json.unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+
+        // Verify credential ID fields match test data
+        let expected_credential_id = base64_url::encode(&[0x01, 0x02, 0x03, 0x04]);
+        assert_eq!(parsed.get("id").unwrap(), &expected_credential_id);
+        assert_eq!(parsed.get("rawId").unwrap(), &expected_credential_id);
+        assert_eq!(parsed.get("type").unwrap(), "public-key");
+
+        // Verify response object
+        let response_obj = parsed.get("response").unwrap();
+        assert!(response_obj.get("clientDataJSON").is_some());
+        assert!(response_obj.get("authenticatorData").is_some());
+        assert!(response_obj.get("attestationObject").is_some());
+
+        // Verify algorithm is ES256 (-7) for P256 key
+        assert_eq!(
+            response_obj.get("publicKeyAlgorithm").unwrap(),
+            Ctap2COSEAlgorithmIdentifier::ES256 as i64
+        );
+    }
+
+    #[test]
+    fn test_response_to_inner_model() {
+        let response = create_test_response();
+        let request = create_test_request();
+        let model = response.to_inner_model(&request).unwrap();
+
+        // Verify the credential ID
+        assert_eq!(model.raw_id.0, vec![0x01, 0x02, 0x03, 0x04]);
+        assert_eq!(model.r#type, "public-key");
+
+        // Verify attestation response
+        assert_eq!(
+            model.response.public_key_algorithm,
+            Ctap2COSEAlgorithmIdentifier::ES256 as i64
+        );
+        assert!(model.response.transports.is_empty());
+    }
+
+    #[test]
+    fn test_response_attestation_object_format() {
+        let response = create_test_response();
+        let request = create_test_request();
+        let model = response.to_inner_model(&request).unwrap();
+
+        // Decode the attestation object
+        let attestation_bytes = model.response.attestation_object.0;
+        let attestation: cbor::Value = cbor::from_slice(&attestation_bytes).unwrap();
+
+        // Verify it's a map with the expected keys
+        if let cbor::Value::Map(map) = attestation {
+            let has_fmt = map
+                .keys()
+                .any(|k| matches!(k, cbor::Value::Text(s) if s == "fmt"));
+            let has_auth_data = map
+                .keys()
+                .any(|k| matches!(k, cbor::Value::Text(s) if s == "authData"));
+            let has_att_stmt = map
+                .keys()
+                .any(|k| matches!(k, cbor::Value::Text(s) if s == "attStmt"));
+
+            assert!(has_fmt, "attestation object should have 'fmt' key");
+            assert!(
+                has_auth_data,
+                "attestation object should have 'authData' key"
+            );
+            assert!(has_att_stmt, "attestation object should have 'attStmt' key");
+        } else {
+            panic!("attestation object should be a CBOR map");
+        }
+    }
+
+    #[test]
+    fn test_response_with_extensions() {
+        let mut response = create_test_response();
+
+        // Add some extension outputs
+        response.unsigned_extensions_output = MakeCredentialsResponseUnsignedExtensions {
+            cred_props: Some(CredentialPropsExtension { rk: Some(true) }),
+            hmac_create_secret: Some(true),
+            large_blob: None,
+            prf: Some(MakeCredentialPrfOutput {
+                enabled: Some(true),
+            }),
+        };
+
+        let request = create_test_request();
+        let model = response.to_inner_model(&request).unwrap();
+
+        // Verify cred_props extension
+        let cred_props = model.client_extension_results.cred_props.as_ref().unwrap();
+        assert_eq!(cred_props.rk, Some(true));
+
+        // Verify hmac_create_secret extension
+        assert_eq!(
+            model.client_extension_results.hmac_create_secret,
+            Some(true)
+        );
+
+        // Verify PRF extension - on registration, only 'enabled' is set, not 'results'
+        let prf = model.client_extension_results.prf.as_ref().unwrap();
+        assert_eq!(prf.enabled, Some(true));
+        assert!(prf.results.is_none()); // results only returned on authentication
     }
 }

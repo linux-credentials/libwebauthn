@@ -13,7 +13,12 @@ use crate::{
                 HmacGetSecretInputJson, LargeBlobInputJson, PrfInputJson,
                 PublicKeyCredentialRequestOptionsJSON,
             },
-            FromInnerModel, JsonError,
+            response::{
+                AuthenticationExtensionsClientOutputsJSON, AuthenticationResponseJSON,
+                AuthenticatorAssertionResponseJSON, HMACGetSecretOutputJSON, LargeBlobOutputJSON,
+                PRFOutputJSON, PRFValuesJSON, ResponseSerializationError, WebAuthnIDLResponse,
+            },
+            Base64UrlString, FromInnerModel, JsonError,
         },
         Operation, WebAuthnIDL,
     },
@@ -39,11 +44,34 @@ pub struct PRFValue {
 #[derive(Debug, Clone, PartialEq)]
 pub struct GetAssertionRequest {
     pub relying_party_id: String,
-    pub hash: Vec<u8>,
+    pub challenge: Vec<u8>,
+    pub origin: String,
+    pub cross_origin: Option<bool>,
     pub allow: Vec<Ctap2PublicKeyCredentialDescriptor>,
     pub extensions: Option<GetAssertionRequestExtensions>,
     pub user_verification: UserVerificationRequirement,
     pub timeout: Duration,
+}
+
+impl GetAssertionRequest {
+    fn client_data(&self) -> ClientData {
+        ClientData {
+            operation: Operation::GetAssertion,
+            challenge: self.challenge.clone(),
+            origin: self.origin.clone(),
+            cross_origin: self.cross_origin,
+            top_origin: None,
+        }
+    }
+
+    pub fn client_data_hash(&self) -> Vec<u8> {
+        self.client_data().hash()
+    }
+
+    /// Returns the canonical JSON representation of the client data.
+    pub fn client_data_json(&self) -> String {
+        self.client_data().to_json()
+    }
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -126,17 +154,11 @@ impl FromInnerModel<PublicKeyCredentialRequestOptionsJSON, GetAssertionRequestPa
             .map(|s| Duration::from_millis(s.into()))
             .unwrap_or(DEFAULT_TIMEOUT);
 
-        let client_data_json = ClientData {
-            operation: Operation::GetAssertion,
+        Ok(GetAssertionRequest {
+            relying_party_id: rpid.to_string(),
             challenge: inner.challenge.to_vec(),
             origin: rpid.to_string(),
             cross_origin: None,
-            top_origin: None,
-        };
-
-        Ok(GetAssertionRequest {
-            relying_party_id: rpid.to_string(),
-            hash: client_data_json.hash(),
             allow: inner
                 .allow_credentials
                 .into_iter()
@@ -358,6 +380,7 @@ pub struct GetAssertionResponseUnsignedExtensions {
     pub prf: Option<GetAssertionPrfOutput>,
 }
 
+/// Context required for serializing a GetAssertion response to JSON.
 #[derive(Debug, Clone)]
 pub struct GetAssertionResponse {
     pub assertions: Vec<Assertion>,
@@ -375,6 +398,102 @@ pub struct Assertion {
     pub unsigned_extensions_output: Option<GetAssertionResponseUnsignedExtensions>,
     pub enterprise_attestation: Option<bool>,
     pub attestation_statement: Option<Ctap2AttestationStatement>,
+}
+
+impl WebAuthnIDLResponse for Assertion {
+    type InnerModel = AuthenticationResponseJSON;
+    type Context = GetAssertionRequest;
+
+    fn to_inner_model(
+        &self,
+        request: &Self::Context,
+    ) -> Result<Self::InnerModel, ResponseSerializationError> {
+        // Get credential ID - either from credential_id field or from authenticator_data
+        let credential_id_bytes = self
+            .credential_id
+            .as_ref()
+            .map(|cred| cred.id.to_vec())
+            .unwrap_or_default();
+
+        let id = base64_url::encode(&credential_id_bytes);
+        let raw_id = Base64UrlString::from(credential_id_bytes);
+
+        // Serialize authenticator data
+        let authenticator_data_bytes = self
+            .authenticator_data
+            .to_response_bytes()
+            .map_err(|e| ResponseSerializationError::AuthenticatorDataError(e.to_string()))?;
+
+        // Get user handle if available
+        let user_handle = self
+            .user
+            .as_ref()
+            .map(|user| Base64UrlString::from(user.id.as_ref()));
+
+        // Build client extension results
+        let client_extension_results = self.build_client_extension_results();
+
+        Ok(AuthenticationResponseJSON {
+            id,
+            raw_id,
+            response: AuthenticatorAssertionResponseJSON {
+                client_data_json: Base64UrlString::from(request.client_data_json().into_bytes()),
+                authenticator_data: Base64UrlString::from(authenticator_data_bytes),
+                signature: Base64UrlString::from(self.signature.clone()),
+                user_handle,
+            },
+            authenticator_attachment: None,
+            client_extension_results,
+            r#type: "public-key".to_string(),
+        })
+    }
+}
+
+impl Assertion {
+    fn build_client_extension_results(&self) -> AuthenticationExtensionsClientOutputsJSON {
+        let mut results = AuthenticationExtensionsClientOutputsJSON::default();
+
+        if let Some(unsigned_ext) = &self.unsigned_extensions_output {
+            // HMAC-secret extension output
+            if let Some(hmac_output) = &unsigned_ext.hmac_get_secret {
+                results.hmac_get_secret = Some(HMACGetSecretOutputJSON {
+                    output1: Base64UrlString::from(hmac_output.output1.as_slice()),
+                    output2: hmac_output
+                        .output2
+                        .as_ref()
+                        .map(|o| Base64UrlString::from(o.as_slice())),
+                });
+            }
+
+            // Large blob extension output
+            if let Some(large_blob) = &unsigned_ext.large_blob {
+                results.large_blob = Some(LargeBlobOutputJSON {
+                    supported: None,
+                    blob: large_blob
+                        .blob
+                        .as_ref()
+                        .map(|b| Base64UrlString::from(b.as_slice())),
+                    written: None, // Write not yet supported
+                });
+            }
+
+            // PRF extension output
+            if let Some(prf_output) = &unsigned_ext.prf {
+                results.prf = Some(PRFOutputJSON {
+                    enabled: None,
+                    results: prf_output.results.as_ref().map(|prf_value| PRFValuesJSON {
+                        first: Base64UrlString::from(prf_value.first.as_slice()),
+                        second: prf_value
+                            .second
+                            .as_ref()
+                            .map(|s| Base64UrlString::from(s.as_slice())),
+                    }),
+                });
+            }
+        }
+
+        results
+    }
 }
 
 impl From<&[Assertion]> for GetAssertionResponse {
@@ -425,7 +544,7 @@ impl DowngradableRequest<Vec<SignRequest>> for GetAssertionRequest {
                 // --> This is already set to 0x08 in trait: From<&Ctap1RegisterRequest> for ApduRequest
 
                 // Use clientDataHash parameter of CTAP2 request as CTAP1/U2F challenge parameter (32 bytes).
-                let challenge = &self.hash;
+                let challenge = self.client_data_hash();
 
                 // Let rpIdHash be a byte string of size 32 initialized with SHA-256 hash of rp.id parameter as
                 // CTAP1/U2F application parameter (32 bytes).
@@ -437,7 +556,7 @@ impl DowngradableRequest<Vec<SignRequest>> for GetAssertionRequest {
                 let credential_id = &credential.id;
 
                 // Let u2fAuthenticateRequest be a byte string with the following structure: [...]
-                SignRequest::new_upgraded(&rp_id_hash, challenge, credential_id, self.timeout)
+                SignRequest::new_upgraded(&rp_id_hash, &challenge, credential_id, self.timeout)
             })
             .collect();
         trace!(?downgraded_requests);
@@ -473,16 +592,11 @@ mod tests {
     "#;
 
     fn request_base() -> GetAssertionRequest {
-        let client_data_json = ClientData {
-            operation: Operation::GetAssertion,
+        GetAssertionRequest {
+            relying_party_id: "example.org".to_owned(),
             challenge: base64_url::decode("Y3JlZGVudGlhbHMtZm9yLWxpbnV4L2xpYndlYmF1dGhu").unwrap(),
             origin: "example.org".to_string(),
             cross_origin: None,
-            top_origin: None,
-        };
-        GetAssertionRequest {
-            relying_party_id: "example.org".to_owned(),
-            hash: client_data_json.hash(),
             allow: vec![Ctap2PublicKeyCredentialDescriptor {
                 r#type: Ctap2PublicKeyCredentialType::PublicKey,
                 id: ByteBuf::from(base64_url::decode("bXktY3JlZGVudGlhbC1pZA").unwrap()),
@@ -619,5 +733,138 @@ mod tests {
         } else {
             panic!("Expected PRF extension with correct values");
         }
+    }
+
+    // Tests for response JSON serialization
+
+    fn create_test_assertion() -> Assertion {
+        use crate::fido::{AuthenticatorData, AuthenticatorDataFlags};
+
+        let authenticator_data = AuthenticatorData {
+            rp_id_hash: [0u8; 32],
+            flags: AuthenticatorDataFlags::USER_PRESENT,
+            signature_count: 1,
+            attested_credential: None,
+            extensions: None,
+        };
+
+        Assertion {
+            credential_id: Some(Ctap2PublicKeyCredentialDescriptor {
+                r#type: Ctap2PublicKeyCredentialType::PublicKey,
+                id: ByteBuf::from(vec![0x01, 0x02, 0x03, 0x04]),
+                transports: None,
+            }),
+            authenticator_data,
+            signature: vec![0xDE, 0xAD, 0xC0, 0xDE],
+            user: None,
+            credentials_count: None,
+            user_selected: None,
+            large_blob_key: None,
+            unsigned_extensions_output: None,
+            enterprise_attestation: None,
+            attestation_statement: None,
+        }
+    }
+
+    fn create_test_request() -> GetAssertionRequest {
+        GetAssertionRequest {
+            relying_party_id: "example.org".to_owned(),
+            challenge: b"DEADCODE_challenge".to_vec(),
+            origin: "example.org".to_string(),
+            cross_origin: None,
+            allow: vec![],
+            extensions: None,
+            user_verification: UserVerificationRequirement::Preferred,
+            timeout: Duration::from_secs(30),
+        }
+    }
+
+    #[test]
+    fn test_assertion_to_json() {
+        use crate::ops::webauthn::idl::response::JsonFormat;
+
+        let assertion = create_test_assertion();
+        let request = create_test_request();
+        let json = assertion.to_json(&request, JsonFormat::default());
+        assert!(json.is_ok());
+
+        let json_str = json.unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+
+        // Verify credential ID fields match test data
+        let expected_credential_id = base64_url::encode(&[0x01, 0x02, 0x03, 0x04]);
+        assert_eq!(parsed.get("id").unwrap(), &expected_credential_id);
+        assert_eq!(parsed.get("rawId").unwrap(), &expected_credential_id);
+        assert_eq!(parsed.get("type").unwrap(), "public-key");
+
+        // Verify response object
+        let response_obj = parsed.get("response").unwrap();
+        assert!(response_obj.get("clientDataJSON").is_some());
+        assert!(response_obj.get("authenticatorData").is_some());
+
+        // Verify signature matches test data
+        let expected_signature = base64_url::encode(&[0xDE, 0xAD, 0xC0, 0xDE]);
+        assert_eq!(response_obj.get("signature").unwrap(), &expected_signature);
+    }
+
+    #[test]
+    fn test_assertion_to_inner_model() {
+        let assertion = create_test_assertion();
+        let request = create_test_request();
+        let model = assertion.to_inner_model(&request).unwrap();
+
+        // Verify the credential ID
+        assert_eq!(model.raw_id.0, vec![0x01, 0x02, 0x03, 0x04]);
+        assert_eq!(model.r#type, "public-key");
+
+        // Verify signature
+        assert_eq!(model.response.signature.0, vec![0xDE, 0xAD, 0xC0, 0xDE]);
+    }
+
+    #[test]
+    fn test_assertion_with_user_handle() {
+        use crate::proto::ctap2::Ctap2PublicKeyCredentialUserEntity;
+
+        let mut assertion = create_test_assertion();
+        assertion.user = Some(Ctap2PublicKeyCredentialUserEntity::new(
+            b"test-user-id",
+            "testuser",
+            "Test User",
+        ));
+
+        let request = create_test_request();
+        let model = assertion.to_inner_model(&request).unwrap();
+
+        // Verify user handle is present
+        assert!(model.response.user_handle.is_some());
+        assert_eq!(
+            model.response.user_handle.as_ref().unwrap().0,
+            b"test-user-id".to_vec()
+        );
+    }
+
+    #[test]
+    fn test_assertion_with_extensions() {
+        let mut assertion = create_test_assertion();
+        assertion.unsigned_extensions_output = Some(GetAssertionResponseUnsignedExtensions {
+            hmac_get_secret: None,
+            large_blob: None,
+            prf: Some(GetAssertionPrfOutput {
+                results: Some(PRFValue {
+                    first: [0x01u8; 32],
+                    second: None,
+                }),
+            }),
+        });
+
+        let request = create_test_request();
+        let model = assertion.to_inner_model(&request).unwrap();
+
+        // Verify extension outputs - PRF should be set with correct values
+        let prf = model.client_extension_results.prf.as_ref().unwrap();
+        assert!(prf.enabled.is_none()); // enabled is only set on registration
+        let results = prf.results.as_ref().unwrap();
+        assert_eq!(results.first.0, vec![0x01u8; 32]);
+        assert!(results.second.is_none());
     }
 }
