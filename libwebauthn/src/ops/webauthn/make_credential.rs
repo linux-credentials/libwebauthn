@@ -17,7 +17,7 @@ use crate::{
                 CredentialPropertiesOutputJSON, LargeBlobOutputJSON, PRFOutputJSON,
                 RegistrationResponseJSON, ResponseSerializationError, WebAuthnIDLResponse,
             },
-            Base64UrlString, FromInnerModel, JsonError, WebAuthnIDL,
+            Base64UrlString, FromIdlModel, JsonError, WebAuthnIDL,
         },
         Operation, RelyingPartyId,
     },
@@ -57,13 +57,13 @@ struct AttestationObject<'a> {
 }
 
 impl WebAuthnIDLResponse for MakeCredentialResponse {
-    type InnerModel = RegistrationResponseJSON;
+    type IdlModel = RegistrationResponseJSON;
     type Context = MakeCredentialRequest;
 
-    fn to_inner_model(
+    fn to_idl_model(
         &self,
         request: &Self::Context,
-    ) -> Result<Self::InnerModel, ResponseSerializationError> {
+    ) -> Result<Self::IdlModel, ResponseSerializationError> {
         // Get credential ID from attested credential data
         let credential_id_bytes = self
             .authenticator_data
@@ -361,10 +361,10 @@ impl MakeCredentialRequest {
     }
 }
 
-impl FromInnerModel<PublicKeyCredentialCreationOptionsJSON, MakeCredentialRequestParsingError>
+impl FromIdlModel<PublicKeyCredentialCreationOptionsJSON, MakeCredentialRequestParsingError>
     for MakeCredentialRequest
 {
-    fn from_inner_model(
+    fn from_idl_model(
         rpid: &RelyingPartyId,
         inner: PublicKeyCredentialCreationOptionsJSON,
     ) -> Result<Self, MakeCredentialRequestParsingError> {
@@ -441,7 +441,7 @@ pub enum MakeCredentialRequestParsingError {
 
 impl WebAuthnIDL<MakeCredentialRequestParsingError> for MakeCredentialRequest {
     type Error = MakeCredentialRequestParsingError;
-    type InnerModel = PublicKeyCredentialCreationOptionsJSON;
+    type IdlModel = PublicKeyCredentialCreationOptionsJSON;
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -962,10 +962,10 @@ mod tests {
     }
 
     #[test]
-    fn test_response_to_inner_model() {
+    fn test_response_to_idl_model() {
         let response = create_test_response();
         let request = create_test_request();
-        let model = response.to_inner_model(&request).unwrap();
+        let model = response.to_idl_model(&request).unwrap();
 
         // Verify the credential ID
         assert_eq!(model.raw_id.0, vec![0x01, 0x02, 0x03, 0x04]);
@@ -983,7 +983,7 @@ mod tests {
     fn test_response_attestation_object_format() {
         let response = create_test_response();
         let request = create_test_request();
-        let model = response.to_inner_model(&request).unwrap();
+        let model = response.to_idl_model(&request).unwrap();
 
         // Decode the attestation object
         let attestation_bytes = model.response.attestation_object.0;
@@ -1027,7 +1027,7 @@ mod tests {
         };
 
         let request = create_test_request();
-        let model = response.to_inner_model(&request).unwrap();
+        let model = response.to_idl_model(&request).unwrap();
 
         // Verify cred_props extension
         let cred_props = model.client_extension_results.cred_props.as_ref().unwrap();
