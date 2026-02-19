@@ -47,26 +47,26 @@ pub enum ResponseSerializationError {
 /// Trait for WebAuthn response types that can be serialized to JSON.
 ///
 /// This is the inverse of `WebAuthnIDL` - it converts WebAuthn response models
-/// to JSON-serializable intermediate models, which can then be serialized to JSON.
+/// to JSON-serializable IDL models, which can then be serialized to JSON.
 pub trait WebAuthnIDLResponse: Sized {
-    /// The JSON-serializable intermediate model type.
-    type InnerModel: Serialize;
+    /// The JSON-serializable IDL model type.
+    type IdlModel: Serialize;
 
     /// Context required for serialization (e.g., client data JSON).
     type Context;
 
-    /// Converts this response to a JSON-serializable intermediate model.
-    fn to_inner_model(
+    /// Converts this response to a JSON-serializable IDL model.
+    fn to_idl_model(
         &self,
         ctx: &Self::Context,
-    ) -> Result<Self::InnerModel, ResponseSerializationError>;
+    ) -> Result<Self::IdlModel, ResponseSerializationError>;
 
     /// Serializes this response to a `serde_json::Value`.
     fn to_json_value(
         &self,
         ctx: &Self::Context,
     ) -> Result<serde_json::Value, ResponseSerializationError> {
-        let model = self.to_inner_model(ctx)?;
+        let model = self.to_idl_model(ctx)?;
         Ok(serde_json::to_value(&model)?)
     }
 

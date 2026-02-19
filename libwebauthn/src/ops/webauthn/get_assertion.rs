@@ -18,7 +18,7 @@ use crate::{
                 AuthenticatorAssertionResponseJSON, HMACGetSecretOutputJSON, LargeBlobOutputJSON,
                 PRFOutputJSON, PRFValuesJSON, ResponseSerializationError, WebAuthnIDLResponse,
             },
-            Base64UrlString, FromInnerModel, JsonError,
+            Base64UrlString, FromIdlModel, JsonError,
         },
         Operation, WebAuthnIDL,
     },
@@ -95,7 +95,7 @@ pub enum GetAssertionRequestParsingError {
 
 impl WebAuthnIDL<GetAssertionRequestParsingError> for GetAssertionRequest {
     type Error = GetAssertionRequestParsingError;
-    type InnerModel = PublicKeyCredentialRequestOptionsJSON;
+    type IdlModel = PublicKeyCredentialRequestOptionsJSON;
 }
 
 /** dictionary PublicKeyCredentialRequestOptionsJSON {
@@ -108,10 +108,10 @@ impl WebAuthnIDL<GetAssertionRequestParsingError> for GetAssertionRequest {
     AuthenticationExtensionsClientInputsJSON                extensions;
 }; */
 
-impl FromInnerModel<PublicKeyCredentialRequestOptionsJSON, GetAssertionRequestParsingError>
+impl FromIdlModel<PublicKeyCredentialRequestOptionsJSON, GetAssertionRequestParsingError>
     for GetAssertionRequest
 {
-    fn from_inner_model(
+    fn from_idl_model(
         rpid: &RelyingPartyId,
         inner: PublicKeyCredentialRequestOptionsJSON,
     ) -> Result<Self, GetAssertionRequestParsingError> {
@@ -401,13 +401,13 @@ pub struct Assertion {
 }
 
 impl WebAuthnIDLResponse for Assertion {
-    type InnerModel = AuthenticationResponseJSON;
+    type IdlModel = AuthenticationResponseJSON;
     type Context = GetAssertionRequest;
 
-    fn to_inner_model(
+    fn to_idl_model(
         &self,
         request: &Self::Context,
-    ) -> Result<Self::InnerModel, ResponseSerializationError> {
+    ) -> Result<Self::IdlModel, ResponseSerializationError> {
         // Get credential ID - either from credential_id field or from authenticator_data
         let credential_id_bytes = self
             .credential_id
@@ -808,10 +808,10 @@ mod tests {
     }
 
     #[test]
-    fn test_assertion_to_inner_model() {
+    fn test_assertion_to_idl_model() {
         let assertion = create_test_assertion();
         let request = create_test_request();
-        let model = assertion.to_inner_model(&request).unwrap();
+        let model = assertion.to_idl_model(&request).unwrap();
 
         // Verify the credential ID
         assert_eq!(model.raw_id.0, vec![0x01, 0x02, 0x03, 0x04]);
@@ -833,7 +833,7 @@ mod tests {
         ));
 
         let request = create_test_request();
-        let model = assertion.to_inner_model(&request).unwrap();
+        let model = assertion.to_idl_model(&request).unwrap();
 
         // Verify user handle is present
         assert!(model.response.user_handle.is_some());
@@ -858,7 +858,7 @@ mod tests {
         });
 
         let request = create_test_request();
-        let model = assertion.to_inner_model(&request).unwrap();
+        let model = assertion.to_idl_model(&request).unwrap();
 
         // Verify extension outputs - PRF should be set with correct values
         let prf = model.client_extension_results.prf.as_ref().unwrap();
