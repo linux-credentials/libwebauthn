@@ -2,7 +2,7 @@ use std::env;
 
 #[tokio::main]
 async fn main() {
-    let caller = env::var("RELATED_CALLER").unwrap_or_else(|_| "https://smile.amazon.co.uk".to_string());
+    let caller = env::var("RELATED_CALLER").unwrap_or_else(|_| "https://www.amazon.co.uk".to_string());
     let rp_id = env::var("RELATED_RP_ID").unwrap_or_else(|_| "amazon.com".to_string());
 
     println!("caller: {}", caller);
