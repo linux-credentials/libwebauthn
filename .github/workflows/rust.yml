@@ -18,7 +18,7 @@ jobs:
       - name: Update apt cache
         run: sudo apt-get update
       - name: Install system dependencies
-        run: sudo apt-get install libudev-dev libdbus-1-dev libsodium-dev
+        run: sudo apt-get install libhidapi-dev libudev-dev libdbus-1-dev libsodium-dev
       - name: Build
         run: cargo build
       - name: Run tests
