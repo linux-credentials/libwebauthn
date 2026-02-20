@@ -100,7 +100,12 @@ async fn run_test_battery(channel: &mut HidChannel<'_>, using_pin: bool) {
     let challenge: [u8; 32] = thread_rng().gen();
 
     let extensions = MakeCredentialsRequestExtensions {
-        prf: Some(MakeCredentialPrfInput { _eval: None }),
+        prf: Some(MakeCredentialPrfInput {
+            eval: Some(PRFValue {
+                first: [1; 32],
+                second: None,
+            }),
+        }),
         ..Default::default()
     };
 
@@ -161,7 +166,8 @@ async fn run_test_battery(channel: &mut HidChannel<'_>, using_pin: bool) {
     assert_eq!(
         response.unsigned_extensions_output.prf,
         Some(MakeCredentialPrfOutput {
-            enabled: Some(true)
+            enabled: Some(true),
+            results: None,
         })
     );
 
