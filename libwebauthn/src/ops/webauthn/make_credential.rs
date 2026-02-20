@@ -936,7 +936,7 @@ mod tests {
 
         let response = create_test_response();
         let request = create_test_request();
-        let json = response.to_json(&request, JsonFormat::default());
+        let json = response.to_json_string(&request, JsonFormat::default());
         assert!(json.is_ok());
 
         let json_str = json.unwrap();
