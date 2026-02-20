@@ -107,7 +107,7 @@ async fn run_test_battery(channel: &mut HidChannel<'_>, using_pin: bool) {
     // Make Credentials ceremony
     let make_credentials_request = MakeCredentialRequest {
         origin: "example.org".to_owned(),
-        hash: Vec::from(challenge),
+        challenge: Vec::from(challenge),
         relying_party: Ctap2PublicKeyCredentialRpEntity::new("example.org", "example.org"),
         user: Ctap2PublicKeyCredentialUserEntity::new(&user_id, "mario.rossi", "Mario Rossi"),
         resident_key: Some(ResidentKeyRequirement::Discouraged),
@@ -116,6 +116,7 @@ async fn run_test_battery(channel: &mut HidChannel<'_>, using_pin: bool) {
         exclude: None,
         extensions: Some(extensions),
         timeout: TIMEOUT,
+        cross_origin: None,
     };
 
     let state_recv = channel.get_ux_update_receiver();
@@ -168,11 +169,13 @@ async fn run_test_battery(channel: &mut HidChannel<'_>, using_pin: bool) {
         (&response.authenticator_data).try_into().unwrap();
     let get_assertion = GetAssertionRequest {
         relying_party_id: "example.org".to_owned(),
-        hash: Vec::from(challenge),
+        origin: "example.org".to_owned(),
+        challenge: Vec::from(challenge),
         allow: vec![credential.clone()],
         user_verification: UserVerificationRequirement::Preferred,
         extensions: None,
         timeout: TIMEOUT,
+        cross_origin: None,
     };
 
     let _response = channel
@@ -482,7 +485,8 @@ async fn run_success_test(
 ) {
     let get_assertion = GetAssertionRequest {
         relying_party_id: "example.org".to_owned(),
-        hash: Vec::from(challenge),
+        origin: "example.org".to_owned(),
+        challenge: Vec::from(challenge),
         allow: vec![credential.clone()],
         user_verification: UserVerificationRequirement::Preferred,
         extensions: Some(GetAssertionRequestExtensions {
@@ -490,6 +494,7 @@ async fn run_success_test(
             ..Default::default()
         }),
         timeout: TIMEOUT,
+        cross_origin: None,
     };
 
     let response = channel
@@ -547,7 +552,8 @@ async fn run_failed_test(
 ) {
     let get_assertion = GetAssertionRequest {
         relying_party_id: "example.org".to_owned(),
-        hash: Vec::from(challenge),
+        origin: "example.org".to_owned(),
+        challenge: Vec::from(challenge),
         allow: credential.map(|x| vec![x.clone()]).unwrap_or_default(),
         user_verification: UserVerificationRequirement::Discouraged,
         extensions: Some(GetAssertionRequestExtensions {
@@ -555,6 +561,7 @@ async fn run_failed_test(
             ..Default::default()
         }),
         timeout: TIMEOUT,
+        cross_origin: None,
     };
 
     let response: Result<(), WebAuthnError> = loop {

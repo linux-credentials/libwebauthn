@@ -7,6 +7,7 @@ pub mod related_origins;
 
 use super::u2f::{RegisterRequest, SignRequest};
 use crate::webauthn::CtapError;
+pub use client_data::ClientData;
 pub use get_assertion::{
     Assertion, Ctap2HMACGetSecretOutput, GetAssertionHmacOrPrfInput,
     GetAssertionLargeBlobExtension, GetAssertionLargeBlobExtensionOutput, GetAssertionPrfOutput,
@@ -14,7 +15,12 @@ pub use get_assertion::{
     GetAssertionResponseExtensions, GetAssertionResponseUnsignedExtensions, HMACGetSecretInput,
     HMACGetSecretOutput, PRFValue, PrfInput,
 };
-pub use idl::{rpid::RelyingPartyId, Base64UrlString, WebAuthnIDL};
+pub use idl::{
+    rpid::RelyingPartyId, AuthenticationExtensionsClientOutputsJSON, AuthenticationResponseJSON,
+    AuthenticatorAssertionResponseJSON, AuthenticatorAttestationResponseJSON, Base64UrlString,
+    JsonFormat, RegistrationResponseJSON, ResponseSerializationError, WebAuthnIDL,
+    WebAuthnIDLResponse,
+};
 pub use make_credential::{
     CredentialPropsExtension, CredentialProtectionExtension, CredentialProtectionPolicy,
     MakeCredentialLargeBlobExtension, MakeCredentialLargeBlobExtensionOutput,

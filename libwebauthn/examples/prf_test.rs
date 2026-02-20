@@ -152,7 +152,9 @@ async fn run_success_test(
 ) {
     let get_assertion = GetAssertionRequest {
         relying_party_id: "demo.yubico.com".to_owned(),
-        hash: Vec::from(challenge),
+        challenge: Vec::from(challenge),
+        origin: "demo.yubico.com".to_string(),
+        cross_origin: None,
         allow: vec![credential.clone()],
         user_verification: UserVerificationRequirement::Preferred,
         extensions: Some(GetAssertionRequestExtensions {

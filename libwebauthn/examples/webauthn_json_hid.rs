@@ -8,7 +8,8 @@ use tokio::sync::broadcast::Receiver;
 use tracing_subscriber::{self, EnvFilter};
 
 use libwebauthn::ops::webauthn::{
-    GetAssertionRequest, MakeCredentialRequest, RelyingPartyId, WebAuthnIDL as _,
+    GetAssertionRequest, JsonFormat, MakeCredentialRequest, RelyingPartyId,
+    WebAuthnIDL as _, WebAuthnIDLResponse as _,
 };
 use libwebauthn::pin::PinRequestReason;
 use libwebauthn::transport::hid::list_devices;
@@ -131,6 +132,20 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         .unwrap();
         println!("WebAuthn MakeCredential response: {:?}", response);
 
+        // Serialize the response back to JSON using the original request as context.
+        // The request contains the client_data_json bytes that were built during parsing.
+        match response.to_json_string(&make_credentials_request, JsonFormat::Prettified) {
+            Ok(response_json) => {
+                println!(
+                    "WebAuthn MakeCredential response (JSON):\n{}",
+                    response_json
+                );
+            }
+            Err(e) => {
+                eprintln!("Failed to serialize MakeCredential response: {:?}", e);
+            }
+        }
+
         let request_json = r#"
                 {
                     "challenge": "Y3JlZGVudGlhbHMtZm9yLWxpbnV4L2xpYndlYmF1dGhu",
@@ -159,6 +174,18 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         }
         .unwrap();
         println!("WebAuthn GetAssertion response: {:?}", response);
+
+        // Serialize the response back to JSON using the original request as context.
+        for assertion in &response.assertions {
+            match assertion.to_json_string(&get_assertion, JsonFormat::Prettified) {
+                Ok(assertion_json) => {
+                    println!("WebAuthn GetAssertion response (JSON):\n{}", assertion_json);
+                }
+                Err(e) => {
+                    eprintln!("Failed to serialize GetAssertion response: {:?}", e);
+                }
+            }
+        }
     }
 
     Ok(())
