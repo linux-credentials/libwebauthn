@@ -1,6 +1,5 @@
 use serde::Deserialize;
 use std::{convert::TryFrom, net::IpAddr, ops::Deref};
-use url::Url;
 
 #[derive(Clone, Debug)]
 pub struct RelyingPartyId(pub String);
@@ -102,44 +101,6 @@ impl<'de> Deserialize<'de> for RelyingPartyId {
     {
         let s = String::deserialize(deserializer)?;
         RelyingPartyId::try_from(s.as_str()).map_err(serde::de::Error::custom)
-    }
-}
-
-impl RelyingPartyId {
-    /// Validate this RP ID for the given caller `origin`.
-    ///
-    /// Returns a tuple `(is_valid_rp_id, requires_related_origins)` where:
-    /// - `is_valid_rp_id` is true if `self` is equal to or a registrable domain suffix of the origin's effective domain.
-    /// - `requires_related_origins` is true when `self` is a registrable suffix but not equal to the origin's effective 
-    ///   domain (meaning the related origins fetch/validation would be required).
-    pub fn validate_for_origin(
-        &self,
-        origin: &str,
-        _max_labels: usize,
-    ) -> Result<(bool, bool), Error> {
-        let url = Url::parse(origin).map_err(|_| Error::InvalidRelyingPartyId(origin.to_string()))?;
-
-        let host = url
-            .host_str()
-            .ok_or_else(|| Error::InvalidRelyingPartyId(origin.to_string()))?;
-
-        // Normalize using IDNA same as in TryFrom
-        let origin_ascii = idna::domain_to_ascii(host)
-            .map_err(|_| Error::InvalidRelyingPartyId(origin.to_string()))?;
-
-        // Exact match: RP ID equals origin effective domain
-        if origin_ascii.eq_ignore_ascii_case(&self.0) {
-            return Ok((true, false));
-        }
-
-        // Check if `self` is a registrable suffix of the origin domain.
-        // Conservative check: origin ends with ".{rpid}".
-        let suffix = format!(".{}", self.0);
-        if origin_ascii.ends_with(&suffix) {
-            return Ok((true, true));
-        }
-
-        Ok((false, false))
     }
 }
 
