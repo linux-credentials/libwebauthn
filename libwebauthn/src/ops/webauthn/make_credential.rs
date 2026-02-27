@@ -1065,6 +1065,7 @@ mod tests {
             large_blob: None,
             prf: Some(MakeCredentialPrfOutput {
                 enabled: Some(true),
+                results: None,
             }),
         };
 
