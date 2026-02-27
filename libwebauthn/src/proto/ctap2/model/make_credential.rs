@@ -163,7 +163,7 @@ impl Ctap2MakeCredentialRequest {
         };
 
         Ok(Ctap2MakeCredentialRequest {
-            hash: ByteBuf::from(req.hash.clone()),
+            hash: ByteBuf::from(req.client_data_hash()),
             relying_party: req.relying_party.clone(),
             user: req.user.clone(),
             algorithms: req.algorithms.clone(),

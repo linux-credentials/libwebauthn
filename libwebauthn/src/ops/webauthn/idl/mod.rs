@@ -1,9 +1,17 @@
 mod base64url;
 pub mod create;
 pub mod get;
+pub mod response;
 pub mod rpid;
 
 pub use base64url::Base64UrlString;
+pub use response::{
+    AuthenticationExtensionsClientOutputsJSON, AuthenticationResponseJSON,
+    AuthenticatorAssertionResponseJSON, AuthenticatorAttestationResponseJSON,
+    CredentialPropertiesOutputJSON, HMACGetSecretOutputJSON, JsonFormat, LargeBlobOutputJSON,
+    PRFOutputJSON, PRFValuesJSON, RegistrationResponseJSON, ResponseSerializationError,
+    WebAuthnIDLResponse,
+};
 
 use rpid::RelyingPartyId;
 
