@@ -216,7 +216,7 @@ impl Ctap2MakeCredentialsRequestExtensions {
         &mut self,
         auth_data: &AuthTokenData,
     ) {
-        let input = match self.prf_input.take() {
+        let input = match &self.prf_input {
             None => return,
             Some(i) => i,
         };
@@ -225,7 +225,7 @@ impl Ctap2MakeCredentialsRequestExtensions {
         let public_key = auth_data.key_agreement.clone();
 
         let mut salts = input.salt1.to_vec();
-        if let Some(salt2) = input.salt2 {
+        if let Some(salt2) = &input.salt2 {
             salts.extend(salt2);
         }
         let salt_enc = if let Ok(res) = uv_proto.encrypt(&auth_data.shared_secret, &salts) {
@@ -465,4 +465,525 @@ pub struct Ctap2MakeCredentialsResponseExtensions {
     // Current min PIN lenght
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_pin_length: Option<u32>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ops::webauthn::{
+        Ctap2HMACGetSecretOutput, MakeCredentialPrfInput, MakeCredentialRequest,
+        MakeCredentialsRequestExtensions, MakeCredentialsResponseUnsignedExtensions, PRFValue,
+    };
+    use crate::pin::{PinUvAuthProtocol, PinUvAuthProtocolOne, PinUvAuthProtocolTwo};
+    use crate::proto::ctap2::model::Ctap2UserVerificationOperation;
+    use crate::proto::ctap2::Ctap2PinUvAuthProtocol;
+    use crate::proto::extensions::prf::prf_value_to_hmac_input;
+    use crate::transport::AuthTokenData;
+
+    /// Create a test authenticator key agreement public key (P-256 point).
+    fn test_key_agreement() -> cosey::PublicKey {
+        let pub_key_x =
+            hex::decode("326ce69b9e8766cc3e9dfad45e62173ffec90ed1c1c5eabe8d43f2add3d86c0c")
+                .unwrap();
+        let pub_key_y =
+            hex::decode("c21c4f54c9aef343bc701e84ff8e3bb50ad089a0849167b514098bfacc185044")
+                .unwrap();
+        cosey::PublicKey::EcdhEsHkdf256Key(cosey::EcdhEsHkdf256PublicKey {
+            x: cosey::Bytes::from_slice(&pub_key_x).unwrap(),
+            y: cosey::Bytes::from_slice(&pub_key_y).unwrap(),
+        })
+    }
+
+    /// Create test AuthTokenData with a real ECDH-derived shared secret.
+    fn make_test_auth_data(protocol: Ctap2PinUvAuthProtocol) -> AuthTokenData {
+        let pin_protocol: Box<dyn PinUvAuthProtocol> = match protocol {
+            Ctap2PinUvAuthProtocol::One => Box::new(PinUvAuthProtocolOne::new()),
+            Ctap2PinUvAuthProtocol::Two => Box::new(PinUvAuthProtocolTwo::new()),
+        };
+        let (public_key, shared_secret) =
+            pin_protocol.encapsulate(&test_key_agreement()).unwrap();
+        AuthTokenData::new(
+            shared_secret,
+            protocol,
+            public_key,
+            Ctap2UserVerificationOperation::OnlyForSharedSecret,
+        )
+    }
+
+    fn make_extensions_with_prf(
+        prf_input: HMACGetSecretInput,
+    ) -> Ctap2MakeCredentialsRequestExtensions {
+        Ctap2MakeCredentialsRequestExtensions {
+            hmac_secret: Some(true),
+            prf_input: Some(prf_input),
+            ..Default::default()
+        }
+    }
+
+    // -- calculate_hmac_secret_mc tests --
+
+    #[test]
+    fn test_calculate_hmac_secret_mc_one_salt_protocol_one() {
+        let auth_data = make_test_auth_data(Ctap2PinUvAuthProtocol::One);
+        let prf_value = PRFValue {
+            first: [1u8; 32],
+            second: None,
+        };
+        let hmac_input = prf_value_to_hmac_input(&prf_value);
+        let expected_salt1 = hmac_input.salt1;
+
+        let mut ext = make_extensions_with_prf(hmac_input);
+        ext.calculate_hmac_secret_mc(&auth_data);
+
+        let calculated = ext
+            .hmac_secret_mc
+            .as_ref()
+            .expect("hmac_secret_mc should be populated");
+
+        // Verify the encrypted salts can be decrypted back
+        let uv_proto = auth_data.protocol_version.create_protocol_object();
+        let decrypted = uv_proto
+            .decrypt(&auth_data.shared_secret, &calculated.salt_enc)
+            .expect("Decryption should succeed");
+
+        assert_eq!(decrypted.len(), 32);
+        assert_eq!(&decrypted[..], &expected_salt1);
+
+        assert_eq!(
+            calculated.pin_auth_proto,
+            Some(Ctap2PinUvAuthProtocol::One as u32)
+        );
+    }
+
+    #[test]
+    fn test_calculate_hmac_secret_mc_two_salts_protocol_one() {
+        let auth_data = make_test_auth_data(Ctap2PinUvAuthProtocol::One);
+        let prf_value = PRFValue {
+            first: [1u8; 32],
+            second: Some([2u8; 32]),
+        };
+        let hmac_input = prf_value_to_hmac_input(&prf_value);
+        let expected_salt1 = hmac_input.salt1;
+        let expected_salt2 = hmac_input.salt2.unwrap();
+
+        let mut ext = make_extensions_with_prf(hmac_input);
+        ext.calculate_hmac_secret_mc(&auth_data);
+
+        let calculated = ext.hmac_secret_mc.as_ref().unwrap();
+        let uv_proto = auth_data.protocol_version.create_protocol_object();
+        let decrypted = uv_proto
+            .decrypt(&auth_data.shared_secret, &calculated.salt_enc)
+            .unwrap();
+
+        assert_eq!(decrypted.len(), 64);
+        assert_eq!(&decrypted[..32], &expected_salt1);
+        assert_eq!(&decrypted[32..], &expected_salt2);
+    }
+
+    #[test]
+    fn test_calculate_hmac_secret_mc_protocol_two() {
+        let auth_data = make_test_auth_data(Ctap2PinUvAuthProtocol::Two);
+        let prf_value = PRFValue {
+            first: [3u8; 32],
+            second: Some([4u8; 32]),
+        };
+        let hmac_input = prf_value_to_hmac_input(&prf_value);
+        let expected_salt1 = hmac_input.salt1;
+        let expected_salt2 = hmac_input.salt2.unwrap();
+
+        let mut ext = make_extensions_with_prf(hmac_input);
+        ext.calculate_hmac_secret_mc(&auth_data);
+
+        let calculated = ext.hmac_secret_mc.as_ref().unwrap();
+        let uv_proto = auth_data.protocol_version.create_protocol_object();
+        let decrypted = uv_proto
+            .decrypt(&auth_data.shared_secret, &calculated.salt_enc)
+            .unwrap();
+
+        assert_eq!(decrypted.len(), 64);
+        assert_eq!(&decrypted[..32], &expected_salt1);
+        assert_eq!(&decrypted[32..], &expected_salt2);
+        assert_eq!(
+            calculated.pin_auth_proto,
+            Some(Ctap2PinUvAuthProtocol::Two as u32)
+        );
+    }
+
+    #[test]
+    fn test_calculate_hmac_secret_mc_noop_without_prf_input() {
+        let auth_data = make_test_auth_data(Ctap2PinUvAuthProtocol::One);
+        let mut ext = Ctap2MakeCredentialsRequestExtensions {
+            hmac_secret: Some(true),
+            ..Default::default()
+        };
+
+        ext.calculate_hmac_secret_mc(&auth_data);
+
+        assert!(
+            ext.hmac_secret_mc.is_none(),
+            "Should not populate hmac_secret_mc without prf_input"
+        );
+    }
+
+    #[test]
+    fn test_calculate_hmac_secret_mc_salt_auth_valid() {
+        let auth_data = make_test_auth_data(Ctap2PinUvAuthProtocol::One);
+        let prf_value = PRFValue {
+            first: [7u8; 32],
+            second: None,
+        };
+        let hmac_input = prf_value_to_hmac_input(&prf_value);
+
+        let mut ext = make_extensions_with_prf(hmac_input);
+        ext.calculate_hmac_secret_mc(&auth_data);
+
+        let calculated = ext.hmac_secret_mc.as_ref().unwrap();
+
+        // Verify salt_auth is a valid MAC of salt_enc
+        let uv_proto = auth_data.protocol_version.create_protocol_object();
+        let expected_auth =
+            uv_proto.authenticate(&auth_data.shared_secret, &calculated.salt_enc);
+        assert_eq!(calculated.salt_auth.as_ref(), expected_auth.as_slice());
+    }
+
+    // -- Retry / idempotency tests (verifies the .take() bug fix) --
+
+    #[test]
+    fn test_calculate_hmac_secret_mc_preserves_prf_input_for_retry() {
+        let auth_data = make_test_auth_data(Ctap2PinUvAuthProtocol::One);
+        let prf_value = PRFValue {
+            first: [5u8; 32],
+            second: None,
+        };
+        let hmac_input = prf_value_to_hmac_input(&prf_value);
+
+        let mut ext = make_extensions_with_prf(hmac_input);
+
+        // First call
+        ext.calculate_hmac_secret_mc(&auth_data);
+        assert!(ext.hmac_secret_mc.is_some());
+
+        // prf_input must be preserved for retry support
+        assert!(
+            ext.prf_input.is_some(),
+            "prf_input must not be consumed — it is needed for retries"
+        );
+
+        // Second call should still work
+        ext.calculate_hmac_secret_mc(&auth_data);
+        assert!(ext.hmac_secret_mc.is_some());
+    }
+
+    #[test]
+    fn test_calculate_hmac_secret_mc_recalculates_with_new_shared_secret() {
+        let auth_data_1 = make_test_auth_data(Ctap2PinUvAuthProtocol::One);
+        let prf_value = PRFValue {
+            first: [6u8; 32],
+            second: None,
+        };
+        let hmac_input = prf_value_to_hmac_input(&prf_value);
+        let expected_salt1 = hmac_input.salt1;
+
+        let mut ext = make_extensions_with_prf(hmac_input);
+
+        // First call
+        ext.calculate_hmac_secret_mc(&auth_data_1);
+        let salt_enc_1 = ext.hmac_secret_mc.as_ref().unwrap().salt_enc.clone();
+
+        // Simulate retry with a different shared secret
+        let mut auth_data_2 = auth_data_1.clone();
+        auth_data_2.shared_secret = vec![99u8; 32];
+
+        ext.calculate_hmac_secret_mc(&auth_data_2);
+        let salt_enc_2 = ext.hmac_secret_mc.as_ref().unwrap().salt_enc.clone();
+
+        // Different shared secrets must produce different ciphertexts
+        assert_ne!(salt_enc_1, salt_enc_2);
+
+        // New ciphertext must decrypt correctly with the new shared secret
+        let uv_proto = auth_data_2.protocol_version.create_protocol_object();
+        let decrypted = uv_proto
+            .decrypt(&auth_data_2.shared_secret, &salt_enc_2)
+            .unwrap();
+        assert_eq!(&decrypted[..], &expected_salt1);
+    }
+
+    // -- needs_shared_secret tests --
+
+    #[test]
+    fn test_needs_shared_secret_true_when_mc_supported_and_prf_input_present() {
+        let mut info = Ctap2GetInfoResponse::default();
+        info.extensions = Some(vec![
+            "hmac-secret".to_string(),
+            "hmac-secret-mc".to_string(),
+        ]);
+
+        let prf_value = PRFValue {
+            first: [1u8; 32],
+            second: None,
+        };
+        let hmac_input = prf_value_to_hmac_input(&prf_value);
+
+        let request = Ctap2MakeCredentialRequest {
+            extensions: Some(make_extensions_with_prf(hmac_input)),
+            ..Ctap2MakeCredentialRequest::dummy()
+        };
+        assert!(request.needs_shared_secret(&info));
+    }
+
+    #[test]
+    fn test_needs_shared_secret_false_without_prf_input() {
+        let mut info = Ctap2GetInfoResponse::default();
+        info.extensions = Some(vec![
+            "hmac-secret".to_string(),
+            "hmac-secret-mc".to_string(),
+        ]);
+
+        let request = Ctap2MakeCredentialRequest {
+            extensions: Some(Ctap2MakeCredentialsRequestExtensions {
+                hmac_secret: Some(true),
+                ..Default::default()
+            }),
+            ..Ctap2MakeCredentialRequest::dummy()
+        };
+        assert!(!request.needs_shared_secret(&info));
+    }
+
+    #[test]
+    fn test_needs_shared_secret_false_without_mc_support() {
+        let mut info = Ctap2GetInfoResponse::default();
+        info.extensions = Some(vec!["hmac-secret".to_string()]);
+
+        let prf_value = PRFValue {
+            first: [1u8; 32],
+            second: None,
+        };
+        let hmac_input = prf_value_to_hmac_input(&prf_value);
+
+        let request = Ctap2MakeCredentialRequest {
+            extensions: Some(make_extensions_with_prf(hmac_input)),
+            ..Ctap2MakeCredentialRequest::dummy()
+        };
+        assert!(!request.needs_shared_secret(&info));
+    }
+
+    // -- Response decryption round-trip tests --
+
+    #[test]
+    fn test_response_decrypt_hmac_secret_mc_one_output() {
+        let auth_data = make_test_auth_data(Ctap2PinUvAuthProtocol::One);
+
+        // Simulate authenticator: encrypt a 32-byte HMAC output
+        let expected_output = [42u8; 32];
+        let uv_proto = auth_data.protocol_version.create_protocol_object();
+        let encrypted = uv_proto
+            .encrypt(&auth_data.shared_secret, &expected_output)
+            .unwrap();
+
+        let signed_extensions = Some(Ctap2MakeCredentialsResponseExtensions {
+            hmac_secret: Some(true),
+            hmac_secret_mc: Some(Ctap2HMACGetSecretOutput {
+                encrypted_output: encrypted,
+            }),
+            ..Default::default()
+        });
+
+        let request = MakeCredentialRequest {
+            extensions: Some(MakeCredentialsRequestExtensions {
+                prf: Some(MakeCredentialPrfInput {
+                    eval: Some(PRFValue {
+                        first: [1u8; 32],
+                        second: None,
+                    }),
+                }),
+                ..Default::default()
+            }),
+            ..MakeCredentialRequest::dummy()
+        };
+
+        let unsigned = MakeCredentialsResponseUnsignedExtensions::from_signed_extensions(
+            &signed_extensions,
+            &request,
+            None,
+            Some(&auth_data),
+        );
+
+        let prf = unsigned.prf.expect("prf output should be present");
+        assert_eq!(prf.enabled, Some(true));
+        let results = prf.results.expect("results should be present");
+        assert_eq!(results.first, expected_output);
+        assert!(results.second.is_none());
+    }
+
+    #[test]
+    fn test_response_decrypt_hmac_secret_mc_two_outputs() {
+        let auth_data = make_test_auth_data(Ctap2PinUvAuthProtocol::One);
+
+        // Simulate authenticator: encrypt two 32-byte HMAC outputs
+        let expected_output1 = [42u8; 32];
+        let expected_output2 = [84u8; 32];
+        let mut plaintext = expected_output1.to_vec();
+        plaintext.extend_from_slice(&expected_output2);
+
+        let uv_proto = auth_data.protocol_version.create_protocol_object();
+        let encrypted = uv_proto
+            .encrypt(&auth_data.shared_secret, &plaintext)
+            .unwrap();
+
+        let signed_extensions = Some(Ctap2MakeCredentialsResponseExtensions {
+            hmac_secret: Some(true),
+            hmac_secret_mc: Some(Ctap2HMACGetSecretOutput {
+                encrypted_output: encrypted,
+            }),
+            ..Default::default()
+        });
+
+        let request = MakeCredentialRequest {
+            extensions: Some(MakeCredentialsRequestExtensions {
+                prf: Some(MakeCredentialPrfInput {
+                    eval: Some(PRFValue {
+                        first: [1u8; 32],
+                        second: Some([2u8; 32]),
+                    }),
+                }),
+                ..Default::default()
+            }),
+            ..MakeCredentialRequest::dummy()
+        };
+
+        let unsigned = MakeCredentialsResponseUnsignedExtensions::from_signed_extensions(
+            &signed_extensions,
+            &request,
+            None,
+            Some(&auth_data),
+        );
+
+        let prf = unsigned.prf.expect("prf output should be present");
+        let results = prf.results.expect("results should be present");
+        assert_eq!(results.first, expected_output1);
+        assert_eq!(results.second, Some(expected_output2));
+    }
+
+    #[test]
+    fn test_response_decrypt_hmac_secret_mc_protocol_two() {
+        let auth_data = make_test_auth_data(Ctap2PinUvAuthProtocol::Two);
+
+        let expected_output = [99u8; 32];
+        let uv_proto = auth_data.protocol_version.create_protocol_object();
+        let encrypted = uv_proto
+            .encrypt(&auth_data.shared_secret, &expected_output)
+            .unwrap();
+
+        let signed_extensions = Some(Ctap2MakeCredentialsResponseExtensions {
+            hmac_secret: Some(true),
+            hmac_secret_mc: Some(Ctap2HMACGetSecretOutput {
+                encrypted_output: encrypted,
+            }),
+            ..Default::default()
+        });
+
+        let request = MakeCredentialRequest {
+            extensions: Some(MakeCredentialsRequestExtensions {
+                prf: Some(MakeCredentialPrfInput {
+                    eval: Some(PRFValue {
+                        first: [1u8; 32],
+                        second: None,
+                    }),
+                }),
+                ..Default::default()
+            }),
+            ..MakeCredentialRequest::dummy()
+        };
+
+        let unsigned = MakeCredentialsResponseUnsignedExtensions::from_signed_extensions(
+            &signed_extensions,
+            &request,
+            None,
+            Some(&auth_data),
+        );
+
+        let results = unsigned.prf.unwrap().results.unwrap();
+        assert_eq!(results.first, expected_output);
+    }
+
+    #[test]
+    fn test_response_no_hmac_secret_mc_returns_none_results() {
+        let signed_extensions = Some(Ctap2MakeCredentialsResponseExtensions {
+            hmac_secret: Some(true),
+            hmac_secret_mc: None, // Authenticator does not support hmac-secret-mc
+            ..Default::default()
+        });
+
+        let request = MakeCredentialRequest {
+            extensions: Some(MakeCredentialsRequestExtensions {
+                prf: Some(MakeCredentialPrfInput {
+                    eval: Some(PRFValue {
+                        first: [1u8; 32],
+                        second: None,
+                    }),
+                }),
+                ..Default::default()
+            }),
+            ..MakeCredentialRequest::dummy()
+        };
+
+        let unsigned = MakeCredentialsResponseUnsignedExtensions::from_signed_extensions(
+            &signed_extensions,
+            &request,
+            None,
+            None,
+        );
+
+        let prf = unsigned.prf.expect("prf output should still be present");
+        assert_eq!(prf.enabled, Some(true));
+        assert!(
+            prf.results.is_none(),
+            "results should be None when hmac-secret-mc is absent"
+        );
+    }
+
+    #[test]
+    fn test_response_no_auth_data_returns_none_results() {
+        let auth_data = make_test_auth_data(Ctap2PinUvAuthProtocol::One);
+        let uv_proto = auth_data.protocol_version.create_protocol_object();
+        let encrypted = uv_proto
+            .encrypt(&auth_data.shared_secret, &[42u8; 32])
+            .unwrap();
+
+        let signed_extensions = Some(Ctap2MakeCredentialsResponseExtensions {
+            hmac_secret: Some(true),
+            hmac_secret_mc: Some(Ctap2HMACGetSecretOutput {
+                encrypted_output: encrypted,
+            }),
+            ..Default::default()
+        });
+
+        let request = MakeCredentialRequest {
+            extensions: Some(MakeCredentialsRequestExtensions {
+                prf: Some(MakeCredentialPrfInput {
+                    eval: Some(PRFValue {
+                        first: [1u8; 32],
+                        second: None,
+                    }),
+                }),
+                ..Default::default()
+            }),
+            ..MakeCredentialRequest::dummy()
+        };
+
+        // No auth_data -> cannot decrypt
+        let unsigned = MakeCredentialsResponseUnsignedExtensions::from_signed_extensions(
+            &signed_extensions,
+            &request,
+            None,
+            None, // No auth data available
+        );
+
+        let prf = unsigned.prf.expect("prf output should still be present");
+        assert_eq!(prf.enabled, Some(true));
+        assert!(
+            prf.results.is_none(),
+            "results should be None without auth_data for decryption"
+        );
+    }
 }
