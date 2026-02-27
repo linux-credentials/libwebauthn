@@ -118,6 +118,13 @@ where
                 user_verification(self, op.user_verification, &mut ctap2_request, op.timeout)
                     .await?;
 
+            // Calculate hmac-secret-mc if we have a shared secret and PRF input
+            if let Some(auth_data) = self.get_auth_data() {
+                if let Some(e) = ctap2_request.extensions.as_mut() {
+                    e.calculate_hmac_secret_mc(auth_data);
+                }
+            }
+
             // We've already sent out this update, in case we used builtin UV
             // but in all other cases, we need to touch the device now.
             if uv_auth_used
@@ -134,7 +141,7 @@ where
                 op.timeout
             )
         }?;
-        let make_cred = response.into_make_credential_output(op, Some(&get_info_response));
+        let make_cred = response.into_make_credential_output(op, Some(&get_info_response), self.get_auth_data());
         Ok(make_cred)
     }
 
