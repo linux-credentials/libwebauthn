@@ -123,6 +123,11 @@ async fn get_adapter() -> Result<Adapter, Error> {
         .ok_or(Error::PoweredOff)
 }
 
+/// Checks if a Bluetooth adapter is available on the system.
+pub async fn is_available() -> bool {
+    get_adapter().await.is_ok()
+}
+
 async fn discover_properties(
     peripherals: Vec<Peripheral>,
 ) -> Result<Vec<(Peripheral, PeripheralProperties)>, Error> {
