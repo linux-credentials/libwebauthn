@@ -2,7 +2,7 @@ use std::convert::TryInto;
 use std::fmt::{Display, Formatter};
 use std::time::Duration;
 
-use crate::fido::{FidoProtocol, FidoRevision};
+use crate::fido::FidoRevision;
 use crate::proto::ctap1::apdu::{ApduRequest, ApduResponse};
 use crate::proto::ctap2::cbor::{CborRequest, CborResponse};
 use crate::proto::CtapError;
@@ -40,7 +40,7 @@ impl<'a> BleChannel<'a> {
         let (ux_update_sender, _) = broadcast::channel(16);
 
         let revision = revisions
-            .select_protocol(FidoProtocol::U2F)
+            .select_best()
             .ok_or(Error::Transport(TransportError::NegotiationFailed))?;
         let connection = btleplug::connect(&device.btleplug_device.peripheral, &revision)
             .await

@@ -49,6 +49,11 @@ impl SupportedRevisions {
             }
         }
     }
+
+    pub fn select_best(&self) -> Option<FidoRevision> {
+        self.select_protocol(FidoProtocol::FIDO2)
+            .or_else(|| self.select_protocol(FidoProtocol::U2F))
+    }
 }
 
 async fn on_peripheral_service_data(
@@ -240,4 +245,60 @@ async fn discover_services(peripheral: &Peripheral) -> Result<FidoEndpoints, Err
         status,
         service_revision_bitfield,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fido::FidoRevision;
+
+    #[test]
+    fn select_best_prefers_fido2() {
+        let revisions = SupportedRevisions {
+            u2fv11: true,
+            u2fv12: true,
+            v2: true,
+        };
+        assert_eq!(revisions.select_best(), Some(FidoRevision::V2));
+    }
+
+    #[test]
+    fn select_best_falls_back_to_u2f() {
+        let revisions = SupportedRevisions {
+            u2fv11: true,
+            u2fv12: true,
+            v2: false,
+        };
+        assert_eq!(revisions.select_best(), Some(FidoRevision::U2fv12));
+    }
+
+    #[test]
+    fn select_best_falls_back_to_u2fv11() {
+        let revisions = SupportedRevisions {
+            u2fv11: true,
+            u2fv12: false,
+            v2: false,
+        };
+        assert_eq!(revisions.select_best(), Some(FidoRevision::U2fv11));
+    }
+
+    #[test]
+    fn select_best_fido2_only() {
+        let revisions = SupportedRevisions {
+            u2fv11: false,
+            u2fv12: false,
+            v2: true,
+        };
+        assert_eq!(revisions.select_best(), Some(FidoRevision::V2));
+    }
+
+    #[test]
+    fn select_best_none_supported() {
+        let revisions = SupportedRevisions {
+            u2fv11: false,
+            u2fv12: false,
+            v2: false,
+        };
+        assert_eq!(revisions.select_best(), None);
+    }
 }
