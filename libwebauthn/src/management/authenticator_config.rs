@@ -166,23 +166,21 @@ impl Ctap2UserVerifiableRequest for Ctap2AuthenticatorConfigRequest {
         &mut self,
         uv_proto: &dyn PinUvAuthProtocol,
         uv_auth_token: &[u8],
-    ) {
+    ) -> Result<(), Error> {
         // pinUvAuthParam (0x04): the result of calling
         // authenticate(pinUvAuthToken, 32×0xff || 0x0d || uint8(subCommand) || subCommandParams).
         let mut data = vec![0xff; 32];
         data.push(0x0D);
         data.push(self.subcommand as u8);
         if self.subcommand == Ctap2AuthenticatorConfigCommand::SetMinPINLength {
-            data.extend(cbor::to_vec(&self.subcommand_params).unwrap());
+            data.extend(cbor::to_vec(&self.subcommand_params)?);
         }
-        let uv_auth_param = uv_proto.authenticate(uv_auth_token, &data);
+        let uv_auth_param = uv_proto.authenticate(uv_auth_token, &data)?;
         self.protocol = Some(uv_proto.version());
         self.uv_auth_param = Some(ByteBuf::from(uv_auth_param));
+        Ok(())
     }
 
-    fn client_data_hash(&self) -> &[u8] {
-        unreachable!()
-    }
 
     fn permissions(&self) -> Ctap2AuthTokenPermissionRole {
         Ctap2AuthTokenPermissionRole::AUTHENTICATOR_CONFIGURATION

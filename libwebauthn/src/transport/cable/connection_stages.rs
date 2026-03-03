@@ -12,6 +12,7 @@ use super::tunnel::{self, CableTunnelConnectionType, TunnelNoiseState};
 use crate::proto::ctap2::cbor::{CborRequest, CborResponse};
 use crate::transport::ble::btleplug::FidoDevice;
 use crate::transport::error::TransportError;
+use crate::webauthn::error::Error;
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -20,25 +21,25 @@ pub(crate) struct ProximityCheckInput {
 }
 
 impl ProximityCheckInput {
-    pub fn new_for_qr_code(qr_device: &CableQrCodeDevice) -> Self {
+    pub fn new_for_qr_code(qr_device: &CableQrCodeDevice) -> Result<Self, Error> {
         let eid_key: [u8; 64] = derive(
             qr_device.qr_code.qr_secret.as_ref(),
             None,
             KeyPurpose::EIDKey,
-        );
-        Self { eid_key }
+        )?;
+        Ok(Self { eid_key })
     }
 
     pub fn new_for_known_device(
         known_device: &CableKnownDevice,
         client_nonce: &ClientNonce,
-    ) -> Self {
+    ) -> Result<Self, Error> {
         let eid_key: [u8; 64] = derive(
             &known_device.device_info.link_secret,
             Some(client_nonce),
             KeyPurpose::EIDKey,
-        );
-        Self { eid_key }
+        )?;
+        Ok(Self { eid_key })
     }
 }
 
@@ -63,11 +64,12 @@ impl ConnectionInput {
         let tunnel_domain = decode_tunnel_domain_from_advert(&proximity_output.advert)?;
 
         let routing_id_str = hex::encode(proximity_output.advert.routing_id);
-        let tunnel_id = &derive(
+        let tunnel_id_full = derive(
             qr_device.qr_code.qr_secret.as_ref(),
             None,
             KeyPurpose::TunnelID,
-        )[..16];
+        ).map_err(|_| TransportError::InvalidKey)?;
+        let tunnel_id = &tunnel_id_full[..16];
         let tunnel_id_str = hex::encode(tunnel_id);
 
         let connection_type = CableTunnelConnectionType::QrCode {
@@ -126,31 +128,31 @@ impl HandshakeInput {
         qr_device: &CableQrCodeDevice,
         connection_output: ConnectionOutput,
         proximity_output: ProximityCheckOutput,
-    ) -> Self {
+    ) -> Result<Self, Error> {
         let advert_plaintext = &proximity_output.advert.plaintext;
-        let psk = derive_psk(qr_device.qr_code.qr_secret.as_ref(), advert_plaintext);
-        Self {
+        let psk = derive_psk(qr_device.qr_code.qr_secret.as_ref(), advert_plaintext)?;
+        Ok(Self {
             ws_stream: connection_output.ws_stream,
             psk,
             connection_type: connection_output.connection_type,
             tunnel_domain: connection_output.tunnel_domain,
-        }
+        })
     }
 
     pub fn new_for_known_device(
         known_device: &CableKnownDevice,
         connection_output: ConnectionOutput,
         proximity_output: ProximityCheckOutput,
-    ) -> Self {
+    ) -> Result<Self, Error> {
         let link_secret = known_device.device_info.link_secret;
         let advert_plaintext = proximity_output.advert.plaintext;
-        let psk = derive_psk(&link_secret, &advert_plaintext);
-        Self {
+        let psk = derive_psk(&link_secret, &advert_plaintext)?;
+        Ok(Self {
             ws_stream: connection_output.ws_stream,
             psk,
             connection_type: connection_output.connection_type,
             tunnel_domain: connection_output.tunnel_domain,
-        }
+        })
     }
 }
 
@@ -308,10 +310,10 @@ pub(crate) async fn handshake_stage(
     })
 }
 
-fn derive_psk(secret: &[u8], advert_plaintext: &[u8]) -> [u8; 32] {
+fn derive_psk(secret: &[u8], advert_plaintext: &[u8]) -> Result<[u8; 32], Error> {
     let mut psk: [u8; 32] = [0u8; 32];
-    psk.copy_from_slice(&derive(secret, Some(advert_plaintext), KeyPurpose::Psk)[..32]);
-    psk
+    psk.copy_from_slice(&derive(secret, Some(advert_plaintext), KeyPurpose::Psk)?[..32]);
+    Ok(psk)
 }
 
 pub(crate) fn decode_tunnel_domain_from_advert(

@@ -150,7 +150,7 @@ impl BleFrameParser {
             return true;
         }
 
-        self.expected_bytes().unwrap() > self.data_len()
+        self.expected_bytes().unwrap_or(0) > self.data_len()
     }
 
     fn expected_bytes(&self) -> Option<usize> {
@@ -159,7 +159,7 @@ impl BleFrameParser {
         }
 
         let mut cursor = IOCursor::new(vec![self.fragments[0][1], self.fragments[0][2]]);
-        Some(cursor.read_u16::<BigEndian>().unwrap() as usize)
+        Some(cursor.read_u16::<BigEndian>().ok()? as usize)
     }
 
     fn data_len(&self) -> usize {

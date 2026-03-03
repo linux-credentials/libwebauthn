@@ -140,11 +140,10 @@ impl HidMessageParser {
     }
 
     fn more_packets_needed(&self) -> bool {
-        if self.packets.is_empty() {
-            return true;
+        match self.expected_bytes() {
+            None => true,
+            Some(expected) => expected > self.payload_len(),
         }
-
-        self.expected_bytes().unwrap() > self.payload_len()
     }
 
     fn expected_bytes(&self) -> Option<usize> {
@@ -153,7 +152,7 @@ impl HidMessageParser {
         }
 
         let mut cursor = IOCursor::new(vec![self.packets[0][5], self.packets[0][6]]);
-        Some(cursor.read_u16::<BigEndian>().unwrap() as usize)
+        Some(cursor.read_u16::<BigEndian>().ok()? as usize)
     }
 
     fn payload_len(&self) -> usize {

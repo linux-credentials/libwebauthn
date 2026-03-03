@@ -225,16 +225,19 @@ pub async fn connect(
 }
 
 async fn discover_services(peripheral: &Peripheral) -> Result<FidoEndpoints, Error> {
-    let control_point_uuid = Uuid::parse_str(FIDO_CONTROL_POINT_UUID).unwrap();
+    let control_point_uuid =
+        Uuid::parse_str(FIDO_CONTROL_POINT_UUID).or(Err(Error::OperationFailed))?;
     let control_point = get_gatt_characteristic(peripheral, control_point_uuid)?;
 
-    let control_point_length_uuid = Uuid::parse_str(FIDO_CONTROL_POINT_LENGTH_UUID).unwrap();
+    let control_point_length_uuid =
+        Uuid::parse_str(FIDO_CONTROL_POINT_LENGTH_UUID).or(Err(Error::OperationFailed))?;
     let control_point_length = get_gatt_characteristic(peripheral, control_point_length_uuid)?;
 
-    let status_uuid = Uuid::parse_str(FIDO_STATUS_UUID).unwrap();
+    let status_uuid = Uuid::parse_str(FIDO_STATUS_UUID).or(Err(Error::OperationFailed))?;
     let status = get_gatt_characteristic(peripheral, status_uuid)?;
 
-    let service_revision_bitfield_uuid = Uuid::parse_str(FIDO_REVISION_BITFIELD_UUID).unwrap();
+    let service_revision_bitfield_uuid =
+        Uuid::parse_str(FIDO_REVISION_BITFIELD_UUID).or(Err(Error::OperationFailed))?;
     let service_revision_bitfield =
         get_gatt_characteristic(peripheral, service_revision_bitfield_uuid)?;
 

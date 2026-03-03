@@ -33,7 +33,7 @@ impl ApduResponse {
 
     pub fn status(&self) -> Result<ApduResponseStatus, IOError> {
         let mut cursor = IOCursor::new(vec![self.sw1, self.sw2]);
-        let code = cursor.read_u16::<BigEndian>().unwrap() as u16;
+        let code = cursor.read_u16::<BigEndian>()?;
 
         code.try_into().or(Err(IOError::new(
             IOErrorKind::InvalidData,

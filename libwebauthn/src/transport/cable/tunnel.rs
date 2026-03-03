@@ -145,7 +145,10 @@ pub fn decode_tunnel_server_domain(encoded: u16) -> Option<String> {
     hasher.update(&sha_input);
     let digest = hasher.finalize();
 
-    let mut v = u64::from_le_bytes(digest[..8].try_into().unwrap());
+    let mut v = u64::from_le_bytes([
+        digest[0], digest[1], digest[2], digest[3],
+        digest[4], digest[5], digest[6], digest[7],
+    ]);
     let tld_index = v & 3;
     v >>= 2;
 
@@ -355,9 +358,13 @@ pub(crate) async fn do_handshake(
     }
 
     let mut payload = [0u8; 1024];
-    let payload_len = noise_handshake
-        .read_message(&response, &mut payload)
-        .unwrap();
+    let payload_len = match noise_handshake.read_message(&response, &mut payload) {
+        Ok(len) => len,
+        Err(e) => {
+            error!(?e, "Failed to read handshake response message");
+            return Err(TransportError::ConnectionFailed);
+        }
+    };
 
     debug!(
         { handshake = ?payload[..payload_len] },
@@ -762,7 +769,8 @@ fn parse_known_device(
     .raw_secret_bytes()
     .to_vec();
 
-    let mut hmac = Hmac::<Sha256>::new_from_slice(&shared_secret).expect("Any key size is valid");
+    let mut hmac = Hmac::<Sha256>::new_from_slice(&shared_secret)
+        .map_err(|_| Error::Transport(TransportError::InvalidKey))?;
     hmac.update(&noise_state.handshake_hash);
     let expected_mac = hmac.finalize().into_bytes().to_vec();
 

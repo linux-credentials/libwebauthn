@@ -75,7 +75,7 @@ pub struct CableQrCode {
 
 impl std::fmt::Display for CableQrCode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let serialized = cbor::to_vec(&self).unwrap();
+        let serialized = cbor::to_vec(&self).map_err(|_| std::fmt::Error)?;
         write!(f, "FIDO:/{}", digit_encode(&serialized))
     }
 }
@@ -107,7 +107,7 @@ impl CableQrCodeDevice {
     pub fn new_persistent(
         hint: QrCodeOperationHint,
         store: Arc<dyn CableKnownDeviceInfoStore>,
-    ) -> Self {
+    ) -> Result<Self, Error> {
         Self::new(hint, true, Some(store))
     }
 
@@ -115,16 +115,16 @@ impl CableQrCodeDevice {
         hint: QrCodeOperationHint,
         state_assisted: bool,
         store: Option<Arc<dyn CableKnownDeviceInfoStore>>,
-    ) -> Self {
+    ) -> Result<Self, Error> {
         let private_key_scalar = NonZeroScalar::random(&mut OsRng);
-        let private_key = SecretKey::from_bytes(&private_key_scalar.to_bytes()).unwrap();
+        let private_key = SecretKey::from(private_key_scalar);
         let public_key: [u8; 33] = private_key
             .public_key()
             .as_affine()
             .to_encoded_point(true)
             .as_bytes()
             .try_into()
-            .unwrap();
+            .map_err(|_| Error::Transport(TransportError::InvalidKey))?;
         let mut qr_secret = [0u8; 16];
         OsRng.fill_bytes(&mut qr_secret);
 
@@ -133,7 +133,7 @@ impl CableQrCodeDevice {
             .ok()
             .map(|t| t.as_secs());
 
-        Self {
+        Ok(Self {
             qr_code: CableQrCode {
                 public_key: ByteArray::from(public_key),
                 qr_secret: ByteArray::from(qr_secret),
@@ -148,14 +148,14 @@ impl CableQrCodeDevice {
             },
             private_key: private_key_scalar,
             store,
-        }
+        })
     }
 }
 
 impl CableQrCodeDevice {
     /// Generates a QR code, without any known-device store. A device scanning this QR code
     /// will not be persisted.
-    pub fn new_transient(hint: QrCodeOperationHint) -> Self {
+    pub fn new_transient(hint: QrCodeOperationHint) -> Result<Self, Error> {
         Self::new(hint, false, None)
     }
 
@@ -163,9 +163,9 @@ impl CableQrCodeDevice {
     async fn connection(
         qr_device: &CableQrCodeDevice,
         ux_sender: &MpscUxUpdateSender,
-    ) -> Result<super::connection_stages::HandshakeOutput, TransportError> {
+    ) -> Result<super::connection_stages::HandshakeOutput, Error> {
         // Stage 1: Proximity check
-        let proximity_input = ProximityCheckInput::new_for_qr_code(qr_device);
+        let proximity_input = ProximityCheckInput::new_for_qr_code(qr_device)?;
         let proximity_output = proximity_check_stage(proximity_input, ux_sender).await?;
 
         // Stage 2: Connection
@@ -174,7 +174,7 @@ impl CableQrCodeDevice {
 
         // Stage 3: Handshake
         let handshake_input =
-            HandshakeInput::new_for_qr_code(qr_device, connection_output, proximity_output);
+            HandshakeInput::new_for_qr_code(qr_device, connection_output, proximity_output)?;
         let handshake_output = handshake_stage(handshake_input, ux_sender).await?;
 
         Ok(handshake_output)
@@ -210,7 +210,11 @@ impl<'d> Device<'d, Cable, CableChannel> for CableQrCodeDevice {
             let handshake_output = match Self::connection(&qr_device, &ux_sender).await {
                 Ok(handshake_output) => handshake_output,
                 Err(e) => {
-                    ux_sender.send_error(e).await;
+                    let transport_err = match e {
+                        Error::Transport(t) => t,
+                        _ => TransportError::ConnectionFailed,
+                    };
+                    ux_sender.send_error(transport_err).await;
                     return;
                 }
             };
