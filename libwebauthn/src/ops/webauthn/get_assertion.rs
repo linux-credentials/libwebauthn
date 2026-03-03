@@ -33,11 +33,15 @@ use crate::{
 use super::timeout::DEFAULT_TIMEOUT;
 use super::{DowngradableRequest, RelyingPartyId, SignRequest, UserVerificationRequirement};
 
-#[derive(Debug, Default, Clone, Serialize, PartialEq)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PRFValue {
     #[serde(with = "serde_bytes")]
     pub first: [u8; 32],
-    #[serde(skip_serializing_if = "Option::is_none", with = "serde_bytes")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "serde_bytes"
+    )]
     pub second: Option<[u8; 32]>,
 }
 

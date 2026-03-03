@@ -148,7 +148,7 @@ impl UpgradableResponse<MakeCredentialResponse, MakeCredentialRequest> for Regis
             enterprise_attestation: None,
             large_blob_key: None,
         };
-        Ok(resp.into_make_credential_output(request, None))
+        Ok(resp.into_make_credential_output(request, None, None))
     }
 }
 

@@ -2,7 +2,6 @@ use std::time::Duration;
 
 use ctap_types::ctap2::credential_management::CredentialProtectionPolicy as Ctap2CredentialProtectionPolicy;
 use serde::{Deserialize, Serialize};
-use serde_json::{self, Value as JsonValue};
 use sha2::{Digest, Sha256};
 use tracing::{debug, instrument, trace};
 
@@ -214,6 +213,7 @@ impl MakeCredentialsResponseUnsignedExtensions {
         signed_extensions: &Option<Ctap2MakeCredentialsResponseExtensions>,
         request: &MakeCredentialRequest,
         info: Option<&Ctap2GetInfoResponse>,
+        auth_data: Option<&crate::transport::AuthTokenData>,
     ) -> MakeCredentialsResponseUnsignedExtensions {
         let mut hmac_create_secret = None;
         let mut prf = None;
@@ -225,8 +225,26 @@ impl MakeCredentialsResponseUnsignedExtensions {
                     hmac_create_secret = signed_extensions.hmac_secret;
                 }
                 if incoming_ext.prf.is_some() {
+                    // Decrypt hmac-secret-mc output if available
+                    let mc_results = signed_extensions.hmac_secret_mc.as_ref().and_then(|x| {
+                        if let Some(auth_data) = auth_data {
+                            let uv_proto = auth_data.protocol_version.create_protocol_object();
+                            x.decrypt_output(&auth_data.shared_secret, &uv_proto)
+                        } else {
+                            None
+                        }
+                    });
+
+                    let results = mc_results.map(|decrypted| {
+                        super::PRFValue {
+                            first: decrypted.output1,
+                            second: decrypted.output2,
+                        }
+                    });
+
                     prf = Some(MakeCredentialPrfOutput {
                         enabled: signed_extensions.hmac_secret,
+                        results,
                     });
                 }
             }
@@ -444,19 +462,20 @@ impl WebAuthnIDL<MakeCredentialRequestParsingError> for MakeCredentialRequest {
     type IdlModel = PublicKeyCredentialCreationOptionsJSON;
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
 pub struct MakeCredentialPrfInput {
-    /// The `eval` field is parsed but not used during credential creation.
-    /// PRF evaluation only occurs during assertion (getAssertion), not registration.
-    /// We parse it here to accept valid WebAuthn JSON input without errors.
-    #[serde(rename = "eval")]
-    pub _eval: Option<JsonValue>,
+    /// PRF eval values for hmac-secret-mc (CTAP 2.2).
+    /// At MC time, only a single eval value is supported (no eval_by_credential).
+    #[serde(default)]
+    pub eval: Option<super::PRFValue>,
 }
 
 #[derive(Debug, Default, Clone, Serialize, PartialEq)]
 pub struct MakeCredentialPrfOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub results: Option<super::PRFValue>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -765,15 +784,38 @@ mod tests {
         let req_json = json_field_add(
             REQUEST_BASE_JSON,
             "extensions",
-            r#"{"prf": {"eval": {"first": "second"}}}"#,
+            r#"{"prf": {}}"#,
         );
 
         let req: MakeCredentialRequest =
             MakeCredentialRequest::from_json(&rpid, &req_json).unwrap();
         assert!(matches!(
             req.extensions,
-            Some(MakeCredentialsRequestExtensions { prf: Some(_), .. })
+            Some(MakeCredentialsRequestExtensions {
+                prf: Some(MakeCredentialPrfInput { eval: None }),
+                ..
+            })
         ));
+    }
+
+    #[test]
+    fn test_request_from_json_prf_extension_with_eval() {
+        let rpid = RelyingPartyId::try_from("example.org").unwrap();
+        // PRF eval values as JSON arrays of bytes (serde_bytes format)
+        let first_bytes = (1..=32)
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        let eval_json = format!(r#"{{"prf": {{"eval": {{"first": [{}]}}}}}}"#, first_bytes);
+        let req_json = json_field_add(REQUEST_BASE_JSON, "extensions", &eval_json);
+
+        let req: MakeCredentialRequest =
+            MakeCredentialRequest::from_json(&rpid, &req_json).unwrap();
+        let prf = req.extensions.unwrap().prf.unwrap();
+        assert!(prf.eval.is_some());
+        let eval = prf.eval.unwrap();
+        assert_eq!(eval.first, (1..=32).collect::<Vec<u8>>().as_slice());
+        assert!(eval.second.is_none());
     }
 
     #[test]
@@ -1023,6 +1065,7 @@ mod tests {
             large_blob: None,
             prf: Some(MakeCredentialPrfOutput {
                 enabled: Some(true),
+                results: None,
             }),
         };
 
