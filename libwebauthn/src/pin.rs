@@ -225,7 +225,7 @@ impl PinUvAuthProtocol for PinUvAuthProtocolOne {
     fn decrypt(&self, key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, Error> {
         // If the size of demCiphertext is not a multiple of the AES block length, return error.
         // Otherwise return the AES-256-CBC decryption of demCiphertext using an all-zero IV.
-        if ciphertext.len() % 16 != 0 {
+        if !ciphertext.len().is_multiple_of(16) {
             error!(
                 ?ciphertext,
                 "Ciphertext length is not a multiple of AES block length"
