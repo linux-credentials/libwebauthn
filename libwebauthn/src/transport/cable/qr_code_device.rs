@@ -73,10 +73,10 @@ pub struct CableQrCode {
     pub supports_non_discoverable_mc: Option<bool>,
 }
 
-impl ToString for CableQrCode {
-    fn to_string(&self) -> String {
+impl std::fmt::Display for CableQrCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let serialized = cbor::to_vec(&self).unwrap();
-        format!("FIDO:/{}", digit_encode(&serialized))
+        write!(f, "FIDO:/{}", digit_encode(&serialized))
     }
 }
 
@@ -126,7 +126,7 @@ impl CableQrCodeDevice {
             .try_into()
             .unwrap();
         let mut qr_secret = [0u8; 16];
-        OsRng::default().fill_bytes(&mut qr_secret);
+        OsRng.fill_bytes(&mut qr_secret);
 
         let current_unix_time = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)

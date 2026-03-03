@@ -215,7 +215,7 @@ impl UpgradableResponse<GetAssertionResponse, SignRequest> for SignResponse {
             } else {
                 UserVerificationRequirement::Preferred
             },
-            timeout: request.timeout.clone(),
+            timeout: request.timeout,
         };
         let upgraded_response = [response.into_assertion_output(&orig_request, None)]
             .as_slice()

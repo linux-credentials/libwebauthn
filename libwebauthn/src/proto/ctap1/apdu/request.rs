@@ -15,6 +15,8 @@ const U2F_REGISTER: u8 = 0x01;
 const U2F_AUTHENTICATE: u8 = 0x02;
 const U2F_VERSION: u8 = 0x03;
 
+const CLA: u8 = 0x00;
+
 const _CONTROL_BYTE_CHECK_ONLY: u8 = 0x07;
 const CONTROL_BYTE_ENFORCE_UP_AND_SIGN: u8 = 0x03;
 const CONTROL_BYTE_DONT_ENFORCE_UP_AND_SIGN: u8 = 0x08;
@@ -40,21 +42,13 @@ impl ApduRequest {
             ins,
             p1,
             p2,
-            data: if let Some(bytes) = data {
-                Some(Vec::from(bytes))
-            } else {
-                None
-            },
+            data: data.map(Vec::from),
             response_max_length,
         }
     }
 
     pub fn raw_short(&self) -> Result<Vec<u8>, IOError> {
-        let mut raw: Vec<u8> = Vec::new();
-        raw.push(0x00); // CLA
-        raw.push(self.ins);
-        raw.push(self.p1);
-        raw.push(self.p2);
+        let mut raw: Vec<u8> = vec![CLA, self.ins, self.p1, self.p2];
 
         if let Some(data) = &self.data {
             if data.len() > APDU_SHORT_MAX_DATA {
@@ -65,7 +59,7 @@ impl ApduRequest {
                         data.len()
                     ),
                 ));
-            } else if data.len() == 0 {
+            } else if data.is_empty() {
                 return Err(IOError::new(
                     IOErrorKind::InvalidData,
                     "Cannot serialize an empty payload.",
@@ -94,11 +88,7 @@ impl ApduRequest {
     }
 
     pub fn raw_long(&self) -> Result<Vec<u8>, IOError> {
-        let mut raw: Vec<u8> = Vec::new();
-        raw.push(0x00); // CLA
-        raw.push(self.ins);
-        raw.push(self.p1);
-        raw.push(self.p2);
+        let mut raw: Vec<u8> = vec![CLA, self.ins, self.p1, self.p2];
 
         if let Some(data) = &self.data {
             if data.len() > APDI_LONG_MAX_DATA {

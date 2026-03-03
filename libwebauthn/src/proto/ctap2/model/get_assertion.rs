@@ -144,7 +144,7 @@ impl Ctap2GetAssertionRequest {
     ) -> bool {
         extensions
             .as_ref()
-            .map_or(true, |extensions| extensions.skip_serializing())
+            .is_none_or(|extensions| extensions.skip_serializing())
     }
 
     pub(crate) fn from_webauthn_request(
@@ -419,7 +419,7 @@ impl Ctap2UserVerifiableRequest for Ctap2GetAssertionRequest {
 
     fn calculate_and_set_uv_auth(
         &mut self,
-        uv_proto: &Box<dyn PinUvAuthProtocol>,
+        uv_proto: &dyn PinUvAuthProtocol,
         uv_auth_token: &[u8],
     ) {
         let uv_auth_param = uv_proto.authenticate(uv_auth_token, self.client_data_hash());
@@ -514,7 +514,7 @@ impl Ctap2GetAssertionResponseExtensions {
         let decrypted_hmac = self.hmac_secret.as_ref().and_then(|x| {
             if let Some(auth_data) = auth_data {
                 let uv_proto = auth_data.protocol_version.create_protocol_object();
-                x.decrypt_output(&auth_data.shared_secret, &uv_proto)
+                x.decrypt_output(&auth_data.shared_secret, uv_proto.as_ref())
             } else {
                 None
             }
@@ -536,23 +536,18 @@ impl Ctap2GetAssertionResponseExtensions {
         });
 
         // LargeBlobs was requested
-        let large_blob = match request
+        let large_blob = request
             .extensions
             .as_ref()
             .and_then(|ext| ext.large_blob.as_ref())
-        {
-            None => None,
-            Some(GetAssertionLargeBlobExtension::Read) => {
-                Some(GetAssertionLargeBlobExtensionOutput {
-                    blob: response
-                        .large_blob_key
-                        .as_ref()
-                        .map(|x| x.clone().into_vec()),
-                    // Not yet supported
-                    // written: None,
-                })
-            }
-        };
+            .map(|_| GetAssertionLargeBlobExtensionOutput {
+                blob: response
+                    .large_blob_key
+                    .as_ref()
+                    .map(|x| x.clone().into_vec()),
+                // Not yet supported
+                // written: None,
+            });
 
         GetAssertionResponseUnsignedExtensions {
             hmac_get_secret: None,

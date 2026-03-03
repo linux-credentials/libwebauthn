@@ -16,6 +16,7 @@ pub mod mock;
 pub mod virt;
 
 mod channel;
+#[allow(clippy::module_inception)]
 mod transport;
 
 pub(crate) use channel::{AuthTokenData, Ctap2AuthTokenPermission};

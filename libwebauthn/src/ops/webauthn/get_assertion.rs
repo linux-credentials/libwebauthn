@@ -107,7 +107,6 @@ impl WebAuthnIDL<GetAssertionRequestParsingError> for GetAssertionRequest {
     sequence<DOMString>                                     hints = [];
     AuthenticationExtensionsClientInputsJSON                extensions;
 }; */
-
 impl FromIdlModel<PublicKeyCredentialRequestOptionsJSON, GetAssertionRequestParsingError>
     for GetAssertionRequest
 {
@@ -342,7 +341,7 @@ impl Ctap2HMACGetSecretOutput {
     pub(crate) fn decrypt_output(
         &self,
         shared_secret: &[u8],
-        uv_proto: &Box<dyn PinUvAuthProtocol>,
+        uv_proto: &dyn PinUvAuthProtocol,
     ) -> Option<HMACGetSecretOutput> {
         let output = match uv_proto.decrypt(shared_secret, &self.encrypted_output) {
             Ok(o) => o,
@@ -642,7 +641,7 @@ mod tests {
     #[test]
     fn test_request_from_json_invalid_rp_id() {
         let rpid = RelyingPartyId::try_from("example.org").unwrap();
-        let req_json = json_field_add(&REQUEST_BASE_JSON, "rpId", r#""example.org.""#);
+        let req_json = json_field_add(REQUEST_BASE_JSON, "rpId", r#""example.org.""#);
 
         let result = GetAssertionRequest::from_json(&rpid, &req_json);
         assert!(matches!(
@@ -654,7 +653,7 @@ mod tests {
     #[test]
     fn test_request_from_json_mismatching_rp_id() {
         let rpid = RelyingPartyId::try_from("example.org").unwrap();
-        let req_json = json_field_add(&REQUEST_BASE_JSON, "rpId", r#""other.example.org""#);
+        let req_json = json_field_add(REQUEST_BASE_JSON, "rpId", r#""other.example.org""#);
 
         let result = GetAssertionRequest::from_json(&rpid, &req_json);
         assert!(matches!(

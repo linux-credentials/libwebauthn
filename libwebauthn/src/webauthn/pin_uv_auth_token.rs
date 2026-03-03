@@ -74,7 +74,7 @@ where
             ctap2_request.permissions_rpid(),
         );
         if let Some(uv_auth_token) = channel.get_uv_auth_token(&token_identifier) {
-            ctap2_request.calculate_and_set_uv_auth(&uv_proto, uv_auth_token);
+            ctap2_request.calculate_and_set_uv_auth(uv_proto.as_ref(), uv_auth_token);
             return Ok(UsedPinUvAuthToken::FromStorage);
         }
     }
@@ -214,7 +214,7 @@ where
 
         // In preparation for obtaining pinUvAuthToken, the platform:
         // * Obtains a shared secret.
-        let (public_key, shared_secret) = obtain_shared_secret(channel, &uv_proto, timeout).await?;
+        let (public_key, shared_secret) = obtain_shared_secret(channel, uv_proto.as_ref(), timeout).await?;
 
         // Then the platform obtains a pinUvAuthToken from the authenticator, with the mc (and likely also with the ga)
         // permission (see "pre-flight", mentioned above), using the selected operation.
@@ -349,7 +349,7 @@ where
                 // If successful, the platform creates the pinUvAuthParam parameter by calling
                 // authenticate(pinUvAuthToken, clientDataHash), and goes to Step 1.1.1.
                 // Sets the pinUvAuthProtocol parameter to the value as selected when it obtained the shared secret.
-                ctap2_request.calculate_and_set_uv_auth(&uv_proto, uv_auth_token.as_slice());
+                ctap2_request.calculate_and_set_uv_auth(uv_proto.as_ref(), uv_auth_token.as_slice());
 
                 Ok(UsedPinUvAuthToken::NewlyCalculated(uv_operation))
             }
@@ -359,7 +359,7 @@ where
 
 pub(crate) async fn obtain_shared_secret<C>(
     channel: &mut C,
-    pin_proto: &Box<dyn PinUvAuthProtocol>,
+    pin_proto: &dyn PinUvAuthProtocol,
     timeout: Duration,
 ) -> Result<(PublicKey, Vec<u8>), Error>
 where

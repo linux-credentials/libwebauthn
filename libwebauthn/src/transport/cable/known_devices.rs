@@ -93,7 +93,7 @@ pub struct CableKnownDeviceInfo {
 
 impl From<&CableLinkingInfo> for CableKnownDeviceId {
     fn from(linking_info: &CableLinkingInfo) -> Self {
-        hex::encode(&linking_info.authenticator_public_key)
+        hex::encode(linking_info.authenticator_public_key.as_slice())
     }
 }
 
@@ -136,7 +136,7 @@ impl Display for CableKnownDevice {
             f,
             "{} ({})",
             &self.device_info.name,
-            hex::encode(&self.device_info.public_key)
+            hex::encode(self.device_info.public_key)
         )
     }
 }
@@ -153,7 +153,7 @@ impl CableKnownDevice {
         let device = CableKnownDevice {
             hint,
             device_info: device_info.clone(),
-            store: store,
+            store,
         };
         Ok(device)
     }

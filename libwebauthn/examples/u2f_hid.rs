@@ -47,7 +47,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         // Registration ceremony
         println!("Registration request sent (timeout: {:?}).", TIMEOUT);
         let register_request =
-            RegisterRequest::new_u2f_v2(&APP_ID, &challenge, vec![], TIMEOUT, false);
+            RegisterRequest::new_u2f_v2(APP_ID, challenge, vec![], TIMEOUT, false);
 
         let state_recv = channel.get_ux_update_receiver();
         tokio::spawn(handle_updates(state_recv));
@@ -59,7 +59,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         println!("Signature request sent (timeout: {:?} seconds).", TIMEOUT);
         let new_key = response.as_registered_key()?;
         let sign_request =
-            SignRequest::new(&APP_ID, &challenge, &new_key.key_handle, TIMEOUT, true);
+            SignRequest::new(APP_ID, challenge, &new_key.key_handle, TIMEOUT, true);
         let response = channel.u2f_sign(&sign_request).await?;
         println!("Response: {:?}", response);
     }

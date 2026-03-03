@@ -119,7 +119,7 @@ async fn get_adapter() -> Result<Adapter, Error> {
         .await
         .or(Err(Error::Unavailable))?
         .into_iter()
-        .nth(0)
+        .next()
         .ok_or(Error::PoweredOff)
 }
 
@@ -151,8 +151,7 @@ pub async fn list_fido_devices() -> Result<Vec<FidoDevice>, Error> {
         .filter(|p| {
             p.services()
                 .iter()
-                .find(|s| s.uuid == FIDO_PROFILE_UUID)
-                .is_some()
+                .any(|s| s.uuid == FIDO_PROFILE_UUID)
         })
         .collect();
     let with_properties = discover_properties(peripherals)
@@ -190,7 +189,7 @@ pub async fn supported_fido_revisions(
         .read(&services.service_revision_bitfield)
         .await
         .or(Err(Error::ConnectionFailed))?;
-    let bitfield = revision.iter().next().ok_or(Error::OperationFailed)?;
+    let bitfield = revision.first().ok_or(Error::OperationFailed)?;
     debug!(?revision, "Supported revision bitfield");
 
     let supported = SupportedRevisions {

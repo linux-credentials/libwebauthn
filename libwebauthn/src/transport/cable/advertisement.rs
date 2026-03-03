@@ -65,7 +65,7 @@ pub(crate) async fn await_advertisement(
         };
 
         trace!(?device, ?data, ?eid_key);
-        let Some(decrypted) = trial_decrypt_advert(&eid_key, &data) else {
+        let Some(decrypted) = trial_decrypt_advert(eid_key, &data) else {
             warn!(?device, "Trial decrypt failed, ignoring");
             continue;
         };

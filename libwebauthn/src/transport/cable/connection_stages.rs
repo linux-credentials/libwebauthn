@@ -62,13 +62,13 @@ impl ConnectionInput {
     ) -> Result<Self, TransportError> {
         let tunnel_domain = decode_tunnel_domain_from_advert(&proximity_output.advert)?;
 
-        let routing_id_str = hex::encode(&proximity_output.advert.routing_id);
+        let routing_id_str = hex::encode(proximity_output.advert.routing_id);
         let tunnel_id = &derive(
             qr_device.qr_code.qr_secret.as_ref(),
             None,
             KeyPurpose::TunnelID,
         )[..16];
-        let tunnel_id_str = hex::encode(&tunnel_id);
+        let tunnel_id_str = hex::encode(tunnel_id);
 
         let connection_type = CableTunnelConnectionType::QrCode {
             routing_id: routing_id_str,
@@ -310,7 +310,7 @@ pub(crate) async fn handshake_stage(
 
 fn derive_psk(secret: &[u8], advert_plaintext: &[u8]) -> [u8; 32] {
     let mut psk: [u8; 32] = [0u8; 32];
-    psk.copy_from_slice(&derive(secret, Some(advert_plaintext), KeyPurpose::PSK)[..32]);
+    psk.copy_from_slice(&derive(secret, Some(advert_plaintext), KeyPurpose::Psk)[..32]);
     psk
 }
 

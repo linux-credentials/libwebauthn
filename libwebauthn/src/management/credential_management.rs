@@ -276,7 +276,7 @@ impl Ctap2UserVerifiableRequest for Ctap2CredentialManagementRequest {
 
     fn calculate_and_set_uv_auth(
         &mut self,
-        uv_proto: &Box<dyn PinUvAuthProtocol>,
+        uv_proto: &dyn PinUvAuthProtocol,
         uv_auth_token: &[u8],
     ) {
         let mut data = vec![self.subcommand.unwrap() as u8];
@@ -295,7 +295,7 @@ impl Ctap2UserVerifiableRequest for Ctap2CredentialManagementRequest {
     }
 
     fn permissions(&self) -> Ctap2AuthTokenPermissionRole {
-        return Ctap2AuthTokenPermissionRole::CREDENTIAL_MANAGEMENT;
+        Ctap2AuthTokenPermissionRole::CREDENTIAL_MANAGEMENT
     }
 
     fn permissions_rpid(&self) -> Option<&str> {

@@ -109,7 +109,7 @@ impl Ctap2MakeCredentialRequest {
     }
 
     pub fn skip_serializing_options(options: &Option<Ctap2MakeCredentialOptions>) -> bool {
-        options.map_or(true, |options| options.skip_serializing())
+        options.is_none_or(|options| options.skip_serializing())
     }
 
     pub fn skip_serializing_extensions(
@@ -117,7 +117,7 @@ impl Ctap2MakeCredentialRequest {
     ) -> bool {
         extensions
             .as_ref()
-            .map_or(true, |extensions| extensions.skip_serializing())
+            .is_none_or(|extensions| extensions.skip_serializing())
     }
 
     pub(crate) fn from_webauthn_request(
@@ -329,7 +329,7 @@ impl Ctap2UserVerifiableRequest for Ctap2MakeCredentialRequest {
 
     fn calculate_and_set_uv_auth(
         &mut self,
-        uv_proto: &Box<dyn PinUvAuthProtocol>,
+        uv_proto: &dyn PinUvAuthProtocol,
         uv_auth_token: &[u8],
     ) {
         let uv_auth_param = uv_proto.authenticate(uv_auth_token, self.client_data_hash());

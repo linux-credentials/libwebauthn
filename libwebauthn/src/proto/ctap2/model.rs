@@ -214,7 +214,7 @@ pub trait Ctap2UserVerifiableRequest {
     fn ensure_uv_set(&mut self);
     fn calculate_and_set_uv_auth(
         &mut self,
-        uv_proto: &Box<dyn PinUvAuthProtocol>,
+        uv_proto: &dyn PinUvAuthProtocol,
         uv_auth_token: &[u8],
     );
     fn client_data_hash(&self) -> &[u8];

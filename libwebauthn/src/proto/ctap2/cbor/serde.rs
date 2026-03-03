@@ -33,7 +33,7 @@ where
     R: std::io::Read,
 {
     let mut deserializer = serde_cbor::Deserializer::from_reader(reader);
-    return T::deserialize(&mut deserializer).map_err(CborError::from);
+    T::deserialize(&mut deserializer).map_err(CborError::from)
 }
 
 pub(crate) fn from_slice<T>(slice: &[u8]) -> Result<T, CborError>
