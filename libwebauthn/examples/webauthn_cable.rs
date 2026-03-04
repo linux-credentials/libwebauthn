@@ -4,8 +4,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use libwebauthn::pin::PinRequestReason;
-use libwebauthn::transport::cable::is_available;
 use libwebauthn::transport::cable::channel::{CableUpdate, CableUxUpdate};
+use libwebauthn::transport::cable::is_available;
 use libwebauthn::transport::cable::known_devices::{
     CableKnownDevice, ClientPayloadHint, EphemeralDeviceInfoStore,
 };

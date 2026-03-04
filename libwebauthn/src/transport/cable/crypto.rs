@@ -85,7 +85,9 @@ mod tests {
             .try_into()
             .unwrap();
         let salt = hex::decode("ffeeddccbbaa998877665544332211").unwrap();
-        let output = derive(&input, Some(&salt), KeyPurpose::EIDKey).unwrap().to_vec();
+        let output = derive(&input, Some(&salt), KeyPurpose::EIDKey)
+            .unwrap()
+            .to_vec();
         let expected = hex::decode("168cf3dd220a7907f8bac30f559be92a3b6d937fe5594beeaf1e50e35976b7d654dd550e22ae4c801b9d1cdbf0d2b1472daa1328661eb889acae3023b7ffa509").unwrap();
         assert_eq!(output, expected);
     }

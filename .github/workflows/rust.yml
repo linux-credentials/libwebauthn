@@ -21,6 +21,8 @@ jobs:
         run: sudo apt-get install libudev-dev libdbus-1-dev libsodium-dev libnfc-dev libpcsclite-dev
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Check formatting
+        run: cargo fmt -- --check
       - name: Build
         run: cargo build --all-targets --all-features
       - name: Run tests

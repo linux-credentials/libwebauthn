@@ -181,7 +181,6 @@ impl Ctap2UserVerifiableRequest for Ctap2AuthenticatorConfigRequest {
         Ok(())
     }
 
-
     fn permissions(&self) -> Ctap2AuthTokenPermissionRole {
         Ctap2AuthTokenPermissionRole::AUTHENTICATOR_CONFIGURATION
     }

@@ -153,11 +153,7 @@ pub async fn list_fido_devices() -> Result<Vec<FidoDevice>, Error> {
         .await
         .or(Err(Error::ConnectionFailed))?
         .into_iter()
-        .filter(|p| {
-            p.services()
-                .iter()
-                .any(|s| s.uuid == FIDO_PROFILE_UUID)
-        })
+        .filter(|p| p.services().iter().any(|s| s.uuid == FIDO_PROFILE_UUID))
         .collect();
     let with_properties = discover_properties(peripherals)
         .await?

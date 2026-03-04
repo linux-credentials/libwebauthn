@@ -467,8 +467,7 @@ impl Channel for HidChannel<'_> {
         self.status
     }
 
-    async fn close(&mut self) {
-    }
+    async fn close(&mut self) {}
 
     async fn apdu_send(
         &mut self,

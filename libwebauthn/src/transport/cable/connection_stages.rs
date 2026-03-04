@@ -68,7 +68,8 @@ impl ConnectionInput {
             qr_device.qr_code.qr_secret.as_ref(),
             None,
             KeyPurpose::TunnelID,
-        ).map_err(|_| TransportError::InvalidKey)?;
+        )
+        .map_err(|_| TransportError::InvalidKey)?;
         let tunnel_id = &tunnel_id_full[..16];
         let tunnel_id_str = hex::encode(tunnel_id);
 
