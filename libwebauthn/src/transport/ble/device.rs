@@ -15,6 +15,11 @@ use super::btleplug::{supported_fido_revisions, FidoDevice as BtleplugFidoDevice
 use super::channel::BleChannel;
 use super::{btleplug, Ble};
 
+/// Checks if a Bluetooth adapter is available on the system.
+pub async fn is_available() -> bool {
+    btleplug::is_available().await
+}
+
 #[instrument]
 pub async fn list_devices() -> Result<Vec<BleDevice>, Error> {
     let devices: Vec<_> = btleplug::list_fido_devices()
