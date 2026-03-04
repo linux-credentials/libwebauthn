@@ -200,7 +200,7 @@ impl std::fmt::Debug for CableTunnelConnectionType {
     }
 }
 
-pub(crate) async fn connect<'d>(
+pub(crate) async fn connect(
     tunnel_domain: &str,
     connection_type: &CableTunnelConnectionType,
 ) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>, TransportError> {
@@ -235,7 +235,7 @@ pub(crate) async fn connect<'d>(
             cbor::to_vec(client_payload).or(Err(TransportError::InvalidEndpoint))?;
         request.headers_mut().insert(
             "X-caBLE-Client-Payload",
-            hex::encode(&client_payload)
+            hex::encode(client_payload)
                 .parse()
                 .or(Err(TransportError::InvalidEndpoint))?,
         );
@@ -285,7 +285,7 @@ pub(crate) async fn do_handshake(
             ..
         } => Builder::new("Noise_NKpsk0_P256_AESGCM_SHA256".parse()?)
             .prologue(CABLE_PROLOGUE_STATE_ASSISTED)?
-            .remote_public_key(&authenticator_public_key)?
+            .remote_public_key(authenticator_public_key)?
             .psk(0, &psk)?
             .build_initiator(),
     };
@@ -581,7 +581,7 @@ async fn connection_recv_update(message: &[u8]) -> Result<Option<CableLinkingInf
     // TODO(#66): Android adds a 999-key to the end the message, which is not part of the standard.
     // For now, we parse the message to a map and manuually import fields.
 
-    let update_message: BTreeMap<Value, Value> = match serde_cbor::from_slice(&message) {
+    let update_message: BTreeMap<Value, Value> = match serde_cbor::from_slice(message) {
         Ok(update_message) => update_message,
         Err(e) => {
             error!(?e, "Failed to decode update message");
@@ -708,7 +708,7 @@ async fn connection_recv(
                         private_key,
                         tunnel_domain,
                         &linking_info,
-                        &noise_state,
+                        noise_state,
                     ) {
                         Ok(known_device) => {
                             debug!(?device_id, "Updating known device");

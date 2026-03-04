@@ -95,6 +95,12 @@ pub struct PinUvAuthProtocolOne {
     public_key: P256PublicKey,
 }
 
+impl Default for PinUvAuthProtocolOne {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PinUvAuthProtocolOne {
     pub fn new() -> Self {
         let private_key = if cfg!(test) {
@@ -219,7 +225,7 @@ impl PinUvAuthProtocol for PinUvAuthProtocolOne {
     fn decrypt(&self, key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, Error> {
         // If the size of demCiphertext is not a multiple of the AES block length, return error.
         // Otherwise return the AES-256-CBC decryption of demCiphertext using an all-zero IV.
-        if ciphertext.len() % 16 != 0 {
+        if !ciphertext.len().is_multiple_of(16) {
             error!(
                 ?ciphertext,
                 "Ciphertext length is not a multiple of AES block length"
@@ -250,6 +256,12 @@ impl PinUvAuthProtocol for PinUvAuthProtocolOne {
 pub struct PinUvAuthProtocolTwo {
     private_key: EphemeralSecret,
     public_key: P256PublicKey,
+}
+
+impl Default for PinUvAuthProtocolTwo {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl PinUvAuthProtocolTwo {
@@ -375,7 +387,7 @@ pub fn hmac_sha256(key: &[u8], message: &[u8]) -> Vec<u8> {
 }
 
 pub fn hkdf_sha256(salt: Option<&[u8]>, ikm: &[u8], info: &[u8]) -> Vec<u8> {
-    let hk = Hkdf::<Sha256>::new(salt, &ikm);
+    let hk = Hkdf::<Sha256>::new(salt, ikm);
     let mut okm = [0u8; 32]; // fixed L = 32
     hk.expand(info, &mut okm)
         .expect("32 is a valid length for Sha256 to output");
@@ -396,13 +408,13 @@ where
         let get_info_response = self.ctap2_get_info().await?;
 
         // If the minPINLength member of the authenticatorGetInfo response is absent, then let platformMinPINLengthInCodePoints be 4.
-        if new_pin.as_bytes().len() < get_info_response.min_pin_length.unwrap_or(4) as usize {
+        if new_pin.len() < get_info_response.min_pin_length.unwrap_or(4) as usize {
             // If platformCollectedPinLengthInCodePoints is less than platformMinPINLengthInCodePoints then the platform SHOULD display a "PIN too short" error message to the user.
             return Err(Error::Platform(PlatformError::PinTooShort));
         }
 
         // If the byte length of "newPin" is greater than the max UTF-8 representation limit of 63 bytes, then the platform SHOULD display a "PIN too long" error message to the user.
-        if new_pin.as_bytes().len() >= 64 {
+        if new_pin.len() >= 64 {
             return Err(Error::Platform(PlatformError::PinTooLong));
         }
 
@@ -441,7 +453,7 @@ where
 
         // In preparation for obtaining pinUvAuthToken, the platform:
         // * Obtains a shared secret.
-        let (public_key, shared_secret) = obtain_shared_secret(self, &uv_proto, timeout).await?;
+        let (public_key, shared_secret) = obtain_shared_secret(self, uv_proto.as_ref(), timeout).await?;
 
         // paddedPin is newPin padded on the right with 0x00 bytes to make it 64 bytes long. (Since the maximum length of newPin is 63 bytes, there is always at least one byte of padding.)
         let mut padded_new_pin = new_pin.as_bytes().to_vec();

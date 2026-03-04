@@ -22,7 +22,7 @@ pub struct PcscCard {
     pub card: Option<pcsc::Card>,
 }
 
-impl<'tx> Deref for PcscCard {
+impl Deref for PcscCard {
     type Target = pcsc::Card;
 
     fn deref(&self) -> &pcsc::Card {
@@ -114,7 +114,7 @@ impl Channel {
 }
 
 impl fmt::Display for Channel {
-    fn fmt(&self, f: &mut fmt::Formatter) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
         let card = self.card.lock().unwrap();
         let (names_len, atr_len) = card.status2_len().unwrap();
         let mut names_buf = vec![0; names_len];

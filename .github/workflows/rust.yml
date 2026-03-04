@@ -18,12 +18,10 @@ jobs:
       - name: Update apt cache
         run: sudo apt-get update
       - name: Install system dependencies
-        run: sudo apt-get install libudev-dev libdbus-1-dev libsodium-dev
+        run: sudo apt-get install libudev-dev libdbus-1-dev libsodium-dev libnfc-dev libpcsclite-dev
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
       - name: Build
-        run: cargo build
+        run: cargo build --all-targets --all-features
       - name: Run tests
         run: cargo test --verbose
-      - name: Install nfc dependencies
-        run: sudo apt-get install libnfc-dev libpcsclite-dev
-      - name: Build with nfc-support
-        run: cargo build --features libnfc,pcsc

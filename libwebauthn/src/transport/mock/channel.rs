@@ -21,6 +21,12 @@ pub struct MockChannel {
     ux_update_sender: broadcast::Sender<UvUpdate>,
 }
 
+impl Default for MockChannel {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MockChannel {
     pub fn new() -> Self {
         let (ux_update_sender, _) = broadcast::channel(16);

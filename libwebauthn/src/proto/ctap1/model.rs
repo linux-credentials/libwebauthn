@@ -182,7 +182,7 @@ impl Ctap1SignRequest {
         let app_id_hash = hasher.finalize().to_vec();
 
         Ctap1SignRequest {
-            app_id_hash: app_id_hash,
+            app_id_hash,
             challenge: Vec::from(challenge),
             key_handle: Vec::from(key_handle),
             timeout,
@@ -208,6 +208,12 @@ impl Ctap1SignRequest {
 
 #[derive(Debug)]
 pub struct Ctap1VersionRequest {}
+
+impl Default for Ctap1VersionRequest {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl Ctap1VersionRequest {
     pub fn new() -> Ctap1VersionRequest {
@@ -279,10 +285,7 @@ impl TryFrom<ApduResponse> for Ctap1SignResponse {
         ))?;
 
         let mut cursor = IOCursor::new(data);
-        let user_presence_verified = match cursor.read_u8()? {
-            0x01 => true,
-            _ => false,
-        };
+        let user_presence_verified = cursor.read_u8()? == 0x01;
         let counter = cursor.read_u32::<BigEndian>()?;
 
         let mut signature = vec![];

@@ -108,8 +108,8 @@ where
     }
 }
 
-async fn send_apdu_request_wait_uv<'c, C: Channel>(
-    channel: &'c mut C,
+async fn send_apdu_request_wait_uv<C: Channel>(
+    channel: &mut C,
     request: &ApduRequest,
     timeout: Duration,
 ) -> Result<ApduResponse, Error> {

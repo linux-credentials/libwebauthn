@@ -59,9 +59,9 @@ impl From<&BtleplugFidoDevice> for BleDevice {
     }
 }
 
-impl Into<BtleplugFidoDevice> for &BleDevice {
-    fn into(self) -> BtleplugFidoDevice {
-        self.btleplug_device.clone()
+impl From<&BleDevice> for BtleplugFidoDevice {
+    fn from(device: &BleDevice) -> Self {
+        device.btleplug_device.clone()
     }
 }
 

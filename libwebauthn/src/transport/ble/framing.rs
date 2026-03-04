@@ -47,7 +47,7 @@ impl BleFrame {
         }
 
         let length = self.data.len() as u16;
-        let mut message = self.data.as_slice().into_iter().cloned().peekable();
+        let mut message = self.data.as_slice().iter().cloned().peekable();
         let mut fragments = vec![];
 
         // Initial fragment
@@ -89,13 +89,19 @@ pub struct BleFrameParser {
     fragments: Vec<Vec<u8>>,
 }
 
+impl Default for BleFrameParser {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BleFrameParser {
     pub fn new() -> Self {
         Self { fragments: vec![] }
     }
 
     pub fn update(&mut self, fragment: &[u8]) -> Result<BleFrameParserResult, IOError> {
-        if (self.fragments.len() == 0 && fragment.len() < INITIAL_FRAGMENT_MIN_LENGTH)
+        if (self.fragments.is_empty() && fragment.len() < INITIAL_FRAGMENT_MIN_LENGTH)
             || fragment.len() < CONT_FRAGMENT_MIN_LENGTH
         {
             return Err(IOError::new(
@@ -105,11 +111,11 @@ impl BleFrameParser {
         }
 
         self.fragments.push(Vec::from(fragment));
-        return if self.more_fragments_needed() {
+        if self.more_fragments_needed() {
             Ok(BleFrameParserResult::MoreFragmentsExpected)
         } else {
             Ok(BleFrameParserResult::Done)
-        };
+        }
     }
 
     pub fn frame(&self) -> Result<BleFrame, IOError> {
@@ -202,7 +208,7 @@ mod tests {
         let mut parser = BleFrameParser::new();
         assert_eq!(
             parser
-                .update(&vec![0x83, 0x00, 0x04, 0x0A, 0x0B, 0x0C, 0x0D])
+                .update(&[0x83, 0x00, 0x04, 0x0A, 0x0B, 0x0C, 0x0D])
                 .unwrap(),
             BleFrameParserResult::Done
         );
@@ -213,15 +219,15 @@ mod tests {
     fn parse_multiple_fragments() {
         let mut parser = BleFrameParser::new();
         assert_eq!(
-            parser.update(&vec![0x83, 0x00, 0x05, 0x0A]).unwrap(),
+            parser.update(&[0x83, 0x00, 0x05, 0x0A]).unwrap(),
             BleFrameParserResult::MoreFragmentsExpected
         );
         assert_eq!(
-            parser.update(&vec![0x00, 0x0B, 0x0C, 0x0D]).unwrap(),
+            parser.update(&[0x00, 0x0B, 0x0C, 0x0D]).unwrap(),
             BleFrameParserResult::MoreFragmentsExpected
         );
         assert_eq!(
-            parser.update(&vec![0x01, 0x0E]).unwrap(),
+            parser.update(&[0x01, 0x0E]).unwrap(),
             BleFrameParserResult::Done
         );
         assert_eq!(

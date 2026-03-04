@@ -104,8 +104,7 @@ where
         Ok(Ctap2BioEnrollmentFingerprintSensorInfo {
             fingerprint_kind,
             max_capture_samples_required_for_enroll: resp
-                .max_capture_samples_required_for_enroll
-                .clone(),
+                .max_capture_samples_required_for_enroll,
             max_template_friendly_name: resp.max_template_friendly_name,
         })
     }
@@ -297,7 +296,7 @@ impl Ctap2UserVerifiableRequest for Ctap2BioEnrollmentRequest {
 
     fn calculate_and_set_uv_auth(
         &mut self,
-        uv_proto: &Box<dyn PinUvAuthProtocol>,
+        uv_proto: &dyn PinUvAuthProtocol,
         uv_auth_token: &[u8],
     ) {
         // pinUvAuthParam (0x05): authenticate(pinUvAuthToken, fingerprint (0x01) || enumerateEnrollments (0x04)).
@@ -322,7 +321,7 @@ impl Ctap2UserVerifiableRequest for Ctap2BioEnrollmentRequest {
     }
 
     fn permissions(&self) -> Ctap2AuthTokenPermissionRole {
-        return Ctap2AuthTokenPermissionRole::BIO_ENROLLMENT;
+        Ctap2AuthTokenPermissionRole::BIO_ENROLLMENT
     }
 
     fn permissions_rpid(&self) -> Option<&str> {

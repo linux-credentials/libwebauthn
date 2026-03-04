@@ -164,7 +164,7 @@ impl Ctap2UserVerifiableRequest for Ctap2AuthenticatorConfigRequest {
 
     fn calculate_and_set_uv_auth(
         &mut self,
-        uv_proto: &Box<dyn PinUvAuthProtocol>,
+        uv_proto: &dyn PinUvAuthProtocol,
         uv_auth_token: &[u8],
     ) {
         // pinUvAuthParam (0x04): the result of calling
@@ -185,7 +185,7 @@ impl Ctap2UserVerifiableRequest for Ctap2AuthenticatorConfigRequest {
     }
 
     fn permissions(&self) -> Ctap2AuthTokenPermissionRole {
-        return Ctap2AuthTokenPermissionRole::AUTHENTICATOR_CONFIGURATION;
+        Ctap2AuthTokenPermissionRole::AUTHENTICATOR_CONFIGURATION
     }
 
     fn permissions_rpid(&self) -> Option<&str> {

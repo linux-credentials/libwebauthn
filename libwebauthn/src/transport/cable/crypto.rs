@@ -9,7 +9,7 @@ use crate::pin::hmac_sha256;
 pub enum KeyPurpose {
     EIDKey = 1,
     TunnelID = 2,
-    PSK = 3,
+    Psk = 3,
 }
 
 pub fn derive(secret: &[u8], salt: Option<&[u8]>, purpose: KeyPurpose) -> [u8; 64] {
