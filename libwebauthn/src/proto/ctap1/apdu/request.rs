@@ -139,7 +139,7 @@ impl From<&Ctap1SignRequest> for ApduRequest {
         };
         let mut data = request.challenge.clone();
         data.extend(&request.app_id_hash);
-        data.write_u8(request.key_handle.len() as u8).unwrap();
+        data.push(request.key_handle.len() as u8);
         data.extend(&request.key_handle);
         Self::new(U2F_AUTHENTICATE, p1, 0x00, Some(&data), Some(APDU_SHORT_LE))
     }

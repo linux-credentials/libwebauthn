@@ -81,8 +81,8 @@ impl<'a> Channel for BleChannel<'a> {
     }
 
     async fn close(&mut self) {
-        let _x = self.device;
-        todo!()
+        // BLE disconnection is handled when the Connection is dropped
+        trace!("BLE channel close() called — no-op, cleanup on drop");
     }
 
     #[instrument(level = Level::DEBUG, skip_all)]

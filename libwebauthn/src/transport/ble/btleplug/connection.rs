@@ -104,7 +104,7 @@ impl Connection {
             let status = parser.update(&fragment).or(Err(Error::InvalidFraming))?;
             match status {
                 BleFrameParserResult::Done => {
-                    let frame = parser.frame().unwrap();
+                    let frame = parser.frame().or(Err(Error::InvalidFraming))?;
                     trace!(?frame, "Received frame");
                     match frame.cmd {
                         BleCommand::Keepalive => {

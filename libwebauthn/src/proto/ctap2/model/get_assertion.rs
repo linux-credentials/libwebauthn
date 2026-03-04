@@ -273,7 +273,7 @@ impl Ctap2GetAssertionRequestExtensions {
             return Ok(());
         };
 
-        let salt_auth = ByteBuf::from(uv_proto.authenticate(&auth_data.shared_secret, &salt_enc));
+        let salt_auth = ByteBuf::from(uv_proto.authenticate(&auth_data.shared_secret, &salt_enc)?);
 
         self.hmac_secret = Some(CalculatedHMACGetSecretInput {
             public_key,
@@ -421,14 +421,18 @@ impl Ctap2UserVerifiableRequest for Ctap2GetAssertionRequest {
         &mut self,
         uv_proto: &dyn PinUvAuthProtocol,
         uv_auth_token: &[u8],
-    ) {
-        let uv_auth_param = uv_proto.authenticate(uv_auth_token, self.client_data_hash());
+    ) -> Result<(), Error> {
+        let hash = self
+            .client_data_hash()
+            .ok_or(Error::Platform(PlatformError::InvalidDeviceResponse))?;
+        let uv_auth_param = uv_proto.authenticate(uv_auth_token, hash)?;
         self.pin_auth_proto = Some(uv_proto.version() as u32);
         self.pin_auth_param = Some(ByteBuf::from(uv_auth_param));
+        Ok(())
     }
 
-    fn client_data_hash(&self) -> &[u8] {
-        self.client_data_hash.as_slice()
+    fn client_data_hash(&self) -> Option<&[u8]> {
+        Some(self.client_data_hash.as_slice())
     }
 
     fn permissions(&self) -> Ctap2AuthTokenPermissionRole {

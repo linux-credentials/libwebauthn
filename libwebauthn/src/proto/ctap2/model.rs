@@ -1,5 +1,8 @@
 use crate::proto::ctap1::Ctap1Transport;
-use crate::{ops::webauthn::idl::create::PublicKeyCredentialUserEntity, pin::PinUvAuthProtocol};
+use crate::{
+    ops::webauthn::idl::create::PublicKeyCredentialUserEntity, pin::PinUvAuthProtocol,
+    webauthn::Error,
+};
 
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use serde_bytes::ByteBuf;
@@ -216,8 +219,10 @@ pub trait Ctap2UserVerifiableRequest {
         &mut self,
         uv_proto: &dyn PinUvAuthProtocol,
         uv_auth_token: &[u8],
-    );
-    fn client_data_hash(&self) -> &[u8];
+    ) -> Result<(), Error>;
+    fn client_data_hash(&self) -> Option<&[u8]> {
+        None
+    }
     fn permissions(&self) -> Ctap2AuthTokenPermissionRole;
     fn permissions_rpid(&self) -> Option<&str>;
     fn can_use_uv(&self, info: &Ctap2GetInfoResponse) -> bool;

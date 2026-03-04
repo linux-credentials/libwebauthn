@@ -34,13 +34,12 @@ impl From<&DeviceInfo> for HidDevice {
 impl fmt::Display for HidDevice {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.backend {
-            HidBackendDevice::HidApiDevice(dev) => write!(
-                f,
-                "{:} {:} (r{:?})",
-                dev.manufacturer_string().unwrap(),
-                dev.product_string().unwrap(),
-                dev.release_number()
-            ),
+            HidBackendDevice::HidApiDevice(dev) => {
+                let manufacturer = dev.manufacturer_string().unwrap_or_default();
+                let product = dev.product_string().unwrap_or_default();
+                let name = [manufacturer, product].join(" ");
+                write!(f, "{} (r{:?})", name.trim(), dev.release_number())
+            }
             #[cfg(test)]
             HidBackendDevice::VirtualDevice => write!(f, "virtual fido-authenticator"),
         }

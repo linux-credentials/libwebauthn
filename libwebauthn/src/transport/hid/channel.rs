@@ -195,15 +195,31 @@ impl<'d> HidChannel<'d> {
         }
 
         let mut cursor = IOCursor::new(response.payload);
-        cursor.seek(SeekFrom::Start(8)).unwrap();
+        cursor
+            .seek(SeekFrom::Start(8))
+            .map_err(|e| Error::Transport(TransportError::IoError(e.kind())))?;
 
         let init = InitResponse {
-            cid: cursor.read_u32::<BigEndian>().unwrap(),
-            protocol_version: cursor.read_u8().unwrap(),
-            version_major: cursor.read_u8().unwrap(),
-            version_minor: cursor.read_u8().unwrap(),
-            version_build: cursor.read_u8().unwrap(),
-            caps: Caps::from_bits_truncate(cursor.read_u8().unwrap()),
+            cid: cursor
+                .read_u32::<BigEndian>()
+                .map_err(|e| Error::Transport(TransportError::IoError(e.kind())))?,
+            protocol_version: cursor
+                .read_u8()
+                .map_err(|e| Error::Transport(TransportError::IoError(e.kind())))?,
+            version_major: cursor
+                .read_u8()
+                .map_err(|e| Error::Transport(TransportError::IoError(e.kind())))?,
+            version_minor: cursor
+                .read_u8()
+                .map_err(|e| Error::Transport(TransportError::IoError(e.kind())))?,
+            version_build: cursor
+                .read_u8()
+                .map_err(|e| Error::Transport(TransportError::IoError(e.kind())))?,
+            caps: Caps::from_bits_truncate(
+                cursor
+                    .read_u8()
+                    .map_err(|e| Error::Transport(TransportError::IoError(e.kind())))?,
+            ),
         };
 
         debug!(?init, "Device init complete");
@@ -345,7 +361,10 @@ impl<'d> HidChannel<'d> {
                         Self::hid_recv_hidapi(device, cancel_rx, timeout)
                     })
                     .await
-                    .expect("HID read not to panic.")
+                    .map_err(|e| {
+                        warn!(?e, "HID read task failed");
+                        Error::Transport(TransportError::ConnectionLost)
+                    })?
                 }
                 #[cfg(test)]
                 OpenHidDevice::VirtualDevice(virt_device) => {

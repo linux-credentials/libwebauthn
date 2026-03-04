@@ -84,9 +84,7 @@ impl<'d> Device<'d, Nfc, NfcChannel<Context>> for NfcDevice {
 async fn is_fido(device: &NfcDevice) -> bool {
     async fn inner(device: &NfcDevice) -> Result<bool, Error> {
         let chan = device.channel_sync().await?;
-        // We fill the struct within channel_sync() and the call cannot fail for NFC,
-        // so unwrap is fine here
-        let protocols = chan.supported_protocols().await.unwrap();
+        let protocols = chan.supported_protocols().await?;
         Ok(protocols.fido2 || protocols.u2f)
     }
 

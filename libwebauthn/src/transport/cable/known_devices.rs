@@ -162,7 +162,7 @@ impl CableKnownDevice {
     async fn connection(
         known_device: &CableKnownDevice,
         ux_sender: &super::connection_stages::MpscUxUpdateSender,
-    ) -> Result<HandshakeOutput, TransportError> {
+    ) -> Result<HandshakeOutput, Error> {
         let client_nonce = rand::random::<ClientNonce>();
 
         // Stage 1: Connection (no proximity check needed for known devices)
@@ -171,12 +171,12 @@ impl CableKnownDevice {
 
         // Stage 2: Proximity check (after connection for known devices)
         let proximity_input =
-            ProximityCheckInput::new_for_known_device(known_device, &client_nonce);
+            ProximityCheckInput::new_for_known_device(known_device, &client_nonce)?;
         let proximity_output = proximity_check_stage(proximity_input, ux_sender).await?;
 
         // Stage 3: Handshake
         let handshake_input =
-            HandshakeInput::new_for_known_device(known_device, connection_output, proximity_output);
+            HandshakeInput::new_for_known_device(known_device, connection_output, proximity_output)?;
         let handshake_output = handshake_stage(handshake_input, ux_sender).await?;
 
         Ok(handshake_output)
@@ -204,7 +204,11 @@ impl<'d> Device<'d, Cable, CableChannel> for CableKnownDevice {
             let handshake_output = match Self::connection(&known_device, &ux_sender).await {
                 Ok(handshake_output) => handshake_output,
                 Err(e) => {
-                    ux_sender.send_error(e).await;
+                    let transport_err = match e {
+                        Error::Transport(t) => t,
+                        _ => TransportError::ConnectionFailed,
+                    };
+                    ux_sender.send_error(transport_err).await;
                     return;
                 }
             };

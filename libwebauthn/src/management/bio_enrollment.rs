@@ -298,27 +298,22 @@ impl Ctap2UserVerifiableRequest for Ctap2BioEnrollmentRequest {
         &mut self,
         uv_proto: &dyn PinUvAuthProtocol,
         uv_auth_token: &[u8],
-    ) {
+    ) -> Result<(), Error> {
         // pinUvAuthParam (0x05): authenticate(pinUvAuthToken, fingerprint (0x01) || enumerateEnrollments (0x04)).
-        let mut data = match self.subcommand {
-            None => unreachable!(),
-            Some(x) => {
-                let data = vec![Ctap2BioEnrollmentModality::Fingerprint as u8, x as u8];
-                data
-            }
-        };
+        let subcommand = self
+            .subcommand
+            .ok_or(Error::Platform(PlatformError::InvalidDeviceResponse))?;
+        let mut data = vec![Ctap2BioEnrollmentModality::Fingerprint as u8, subcommand as u8];
         // e.g. "Authenticator calls verify(pinUvAuthToken, fingerprint (0x01) || removeEnrollment (0x06) || subCommandParams, pinUvAuthParam)"
         if let Some(params) = &self.subcommand_params {
-            data.extend(cbor::to_vec(&params).unwrap());
+            data.extend(cbor::to_vec(&params)?);
         }
-        let uv_auth_param = uv_proto.authenticate(uv_auth_token, &data);
+        let uv_auth_param = uv_proto.authenticate(uv_auth_token, &data)?;
         self.protocol = Some(uv_proto.version());
         self.uv_auth_param = Some(ByteBuf::from(uv_auth_param));
+        Ok(())
     }
 
-    fn client_data_hash(&self) -> &[u8] {
-        unreachable!()
-    }
 
     fn permissions(&self) -> Ctap2AuthTokenPermissionRole {
         Ctap2AuthTokenPermissionRole::BIO_ENROLLMENT

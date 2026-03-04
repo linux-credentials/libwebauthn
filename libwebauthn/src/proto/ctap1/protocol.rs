@@ -81,7 +81,7 @@ where
             return Err(Error::Ctap(CtapError::from(status)));
         }
 
-        let response: Ctap1RegisterResponse = apdu_response.try_into().unwrap();
+        let response: Ctap1RegisterResponse = apdu_response.try_into().or(Err(CtapError::Other))?;
         debug!("CTAP1 register response");
         trace!(?response);
         Ok(response)
@@ -101,7 +101,7 @@ where
             return Err(Error::Ctap(CtapError::from(status)));
         }
 
-        let response: Ctap1SignResponse = apdu_response.try_into().unwrap();
+        let response: Ctap1SignResponse = apdu_response.try_into().or(Err(CtapError::Other))?;
         debug!({ ?response.user_presence_verified }, "CTAP1 sign response received");
         trace!(?response);
         Ok(response)

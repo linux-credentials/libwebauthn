@@ -106,7 +106,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         let mut device: CableQrCodeDevice = CableQrCodeDevice::new_persistent(
             QrCodeOperationHint::MakeCredential,
             device_info_store.clone(),
-        );
+        )?;
 
         println!("Created QR code, awaiting for advertisement.");
         let qr_code = QrCode::new(device.qr_code.to_string()).unwrap();

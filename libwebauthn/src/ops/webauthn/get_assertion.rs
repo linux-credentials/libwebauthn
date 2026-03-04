@@ -356,7 +356,9 @@ impl Ctap2HMACGetSecretOutput {
         } else if output.len() == 64 {
             let (o1, o2) = output.split_at(32);
             res.output1.copy_from_slice(o1);
-            res.output2 = Some(o2.try_into().unwrap());
+            let mut output2 = [0u8; 32];
+            output2.copy_from_slice(o2);
+            res.output2 = Some(output2);
         } else {
             error!("Failed to split HMAC Secret outputs. Unexpected output length: {}. Skipping HMAC extension", output.len());
             return None;

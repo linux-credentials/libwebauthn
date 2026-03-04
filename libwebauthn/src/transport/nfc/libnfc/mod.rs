@@ -72,10 +72,13 @@ impl Info {
     pub fn channel(&self) -> Result<NfcChannel<Context>, Error> {
         let context = nfc1::Context::new().map_err(map_error)?;
 
-        let mut chan = Channel::new(self, context);
+        let mut chan = Channel::new(self, context)?;
 
         {
-            let mut device = chan.device.lock().unwrap();
+            let mut device = chan
+                .device
+                .lock()
+                .map_err(|_| Error::Transport(TransportError::ConnectionFailed))?;
             device.initiator_init()?;
             device.set_property_bool(nfc1::Property::InfiniteSelect, false)?;
 
@@ -93,20 +96,21 @@ impl Info {
 }
 
 pub struct Channel {
+    name: String,
     device: Arc<Mutex<nfc1::Device>>,
 }
 
 unsafe impl Send for Channel {}
 
 impl Channel {
-    pub fn new(info: &Info, mut context: nfc1::Context) -> Self {
-        let device = context
-            .open_with_connstring(&info.connstring)
-            .expect("opened device");
+    pub fn new(info: &Info, mut context: nfc1::Context) -> Result<Self, Error> {
+        let mut device = context.open_with_connstring(&info.connstring)?;
+        let name = device.name().to_owned();
 
-        Self {
+        Ok(Self {
+            name,
             device: Arc::new(Mutex::new(device)),
-        }
+        })
     }
 
     fn initiator_select_passive_target_ex(
@@ -133,7 +137,10 @@ impl Channel {
     }
 
     fn connect_to_target(&mut self) -> Result<nfc1::Target, Error> {
-        let mut device = self.device.lock().unwrap();
+        let mut device = self
+            .device
+            .lock()
+            .map_err(|_| Error::Transport(TransportError::ConnectionFailed))?;
         // Assume baudrates are already sorted higher to lower
         let baudrates = device.get_supported_baud_rate(nfc1::Mode::Initiator, MODULATION_TYPE)?;
         let modulations = baudrates
@@ -189,7 +196,7 @@ where
         let rapdu = self
             .device
             .lock()
-            .unwrap()
+            .map_err(|_| HandleError::Nfc(Box::new(std::io::Error::other("mutex poisoned"))))?
             .initiator_transceive_bytes(command, len, timeout)
             .map_err(|e| HandleError::Nfc(Box::new(e)))?;
 
@@ -207,8 +214,7 @@ where
 
 impl fmt::Display for Channel {
     fn fmt(&self, f: &mut fmt::Formatter) -> std::fmt::Result {
-        let mut device = self.device.lock().unwrap();
-        write!(f, "{}", device.name())
+        write!(f, "{}", self.name)
     }
 }
 
@@ -229,7 +235,7 @@ pub(crate) fn list_devices() -> Result<Vec<NfcDevice>, Error> {
         nfc1::Context::new().map_err(|_| Error::Transport(TransportError::TransportUnavailable))?;
     let devices = context
         .list_devices(MAX_DEVICES)
-        .expect("libnfc devices")
+        .map_err(|_| Error::Transport(TransportError::TransportUnavailable))?
         .iter()
         .map(|x| NfcDevice::new_libnfc(Info::new(x)))
         .collect::<Vec<_>>();
