@@ -414,7 +414,9 @@ pub fn hkdf_sha256(salt: Option<&[u8]>, ikm: &[u8], info: &[u8]) -> Result<Vec<u
     let mut okm = [0u8; 32]; // fixed L = 32
     hk.expand(info, &mut okm).map_err(|e| {
         error!("HKDF expand error: {e}");
-        Error::Platform(PlatformError::CryptoError(format!("HKDF expand error: {e}")))
+        Error::Platform(PlatformError::CryptoError(format!(
+            "HKDF expand error: {e}"
+        )))
     })?;
     Ok(Vec::from(okm))
 }
@@ -483,7 +485,8 @@ where
 
         // In preparation for obtaining pinUvAuthToken, the platform:
         // * Obtains a shared secret.
-        let (public_key, shared_secret) = obtain_shared_secret(self, uv_proto.as_ref(), timeout).await?;
+        let (public_key, shared_secret) =
+            obtain_shared_secret(self, uv_proto.as_ref(), timeout).await?;
 
         // paddedPin is newPin padded on the right with 0x00 bytes to make it 64 bytes long. (Since the maximum length of newPin is 63 bytes, there is always at least one byte of padding.)
         let mut padded_new_pin = new_pin.as_bytes().to_vec();

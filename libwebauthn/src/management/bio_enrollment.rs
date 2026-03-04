@@ -99,12 +99,11 @@ where
         let resp = self.ctap2_bio_enrollment(&req, timeout).await?;
         let Some(fingerprint_kind) = resp.fingerprint_kind else {
             warn!("Channel did not return fingerprint_kind in sensor info.");
-            return Err(Error::Ctap(CtapError::Other))
+            return Err(Error::Ctap(CtapError::Other));
         };
         Ok(Ctap2BioEnrollmentFingerprintSensorInfo {
             fingerprint_kind,
-            max_capture_samples_required_for_enroll: resp
-                .max_capture_samples_required_for_enroll,
+            max_capture_samples_required_for_enroll: resp.max_capture_samples_required_for_enroll,
             max_template_friendly_name: resp.max_template_friendly_name,
         })
     }
@@ -303,7 +302,10 @@ impl Ctap2UserVerifiableRequest for Ctap2BioEnrollmentRequest {
         let subcommand = self
             .subcommand
             .ok_or(Error::Platform(PlatformError::InvalidDeviceResponse))?;
-        let mut data = vec![Ctap2BioEnrollmentModality::Fingerprint as u8, subcommand as u8];
+        let mut data = vec![
+            Ctap2BioEnrollmentModality::Fingerprint as u8,
+            subcommand as u8,
+        ];
         // e.g. "Authenticator calls verify(pinUvAuthToken, fingerprint (0x01) || removeEnrollment (0x06) || subCommandParams, pinUvAuthParam)"
         if let Some(params) = &self.subcommand_params {
             data.extend(cbor::to_vec(&params)?);
@@ -313,7 +315,6 @@ impl Ctap2UserVerifiableRequest for Ctap2BioEnrollmentRequest {
         self.uv_auth_param = Some(ByteBuf::from(uv_auth_param));
         Ok(())
     }
-
 
     fn permissions(&self) -> Ctap2AuthTokenPermissionRole {
         Ctap2AuthTokenPermissionRole::BIO_ENROLLMENT

@@ -55,8 +55,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         // Signature ceremony
         println!("Signature request sent (timeout: {:?} seconds).", TIMEOUT);
         let new_key = response.as_registered_key()?;
-        let sign_request =
-            SignRequest::new(APP_ID, challenge, &new_key.key_handle, TIMEOUT, true);
+        let sign_request = SignRequest::new(APP_ID, challenge, &new_key.key_handle, TIMEOUT, true);
         let response = channel.u2f_sign(&sign_request).await?;
         println!("Response: {:?}", response);
     }

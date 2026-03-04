@@ -175,8 +175,11 @@ impl CableKnownDevice {
         let proximity_output = proximity_check_stage(proximity_input, ux_sender).await?;
 
         // Stage 3: Handshake
-        let handshake_input =
-            HandshakeInput::new_for_known_device(known_device, connection_output, proximity_output)?;
+        let handshake_input = HandshakeInput::new_for_known_device(
+            known_device,
+            connection_output,
+            proximity_output,
+        )?;
         let handshake_output = handshake_stage(handshake_input, ux_sender).await?;
 
         Ok(handshake_output)

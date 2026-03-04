@@ -200,14 +200,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             eval,
             eval_by_credential,
         };
-        run_success_test(
-            &mut channel,
-            &credential,
-            &challenge,
-            prf,
-            "eval only",
-        )
-        .await;
+        run_success_test(&mut channel, &credential, &challenge, prf, "eval only").await;
 
         // Test 4: eval and a full list of eval_by_credential
         let eval = Some(PRFValue {

@@ -294,7 +294,6 @@ impl Ctap2UserVerifiableRequest for Ctap2CredentialManagementRequest {
         Ok(())
     }
 
-
     fn permissions(&self) -> Ctap2AuthTokenPermissionRole {
         Ctap2AuthTokenPermissionRole::CREDENTIAL_MANAGEMENT
     }

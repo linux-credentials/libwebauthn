@@ -45,9 +45,7 @@ impl Drop for PcscCard {
 
 impl PcscCard {
     pub fn new(card: pcsc::Card) -> Self {
-        PcscCard {
-            card: Some(card),
-        }
+        PcscCard { card: Some(card) }
     }
 }
 

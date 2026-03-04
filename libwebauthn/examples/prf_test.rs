@@ -131,14 +131,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             eval_by_credential,
         };
 
-        run_success_test(
-            &mut channel,
-            &credential,
-            &challenge,
-            prf,
-            "PRF output: ",
-        )
-        .await;
+        run_success_test(&mut channel, &credential, &challenge, prf, "PRF output: ").await;
     }
     Ok(())
 }

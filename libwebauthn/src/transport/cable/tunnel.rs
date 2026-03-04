@@ -146,8 +146,7 @@ pub fn decode_tunnel_server_domain(encoded: u16) -> Option<String> {
     let digest = hasher.finalize();
 
     let mut v = u64::from_le_bytes([
-        digest[0], digest[1], digest[2], digest[3],
-        digest[4], digest[5], digest[6], digest[7],
+        digest[0], digest[1], digest[2], digest[3], digest[4], digest[5], digest[6], digest[7],
     ]);
     let tld_index = v & 3;
     v >>= 2;
@@ -711,12 +710,8 @@ async fn connection_recv(
             let device_id: CableKnownDeviceId = (&linking_info).into();
             match known_device_store {
                 Some(store) => {
-                    match parse_known_device(
-                        private_key,
-                        tunnel_domain,
-                        &linking_info,
-                        noise_state,
-                    ) {
+                    match parse_known_device(private_key, tunnel_domain, &linking_info, noise_state)
+                    {
                         Ok(known_device) => {
                             debug!(?device_id, "Updating known device");
                             trace!(?known_device);

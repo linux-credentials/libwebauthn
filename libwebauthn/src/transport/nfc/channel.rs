@@ -233,8 +233,7 @@ where
         self.status
     }
 
-    async fn close(&mut self) {
-    }
+    async fn close(&mut self) {}
 
     #[instrument(level = Level::DEBUG, skip_all)]
     async fn apdu_send(&mut self, request: &ApduRequest, _timeout: Duration) -> Result<(), Error> {
