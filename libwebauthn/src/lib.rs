@@ -40,7 +40,7 @@ macro_rules! unwrap_field {
         }
     }};
 }
-use pin::PinRequestReason;
+use pin::{PinNotSetReason, PinRequestReason};
 pub(crate) use unwrap_field;
 
 #[derive(Debug)]
@@ -61,6 +61,7 @@ pub enum UvUpdate {
     /// The ongoing operation may run into a timeout, no answer is provided in time.
     PinRequired(PinRequiredUpdate),
     PresenceRequired,
+    PinNotSet(PinNotSetUpdate),
 }
 
 #[derive(Debug, Clone)]
@@ -90,6 +91,31 @@ impl PinRequiredUpdate {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct PinNotSetUpdate {
+    reply_to: Arc<oneshot::Sender<String>>,
+    /// What caused the PIN request.
+    pub reason: PinNotSetReason,
+}
+
+impl PinNotSetUpdate {
+    /// This consumes `self`, because we should only ever send exactly one answer back.
+    pub fn set_pin(self, pin: &str) -> Result<(), String> {
+        match Arc::into_inner(self.reply_to) {
+            Some(sender) => sender
+                .send(pin.to_string())
+                .map_err(|_| "Failed to send PIN".to_string()),
+            None => Err("Multiple references to reply_to exist; cannot send PIN".to_string()),
+        }
+    }
+
+    /// The user cancels the PIN entry, without making an attempt.
+    pub fn cancel(self) {
+        // We hang up to signal an abort
+        drop(self.reply_to)
+    }
+}
+
 #[cfg(test)]
 // This function is not _really_ `PartialEq`. We need it for testing purposes,
 // but should not expose it like this to consumers, so gating it behind cfg(test)
@@ -97,6 +123,16 @@ impl PartialEq for PinRequiredUpdate {
     fn eq(&self, other: &Self) -> bool {
         // We explicitly ignore `reply_to` and only compare the other fields.
         self.reason == other.reason && self.attempts_left == other.attempts_left
+    }
+}
+
+#[cfg(test)]
+// This function is not _really_ `PartialEq`. We need it for testing purposes,
+// but should not expose it like this to consumers, so gating it behind cfg(test)
+impl PartialEq for PinNotSetUpdate {
+    fn eq(&self, other: &Self) -> bool {
+        // We explicitly ignore `reply_to` and only compare the other fields.
+        self.reason == other.reason
     }
 }
 

@@ -29,6 +29,8 @@ async fn handle_updates(mut state_recv: Receiver<UvUpdate>) {
     while let Ok(update) = state_recv.recv().await {
         match update {
             UvUpdate::PresenceRequired => println!("Please touch your device!"),
+            // Shouldn't really happen, as we don't use UV required
+            UvUpdate::PinNotSet(_) => println!("Pin not set for your device!"),
             UvUpdate::UvRetry { attempts_left } => {
                 print!("UV failed.");
                 if let Some(attempts_left) = attempts_left {

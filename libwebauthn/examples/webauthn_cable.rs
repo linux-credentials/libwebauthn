@@ -44,6 +44,8 @@ async fn handle_updates(mut state_recv: Receiver<CableUxUpdate>) {
         match update {
             CableUxUpdate::UvUpdate(uv_update) => match uv_update {
                 UvUpdate::PresenceRequired => println!("Please touch your device!"),
+                // Can't happen, as we are using cable that doesn't do PIN
+                UvUpdate::PinNotSet(_) => panic!("Pin not set error for cable!"),
                 UvUpdate::UvRetry { attempts_left } => {
                     print!("UV failed.");
                     if let Some(attempts_left) = attempts_left {

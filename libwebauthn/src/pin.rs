@@ -17,7 +17,7 @@ use x509_parser::nom::AsBytes;
 
 use crate::{
     proto::{
-        ctap2::{Ctap2, Ctap2ClientPinRequest, Ctap2PinUvAuthProtocol},
+        ctap2::{Ctap2, Ctap2ClientPinRequest, Ctap2GetInfoResponse, Ctap2PinUvAuthProtocol},
         CtapError,
     },
     transport::Channel,
@@ -47,6 +47,18 @@ pub enum PinRequestReason {
     /// Buitin UV failed and is temporarily blocked, and we have to enter a valid PIN to unblock it
     FallbackFromUV,
     // Passkey
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum PinNotSetReason {
+    /// Device does not have a PIN set, but needs one
+    PinNotSet,
+    /// PIN too short
+    PinTooShort,
+    /// PIN too long
+    PinTooLong,
+    /// PIN violates PinPolicy
+    PinPolicyViolation,
 }
 
 pub trait PinUvAuthProtocol: Send + Sync {
@@ -422,7 +434,18 @@ pub fn hkdf_sha256(salt: Option<&[u8]>, ikm: &[u8], info: &[u8]) -> Result<Vec<u
 }
 
 #[async_trait]
-pub trait PinManagement {
+pub(crate) trait PinManagementInternal {
+    async fn change_pin_internal(
+        &mut self,
+        get_info_response: &Ctap2GetInfoResponse,
+        new_pin: String,
+        timeout: Duration,
+    ) -> Result<(), Error>;
+}
+
+#[async_trait]
+#[allow(private_bounds)]
+pub trait PinManagement: PinManagementInternal {
     async fn change_pin(&mut self, new_pin: String, timeout: Duration) -> Result<(), Error>;
 }
 
@@ -433,7 +456,22 @@ where
 {
     async fn change_pin(&mut self, new_pin: String, timeout: Duration) -> Result<(), Error> {
         let get_info_response = self.ctap2_get_info().await?;
+        self.change_pin_internal(&get_info_response, new_pin, timeout)
+            .await
+    }
+}
 
+#[async_trait]
+impl<C> PinManagementInternal for C
+where
+    C: Channel,
+{
+    async fn change_pin_internal(
+        &mut self,
+        get_info_response: &Ctap2GetInfoResponse,
+        new_pin: String,
+        timeout: Duration,
+    ) -> Result<(), Error> {
         // If the minPINLength member of the authenticatorGetInfo response is absent, then let platformMinPINLengthInCodePoints be 4.
         if new_pin.len() < get_info_response.min_pin_length.unwrap_or(4) as usize {
             // If platformCollectedPinLengthInCodePoints is less than platformMinPINLengthInCodePoints then the platform SHOULD display a "PIN too short" error message to the user.
@@ -448,7 +486,7 @@ where
         let Some(uv_proto) = select_uv_proto(
             #[cfg(test)]
             self.get_forced_pin_protocol(),
-            &get_info_response,
+            get_info_response,
         )
         .await
         else {
@@ -466,7 +504,7 @@ where
             Some(true) => Some(
                 obtain_pin(
                     self,
-                    &get_info_response,
+                    get_info_response,
                     uv_proto.version(),
                     PinRequestReason::AuthenticatorPolicy,
                     timeout,
