@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+#
+# Pre-commit hook: runs cargo fmt and fails if code is not formatted.
+# Install: git config core.hooksPath .githooks
+
+set -eu
+
+# Find the Cargo.toml relative to the repo root
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+MANIFEST="$REPO_ROOT/libwebauthn/Cargo.toml"
+
+if ! command -v cargo >/dev/null 2>&1; then
+    echo "warning: cargo not found, skipping format check"
+    exit 0
+fi
+
+if ! cargo fmt --manifest-path "$MANIFEST" -- --check >/dev/null 2>&1; then
+    echo "error: code is not formatted. Run 'cargo fmt --manifest-path libwebauthn/Cargo.toml' and re-commit."
+    exit 1
+fi

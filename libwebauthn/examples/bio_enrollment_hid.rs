@@ -147,7 +147,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
     println!("Devices found: {:?}", devices);
 
     for mut device in devices {
-        println!("Selected HID authenticator: {}", &device);
+        println!("Selected HID authenticator: {}", device);
         let mut channel = device.channel().await?;
         channel.wink(TIMEOUT).await?;
 
@@ -199,7 +199,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
                     let idx = ask_for_user_input(enrollments.len());
                     channel
                         .remove_bio_enrollment(
-                            &enrollments[idx].template_id.as_ref().unwrap(),
+                            enrollments[idx].template_id.as_ref().unwrap(),
                             TIMEOUT,
                         )
                         .await
@@ -229,7 +229,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
                     let new_name: String = read!("{}\n");
                     channel
                         .rename_bio_enrollment(
-                            &enrollments[idx].template_id.as_ref().unwrap(),
+                            enrollments[idx].template_id.as_ref().unwrap(),
                             &new_name,
                             TIMEOUT,
                         )
@@ -266,7 +266,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
                             Err(err) => break 'outer Err(err),
                         };
                     }
-                    Ok(format!("Success!"))
+                    Ok("Success!".to_string())
                 }
             };
             match action {

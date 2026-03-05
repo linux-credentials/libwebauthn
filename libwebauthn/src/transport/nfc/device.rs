@@ -81,22 +81,14 @@ impl<'d> Device<'d, Nfc, NfcChannel<Context>> for NfcDevice {
     }
 }
 
-async fn is_fido<Ctx>(device: &NfcDevice) -> bool
-where
-    Ctx: fmt::Debug + fmt::Display + Copy + Send + Sync,
-{
-    async fn inner<Ctx>(device: &NfcDevice) -> Result<bool, Error>
-    where
-        Ctx: fmt::Debug + fmt::Display + Copy + Send + Sync,
-    {
+async fn is_fido(device: &NfcDevice) -> bool {
+    async fn inner(device: &NfcDevice) -> Result<bool, Error> {
         let chan = device.channel_sync().await?;
-        // We fill the struct within channel_sync() and the call cannot fail for NFC,
-        // so unwrap is fine here
-        let protocols = chan.supported_protocols().await.unwrap();
+        let protocols = chan.supported_protocols().await?;
         Ok(protocols.fido2 || protocols.u2f)
     }
 
-    inner::<Ctx>(device).await.is_ok()
+    inner(device).await.is_ok()
 }
 
 #[instrument]
@@ -117,7 +109,7 @@ pub async fn get_nfc_device() -> Result<Option<NfcDevice>, Error> {
 
     for list_devices in list_devices_fns {
         for device in list_devices()? {
-            if is_fido::<Context>(&device).await {
+            if is_fido(&device).await {
                 return Ok(Some(device));
             }
         }

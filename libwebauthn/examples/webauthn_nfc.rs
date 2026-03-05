@@ -1,4 +1,3 @@
-use std::convert::TryInto;
 use std::error::Error;
 use std::io::{self, Write};
 use std::time::Duration;
@@ -85,13 +84,14 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
     let challenge: [u8; 32] = thread_rng().gen();
 
     if let Some(mut device) = device {
-        println!("Selected NFC authenticator: {}", &device);
+        println!("Selected NFC authenticator: {}", device);
         let mut channel = device.channel().await?;
 
         // Make Credentials ceremony
         let make_credentials_request = MakeCredentialRequest {
+            challenge: Vec::from(challenge),
             origin: "example.org".to_owned(),
-            hash: Vec::from(challenge),
+            cross_origin: None,
             relying_party: Ctap2PublicKeyCredentialRpEntity::new("example.org", "example.org"),
             user: Ctap2PublicKeyCredentialUserEntity::new(&user_id, "mario.rossi", "Mario Rossi"),
             resident_key: Some(ResidentKeyRequirement::Discouraged),
@@ -128,7 +128,9 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             (&response.authenticator_data).try_into().unwrap();
         let get_assertion = GetAssertionRequest {
             relying_party_id: "example.org".to_owned(),
-            hash: Vec::from(challenge),
+            challenge: Vec::from(challenge),
+            origin: "example.org".to_owned(),
+            cross_origin: None,
             allow: vec![credential],
             user_verification: UserVerificationRequirement::Discouraged,
             extensions: None,

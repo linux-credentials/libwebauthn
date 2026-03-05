@@ -124,8 +124,13 @@ async fn get_adapter() -> Result<Adapter, Error> {
         .await
         .or(Err(Error::Unavailable))?
         .into_iter()
-        .nth(0)
+        .next()
         .ok_or(Error::PoweredOff)
+}
+
+/// Checks if a Bluetooth adapter is available on the system.
+pub async fn is_available() -> bool {
+    get_adapter().await.is_ok()
 }
 
 async fn discover_properties(
@@ -153,12 +158,7 @@ pub async fn list_fido_devices() -> Result<Vec<FidoDevice>, Error> {
         .await
         .or(Err(Error::ConnectionFailed))?
         .into_iter()
-        .filter(|p| {
-            p.services()
-                .iter()
-                .find(|s| s.uuid == FIDO_PROFILE_UUID)
-                .is_some()
-        })
+        .filter(|p| p.services().iter().any(|s| s.uuid == FIDO_PROFILE_UUID))
         .collect();
     let with_properties = discover_properties(peripherals)
         .await?
@@ -195,7 +195,7 @@ pub async fn supported_fido_revisions(
         .read(&services.service_revision_bitfield)
         .await
         .or(Err(Error::ConnectionFailed))?;
-    let bitfield = revision.iter().next().ok_or(Error::OperationFailed)?;
+    let bitfield = revision.first().ok_or(Error::OperationFailed)?;
     debug!(?revision, "Supported revision bitfield");
 
     let supported = SupportedRevisions {
@@ -226,16 +226,19 @@ pub async fn connect(
 }
 
 async fn discover_services(peripheral: &Peripheral) -> Result<FidoEndpoints, Error> {
-    let control_point_uuid = Uuid::parse_str(FIDO_CONTROL_POINT_UUID).unwrap();
+    let control_point_uuid =
+        Uuid::parse_str(FIDO_CONTROL_POINT_UUID).or(Err(Error::OperationFailed))?;
     let control_point = get_gatt_characteristic(peripheral, control_point_uuid)?;
 
-    let control_point_length_uuid = Uuid::parse_str(FIDO_CONTROL_POINT_LENGTH_UUID).unwrap();
+    let control_point_length_uuid =
+        Uuid::parse_str(FIDO_CONTROL_POINT_LENGTH_UUID).or(Err(Error::OperationFailed))?;
     let control_point_length = get_gatt_characteristic(peripheral, control_point_length_uuid)?;
 
-    let status_uuid = Uuid::parse_str(FIDO_STATUS_UUID).unwrap();
+    let status_uuid = Uuid::parse_str(FIDO_STATUS_UUID).or(Err(Error::OperationFailed))?;
     let status = get_gatt_characteristic(peripheral, status_uuid)?;
 
-    let service_revision_bitfield_uuid = Uuid::parse_str(FIDO_REVISION_BITFIELD_UUID).unwrap();
+    let service_revision_bitfield_uuid =
+        Uuid::parse_str(FIDO_REVISION_BITFIELD_UUID).or(Err(Error::OperationFailed))?;
     let service_revision_bitfield =
         get_gatt_characteristic(peripheral, service_revision_bitfield_uuid)?;
 

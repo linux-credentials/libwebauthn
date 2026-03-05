@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use libwebauthn::pin::PinRequestReason;
 use libwebauthn::transport::cable::channel::{CableUpdate, CableUxUpdate};
+use libwebauthn::transport::cable::is_available;
 use libwebauthn::transport::cable::known_devices::{
     CableKnownDevice, ClientPayloadHint, EphemeralDeviceInfoStore,
 };
@@ -91,6 +92,11 @@ async fn handle_updates(mut state_recv: Receiver<CableUxUpdate>) {
 pub async fn main() -> Result<(), Box<dyn Error>> {
     setup_logging();
 
+    if !is_available().await {
+        eprintln!("No Bluetooth adapter found. Cable/Hybrid transport is unavailable.");
+        return Err("Cable transport not available".into());
+    }
+
     let device_info_store = Arc::new(EphemeralDeviceInfoStore::default());
     let user_id: [u8; 32] = thread_rng().gen();
     let challenge: [u8; 32] = thread_rng().gen();
@@ -100,7 +106,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         let mut device: CableQrCodeDevice = CableQrCodeDevice::new_persistent(
             QrCodeOperationHint::MakeCredential,
             device_info_store.clone(),
-        );
+        )?;
 
         println!("Created QR code, awaiting for advertisement.");
         let qr_code = QrCode::new(device.qr_code.to_string()).unwrap();

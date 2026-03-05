@@ -612,7 +612,7 @@ impl DowngradableRequest<RegisterRequest> for MakeCredentialRequest {
                 .exclude
                 .as_ref()
                 .unwrap_or(&vec![])
-                .into_iter()
+                .iter()
                 .map(|exclude| Ctap1RegisteredKey {
                     version: Ctap1Version::U2fV2,
                     key_handle: exclude.id.to_vec(),
@@ -621,7 +621,7 @@ impl DowngradableRequest<RegisterRequest> for MakeCredentialRequest {
                             None => None,
                             Some(ctap2_transports) => {
                                 let transports: Result<Vec<_>, _> =
-                                    ctap2_transports.into_iter().map(|t| t.try_into()).collect();
+                                    ctap2_transports.iter().map(|t| t.try_into()).collect();
                                 transports.ok()
                             }
                         }

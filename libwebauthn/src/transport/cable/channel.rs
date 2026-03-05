@@ -115,7 +115,7 @@ impl From<UvUpdate> for CableUxUpdate {
 }
 
 #[async_trait]
-impl<'d> Channel for CableChannel {
+impl Channel for CableChannel {
     type UxUpdate = CableUxUpdate;
 
     async fn supported_protocols(&self) -> Result<SupportedProtocols, Error> {
@@ -186,7 +186,7 @@ impl<'d> Channel for CableChannel {
     }
 }
 
-impl<'d> Ctap2AuthTokenStore for CableChannel {
+impl Ctap2AuthTokenStore for CableChannel {
     fn store_auth_data(&mut self, _auth_token_data: AuthTokenData) {}
 
     fn get_auth_data(&self) -> Option<&AuthTokenData> {

@@ -72,7 +72,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
     println!("Devices found: {:?}", devices);
 
     for mut device in devices {
-        println!("Selected HID authenticator: {}", &device);
+        println!("Selected HID authenticator: {}", device);
         let mut channel = device.channel().await?;
         channel.wink(TIMEOUT).await?;
 
@@ -80,7 +80,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         io::stdout().flush().unwrap();
         let new_pin: String = read!("{}\n");
 
-        if &new_pin == "" {
+        if new_pin.is_empty() {
             println!("PIN: No PIN provided, cancelling operation.");
             return Ok(());
         }
@@ -88,21 +88,22 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         let state_recv = channel.get_ux_update_receiver();
         tokio::spawn(handle_updates(state_recv));
 
-        let response = loop {
+        loop {
             match channel.change_pin(new_pin.clone(), TIMEOUT).await {
-                Ok(response) => break Ok(response),
+                Ok(response) => {
+                    println!("WebAuthn response: {response:?}");
+                    break;
+                }
                 Err(WebAuthnError::Ctap(ctap_error)) => {
                     if ctap_error.is_retryable_user_error() {
                         println!("Oops, try again! Error: {}", ctap_error);
                         continue;
                     }
-                    break Err(WebAuthnError::Ctap(ctap_error));
+                    panic!("{:?}", WebAuthnError::Ctap(ctap_error));
                 }
-                Err(err) => break Err(err),
+                Err(err) => panic!("{:?}", err),
             };
         }
-        .unwrap();
-        println!("WebAuthn response: {:?}", response);
     }
 
     Ok(())

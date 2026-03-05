@@ -9,8 +9,7 @@ use x509_parser::nom::AsBytes;
 use super::webauthn::MakeCredentialRequest;
 use crate::fido::{AttestedCredentialData, AuthenticatorData, AuthenticatorDataFlags};
 use crate::ops::webauthn::{
-    GetAssertionRequest, GetAssertionResponse, MakeCredentialResponse,
-    UserVerificationRequirement,
+    GetAssertionRequest, GetAssertionResponse, MakeCredentialResponse, UserVerificationRequirement,
 };
 use crate::proto::ctap1::{Ctap1RegisterRequest, Ctap1SignRequest};
 use crate::proto::ctap1::{Ctap1RegisterResponse, Ctap1SignResponse};
@@ -19,7 +18,7 @@ use crate::proto::ctap2::{
     Ctap2AttestationStatement, Ctap2GetAssertionResponse, Ctap2MakeCredentialResponse,
     Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialType, FidoU2fAttestationStmt,
 };
-use crate::webauthn::{CtapError, Error};
+use crate::webauthn::{CtapError, Error, PlatformError};
 
 // FIDO U2F operations can be aliased to CTAP1 requests, as they have no other representation.
 pub type RegisterRequest = Ctap1RegisterRequest;
@@ -61,20 +60,30 @@ impl UpgradableResponse<MakeCredentialResponse, MakeCredentialRequest> for Regis
             error!(?self.public_key, "Failed to parse public key as SEC-1 v2 encoded point");
             return Err(Error::Ctap(CtapError::Other));
         };
-        let x: heapless::Vec<u8, 32> = heapless::Vec::from_slice(
-            encoded_point
-                .x()
-                .expect("Not the identity point")
-                .as_bytes(),
-        )
-        .unwrap();
-        let y: heapless::Vec<u8, 32> = heapless::Vec::from_slice(
-            encoded_point
-                .y()
-                .expect("Not identity nor compressed")
-                .as_bytes(),
-        )
-        .unwrap();
+        let x_bytes = encoded_point.x().ok_or_else(|| {
+            error!("Public key is the identity point");
+            Error::Platform(PlatformError::CryptoError(
+                "public key is the identity point".into(),
+            ))
+        })?;
+        let y_bytes = encoded_point.y().ok_or_else(|| {
+            error!("Public key is identity or compressed");
+            Error::Platform(PlatformError::CryptoError(
+                "public key is identity or compressed".into(),
+            ))
+        })?;
+        let x: heapless::Vec<u8, 32> =
+            heapless::Vec::from_slice(x_bytes.as_bytes()).map_err(|_| {
+                Error::Platform(PlatformError::CryptoError(
+                    "x coordinate exceeds 32 bytes".into(),
+                ))
+            })?;
+        let y: heapless::Vec<u8, 32> =
+            heapless::Vec::from_slice(y_bytes.as_bytes()).map_err(|_| {
+                Error::Platform(PlatformError::CryptoError(
+                    "y coordinate exceeds 32 bytes".into(),
+                ))
+            })?;
         let cose_public_key = cose::PublicKey::P256Key(cose::P256PublicKey {
             x: x.into(),
             y: y.into(),
@@ -173,7 +182,10 @@ impl UpgradableResponse<GetAssertionResponse, SignRequest> for SignResponse {
         // 1                        Flags                           Initialized with flags' value.
         // 4                        Signature counter (signCount)   Initialized with signCount bytes.
         let authenticator_data = AuthenticatorData {
-            rp_id_hash: request.app_id_hash.clone().try_into().unwrap(),
+            rp_id_hash: request.app_id_hash.clone().try_into().map_err(|_| {
+                error!("app_id_hash has invalid length, expected 32 bytes");
+                Error::Platform(PlatformError::InvalidDeviceResponse)
+            })?,
             flags,
             signature_count,
             attested_credential: None,
@@ -215,7 +227,7 @@ impl UpgradableResponse<GetAssertionResponse, SignRequest> for SignResponse {
             } else {
                 UserVerificationRequirement::Preferred
             },
-            timeout: request.timeout.clone(),
+            timeout: request.timeout,
         };
         let upgraded_response = [response.into_assertion_output(&orig_request, None)]
             .as_slice()

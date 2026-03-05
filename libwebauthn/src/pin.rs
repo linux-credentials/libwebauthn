@@ -71,13 +71,13 @@ pub trait PinUvAuthProtocol: Send + Sync {
 
     // authenticate(key, message) → signature
     //   Computes a MAC of the given message.
-    fn authenticate(&self, key: &[u8], message: &[u8]) -> Vec<u8>;
+    fn authenticate(&self, key: &[u8], message: &[u8]) -> Result<Vec<u8>, Error>;
 }
 
 trait ECPrivateKeyPinUvAuthProtocol {
     fn private_key(&self) -> &EphemeralSecret;
     fn public_key(&self) -> &P256PublicKey;
-    fn kdf(&self, bytes: &[u8]) -> Vec<u8>;
+    fn kdf(&self, bytes: &[u8]) -> Result<Vec<u8>, Error>;
 }
 
 /// Common functionality between ECDH-based PIN/UV auth protocols (1 & 2)
@@ -87,12 +87,18 @@ trait ECDHPinUvAuthProtocol {
         &self,
         peer_public_key: &cose::PublicKey,
     ) -> Result<(cose::PublicKey, Vec<u8>), Error>;
-    fn get_public_key(&self) -> cose::PublicKey;
+    fn get_public_key(&self) -> Result<cose::PublicKey, Error>;
 }
 
 pub struct PinUvAuthProtocolOne {
     private_key: EphemeralSecret,
     public_key: P256PublicKey,
+}
+
+impl Default for PinUvAuthProtocolOne {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl PinUvAuthProtocolOne {
@@ -123,10 +129,10 @@ impl ECPrivateKeyPinUvAuthProtocol for PinUvAuthProtocolOne {
     }
 
     /// kdf(Z) → sharedSecret
-    fn kdf(&self, bytes: &[u8]) -> Vec<u8> {
+    fn kdf(&self, bytes: &[u8]) -> Result<Vec<u8>, Error> {
         let mut hasher = Sha256::default();
         hasher.update(bytes);
-        hasher.finalize().to_vec()
+        Ok(hasher.finalize().to_vec())
     }
 }
 
@@ -143,7 +149,7 @@ where
         let shared_secret = self.ecdh(peer_public_key)?;
 
         // Return(getPublicKey(), sharedSecret)
-        Ok((self.get_public_key(), shared_secret))
+        Ok((self.get_public_key()?, shared_secret))
     }
 
     /// ecdh(peerCoseKey) → sharedSecret | error
@@ -172,22 +178,42 @@ where
         let shared = self.private_key().diffie_hellman(&peer_public_key);
 
         // Return kdf(Z).
-        Ok(self.kdf(shared.raw_secret_bytes().as_bytes()))
+        self.kdf(shared.raw_secret_bytes().as_bytes())
     }
 
     /// getPublicKey()
-    fn get_public_key(&self) -> cose::PublicKey {
+    fn get_public_key(&self) -> Result<cose::PublicKey, Error> {
         let point = EncodedPoint::from(self.public_key());
+        let x_bytes = point.x().ok_or_else(|| {
+            error!("Public key is the identity point");
+            Error::Platform(PlatformError::CryptoError(
+                "public key is the identity point".into(),
+            ))
+        })?;
+        let y_bytes = point.y().ok_or_else(|| {
+            error!("Public key is identity or compressed");
+            Error::Platform(PlatformError::CryptoError(
+                "public key is identity or compressed".into(),
+            ))
+        })?;
         let x: heapless::Vec<u8, 32> =
-            heapless::Vec::from_slice(point.x().expect("Not the identity point").as_bytes())
-                .unwrap();
+            heapless::Vec::from_slice(x_bytes.as_bytes()).map_err(|_| {
+                Error::Platform(PlatformError::CryptoError(
+                    "x coordinate exceeds 32 bytes".into(),
+                ))
+            })?;
         let y: heapless::Vec<u8, 32> =
-            heapless::Vec::from_slice(point.y().expect("Not identity nor compressed").as_bytes())
-                .unwrap();
-        cose::PublicKey::EcdhEsHkdf256Key(cose::EcdhEsHkdf256PublicKey {
-            x: x.into(),
-            y: y.into(),
-        })
+            heapless::Vec::from_slice(y_bytes.as_bytes()).map_err(|_| {
+                Error::Platform(PlatformError::CryptoError(
+                    "y coordinate exceeds 32 bytes".into(),
+                ))
+            })?;
+        Ok(cose::PublicKey::EcdhEsHkdf256Key(
+            cose::EcdhEsHkdf256PublicKey {
+                x: x.into(),
+                y: y.into(),
+            },
+        ))
     }
 }
 
@@ -209,17 +235,17 @@ impl PinUvAuthProtocol for PinUvAuthProtocolOne {
     }
 
     #[instrument(skip_all)]
-    fn authenticate(&self, key: &[u8], message: &[u8]) -> Vec<u8> {
+    fn authenticate(&self, key: &[u8], message: &[u8]) -> Result<Vec<u8>, Error> {
         // Return the first 16 bytes of the result of computing HMAC-SHA-256 with the given key and message.
-        let hmac = hmac_sha256(key, message);
-        Vec::from(&hmac[..16])
+        let hmac = hmac_sha256(key, message)?;
+        Ok(Vec::from(&hmac[..16]))
     }
 
     #[instrument(skip_all)]
     fn decrypt(&self, key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, Error> {
         // If the size of demCiphertext is not a multiple of the AES block length, return error.
         // Otherwise return the AES-256-CBC decryption of demCiphertext using an all-zero IV.
-        if ciphertext.len() % 16 != 0 {
+        if !ciphertext.len().is_multiple_of(16) {
             error!(
                 ?ciphertext,
                 "Ciphertext length is not a multiple of AES block length"
@@ -252,6 +278,12 @@ pub struct PinUvAuthProtocolTwo {
     public_key: P256PublicKey,
 }
 
+impl Default for PinUvAuthProtocolTwo {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PinUvAuthProtocolTwo {
     pub fn new() -> Self {
         let private_key = if cfg!(test) {
@@ -280,14 +312,14 @@ impl ECPrivateKeyPinUvAuthProtocol for PinUvAuthProtocolTwo {
     }
 
     /// kdf(Z) → sharedSecret
-    fn kdf(&self, ikm: &[u8]) -> Vec<u8> {
+    fn kdf(&self, ikm: &[u8]) -> Result<Vec<u8>, Error> {
         // Returns:
         //   HKDF-SHA-256(salt = 32 zero bytes, IKM = Z, L = 32, info = "CTAP2 HMAC key") ||
         //   HKDF-SHA-256(salt = 32 zero bytes, IKM = Z, L = 32, info = "CTAP2 AES key")
         let salt: &[u8] = &[0u8; 32];
-        let mut output = hkdf_sha256(Some(salt), ikm, "CTAP2 HMAC key".as_bytes());
-        output.extend(hkdf_sha256(Some(salt), ikm, "CTAP2 AES key".as_bytes()));
-        output
+        let mut output = hkdf_sha256(Some(salt), ikm, "CTAP2 HMAC key".as_bytes())?;
+        output.extend(hkdf_sha256(Some(salt), ikm, "CTAP2 AES key".as_bytes())?);
+        Ok(output)
     }
 }
 
@@ -350,7 +382,7 @@ impl PinUvAuthProtocol for PinUvAuthProtocolTwo {
         Ok(plaintext)
     }
 
-    fn authenticate(&self, key: &[u8], message: &[u8]) -> Vec<u8> {
+    fn authenticate(&self, key: &[u8], message: &[u8]) -> Result<Vec<u8>, Error> {
         // If key is longer than 32 bytes, discard the excess. (This selects the HMAC-key portion of the shared secret.
         // When key is the pinUvAuthToken, it is exactly 32 bytes long and thus this step has no effect.)
         let key = &key[..32];
@@ -368,18 +400,25 @@ pub fn pin_hash(pin: &[u8]) -> Vec<u8> {
     Vec::from(&hashed[..16])
 }
 
-pub fn hmac_sha256(key: &[u8], message: &[u8]) -> Vec<u8> {
-    let mut hmac = HmacSha256::new_from_slice(key).expect("Any key size is valid");
+pub fn hmac_sha256(key: &[u8], message: &[u8]) -> Result<Vec<u8>, Error> {
+    let mut hmac = HmacSha256::new_from_slice(key).map_err(|e| {
+        error!("HMAC key error: {e}");
+        Error::Platform(PlatformError::CryptoError(format!("HMAC key error: {e}")))
+    })?;
     hmac.update(message);
-    hmac.finalize().into_bytes().to_vec()
+    Ok(hmac.finalize().into_bytes().to_vec())
 }
 
-pub fn hkdf_sha256(salt: Option<&[u8]>, ikm: &[u8], info: &[u8]) -> Vec<u8> {
-    let hk = Hkdf::<Sha256>::new(salt, &ikm);
+pub fn hkdf_sha256(salt: Option<&[u8]>, ikm: &[u8], info: &[u8]) -> Result<Vec<u8>, Error> {
+    let hk = Hkdf::<Sha256>::new(salt, ikm);
     let mut okm = [0u8; 32]; // fixed L = 32
-    hk.expand(info, &mut okm)
-        .expect("32 is a valid length for Sha256 to output");
-    Vec::from(okm)
+    hk.expand(info, &mut okm).map_err(|e| {
+        error!("HKDF expand error: {e}");
+        Error::Platform(PlatformError::CryptoError(format!(
+            "HKDF expand error: {e}"
+        )))
+    })?;
+    Ok(Vec::from(okm))
 }
 
 #[async_trait]
@@ -396,13 +435,13 @@ where
         let get_info_response = self.ctap2_get_info().await?;
 
         // If the minPINLength member of the authenticatorGetInfo response is absent, then let platformMinPINLengthInCodePoints be 4.
-        if new_pin.as_bytes().len() < get_info_response.min_pin_length.unwrap_or(4) as usize {
+        if new_pin.len() < get_info_response.min_pin_length.unwrap_or(4) as usize {
             // If platformCollectedPinLengthInCodePoints is less than platformMinPINLengthInCodePoints then the platform SHOULD display a "PIN too short" error message to the user.
             return Err(Error::Platform(PlatformError::PinTooShort));
         }
 
         // If the byte length of "newPin" is greater than the max UTF-8 representation limit of 63 bytes, then the platform SHOULD display a "PIN too long" error message to the user.
-        if new_pin.as_bytes().len() >= 64 {
+        if new_pin.len() >= 64 {
             return Err(Error::Platform(PlatformError::PinTooLong));
         }
 
@@ -417,7 +456,12 @@ where
             return Err(Error::Ctap(CtapError::Other));
         };
 
-        let current_pin = match get_info_response.options.as_ref().unwrap().get("clientPin") {
+        let current_pin = match get_info_response
+            .options
+            .as_ref()
+            .ok_or(Error::Platform(PlatformError::InvalidDeviceResponse))?
+            .get("clientPin")
+        {
             // Obtaining the current PIN, if one is set
             Some(true) => Some(
                 obtain_pin(
@@ -441,7 +485,8 @@ where
 
         // In preparation for obtaining pinUvAuthToken, the platform:
         // * Obtains a shared secret.
-        let (public_key, shared_secret) = obtain_shared_secret(self, &uv_proto, timeout).await?;
+        let (public_key, shared_secret) =
+            obtain_shared_secret(self, uv_proto.as_ref(), timeout).await?;
 
         // paddedPin is newPin padded on the right with 0x00 bytes to make it 64 bytes long. (Since the maximum length of newPin is 63 bytes, there is always at least one byte of padding.)
         let mut padded_new_pin = new_pin.as_bytes().to_vec();
@@ -460,7 +505,7 @@ where
                 let uv_auth_param = uv_proto.authenticate(
                     &shared_secret,
                     &[new_pin_enc.as_slice(), pin_hash_enc.as_slice()].concat(),
-                );
+                )?;
 
                 Ctap2ClientPinRequest::new_change_pin(
                     uv_proto.version(),
@@ -472,7 +517,7 @@ where
             }
             None => {
                 // pinUvAuthParam: the result of calling authenticate(shared secret, newPinEnc).
-                let uv_auth_param = uv_proto.authenticate(&shared_secret, &new_pin_enc);
+                let uv_auth_param = uv_proto.authenticate(&shared_secret, &new_pin_enc)?;
 
                 Ctap2ClientPinRequest::new_set_pin(
                     uv_proto.version(),

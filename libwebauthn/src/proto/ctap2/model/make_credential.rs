@@ -13,7 +13,7 @@ use crate::{
     },
     pin::PinUvAuthProtocol,
     proto::CtapError,
-    webauthn::Error,
+    webauthn::{Error, PlatformError},
 };
 use ctap_types::ctap2::credential_management::CredentialProtectionPolicy as Ctap2CredentialProtectionPolicy;
 use serde::{Deserialize, Serialize};
@@ -109,7 +109,7 @@ impl Ctap2MakeCredentialRequest {
     }
 
     pub fn skip_serializing_options(options: &Option<Ctap2MakeCredentialOptions>) -> bool {
-        options.map_or(true, |options| options.skip_serializing())
+        options.is_none_or(|options| options.skip_serializing())
     }
 
     pub fn skip_serializing_extensions(
@@ -117,7 +117,7 @@ impl Ctap2MakeCredentialRequest {
     ) -> bool {
         extensions
             .as_ref()
-            .map_or(true, |extensions| extensions.skip_serializing())
+            .is_none_or(|extensions| extensions.skip_serializing())
     }
 
     pub(crate) fn from_webauthn_request(
@@ -329,16 +329,20 @@ impl Ctap2UserVerifiableRequest for Ctap2MakeCredentialRequest {
 
     fn calculate_and_set_uv_auth(
         &mut self,
-        uv_proto: &Box<dyn PinUvAuthProtocol>,
+        uv_proto: &dyn PinUvAuthProtocol,
         uv_auth_token: &[u8],
-    ) {
-        let uv_auth_param = uv_proto.authenticate(uv_auth_token, self.client_data_hash());
+    ) -> Result<(), Error> {
+        let hash = self
+            .client_data_hash()
+            .ok_or(Error::Platform(PlatformError::InvalidDeviceResponse))?;
+        let uv_auth_param = uv_proto.authenticate(uv_auth_token, hash)?;
         self.pin_auth_proto = Some(uv_proto.version() as u32);
         self.pin_auth_param = Some(ByteBuf::from(uv_auth_param));
+        Ok(())
     }
 
-    fn client_data_hash(&self) -> &[u8] {
-        self.hash.as_slice()
+    fn client_data_hash(&self) -> Option<&[u8]> {
+        Some(self.hash.as_slice())
     }
 
     fn permissions(&self) -> Ctap2AuthTokenPermissionRole {

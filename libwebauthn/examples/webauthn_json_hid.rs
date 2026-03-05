@@ -8,8 +8,8 @@ use tokio::sync::broadcast::Receiver;
 use tracing_subscriber::{self, EnvFilter};
 
 use libwebauthn::ops::webauthn::{
-    GetAssertionRequest, JsonFormat, MakeCredentialRequest, RelyingPartyId,
-    WebAuthnIDL as _, WebAuthnIDLResponse as _,
+    GetAssertionRequest, JsonFormat, MakeCredentialRequest, RelyingPartyId, WebAuthnIDL as _,
+    WebAuthnIDLResponse as _,
 };
 use libwebauthn::pin::PinRequestReason;
 use libwebauthn::transport::hid::list_devices;

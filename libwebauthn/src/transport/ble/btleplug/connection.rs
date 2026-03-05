@@ -78,7 +78,7 @@ impl Connection {
     }
 
     pub(crate) async fn select_fido_revision(&self, revision: &FidoRevision) -> Result<(), Error> {
-        let ack: u8 = revision.clone() as u8;
+        let ack: u8 = *revision as u8;
         self.peripheral
             .write(
                 &self.services.service_revision_bitfield,
@@ -104,7 +104,7 @@ impl Connection {
             let status = parser.update(&fragment).or(Err(Error::InvalidFraming))?;
             match status {
                 BleFrameParserResult::Done => {
-                    let frame = parser.frame().unwrap();
+                    let frame = parser.frame().or(Err(Error::InvalidFraming))?;
                     trace!(?frame, "Received frame");
                     match frame.cmd {
                         BleCommand::Keepalive => {
