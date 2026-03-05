@@ -11,7 +11,7 @@ use tracing_subscriber::{self, EnvFilter};
 use libwebauthn::ops::webauthn::{
     GetAssertionRequest, MakeCredentialRequest, ResidentKeyRequirement, UserVerificationRequirement,
 };
-use libwebauthn::pin::PinRequestReason;
+use libwebauthn::pin::{PinNotSetReason, PinRequestReason};
 use libwebauthn::proto::ctap2::{
     Ctap2CredentialType, Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialRpEntity,
     Ctap2PublicKeyCredentialUserEntity,
@@ -33,6 +33,25 @@ async fn handle_updates(mut state_recv: Receiver<UvUpdate>) {
     while let Ok(update) = state_recv.recv().await {
         match update {
             UvUpdate::PresenceRequired => println!("Please touch your device!"),
+            UvUpdate::PinNotSet(update) => {
+                match update.reason {
+                    PinNotSetReason::PinNotSet => println!("RP required a PIN, but your device has none set. Please set one now (this is NOT a RP-specific operation, but will require a PIN on your device from now on, if you continue. Leave the pini entry empty to cancel the operation.)"),
+                    PinNotSetReason::PinTooShort => println!("The provided PIN was too short"),
+                    PinNotSetReason::PinTooLong => println!("The provided PIN was too long"),
+                    PinNotSetReason::PinPolicyViolation => println!("The provided PIN violated the pin policy set on the device."),
+                }
+                print!("PIN: Please set a new PIN for your device: ");
+                io::stdout().flush().unwrap();
+                let pin_raw: String = read!("{}\n");
+
+                if pin_raw.is_empty() {
+                    println!("PIN: No PIN provided, cancelling operation.");
+                    update.cancel();
+                } else {
+                    let _ = update.set_pin(&pin_raw);
+                    println!();
+                }
+            }
             UvUpdate::UvRetry { attempts_left } => {
                 print!("UV failed.");
                 if let Some(attempts_left) = attempts_left {
@@ -87,6 +106,18 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         println!("Selected NFC authenticator: {}", device);
         let mut channel = device.channel().await?;
 
+        // Ask user what kind of request should be issued
+        let user_verification = {
+            print!("Do you want to require user verification in the request? [y/N]: ");
+            io::stdout().flush().expect("Failed to flush stdout!");
+            let input: String = read!("{}\n");
+            if input.trim() == "y" || input.trim() == "Y" {
+                UserVerificationRequirement::Required
+            } else {
+                UserVerificationRequirement::Preferred
+            }
+        };
+
         // Make Credentials ceremony
         let make_credentials_request = MakeCredentialRequest {
             challenge: Vec::from(challenge),
@@ -95,7 +126,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             relying_party: Ctap2PublicKeyCredentialRpEntity::new("example.org", "example.org"),
             user: Ctap2PublicKeyCredentialUserEntity::new(&user_id, "mario.rossi", "Mario Rossi"),
             resident_key: Some(ResidentKeyRequirement::Discouraged),
-            user_verification: UserVerificationRequirement::Preferred,
+            user_verification,
             algorithms: vec![Ctap2CredentialType::default()],
             exclude: None,
             extensions: None,
