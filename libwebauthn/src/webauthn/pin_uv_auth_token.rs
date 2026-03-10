@@ -7,8 +7,8 @@ use cosey::PublicKey;
 
 use crate::ops::webauthn::UserVerificationRequirement;
 use crate::pin::{
-    pin_hash, PinManagementInternal, PinNotSetReason, PinRequestReason, PinUvAuthProtocol,
-    PinUvAuthProtocolOne, PinUvAuthProtocolTwo,
+    internal::PinManagementInternal, pin_hash, PinNotSetReason, PinRequestReason,
+    PinUvAuthProtocol, PinUvAuthProtocolOne, PinUvAuthProtocolTwo,
 };
 use crate::proto::ctap2::{
     Ctap2, Ctap2ClientPinRequest, Ctap2GetInfoResponse, Ctap2PinUvAuthProtocol,
@@ -663,7 +663,7 @@ mod test {
 
         let mut getassertion = create_get_assertion(&info, None);
 
-        // We should early return here right at the start and not send a ClientPIN-request
+        // We should receive a PinNotSet-UvUpdate here before a clientPIN-request is issued
         let resp = user_verification(
             &mut channel,
             UserVerificationRequirement::Required,
@@ -732,6 +732,175 @@ mod test {
         ];
         let pin_answers = vec![String::from("1"), "1".repeat(1000)];
         test_setting_pin(expected_reasons, pin_answers).await;
+    }
+
+    #[tokio::test]
+    async fn device_client_pin_not_set_but_uv_required_good_path() {
+        // Mostly copy&paste from full_ceremony_using_pin() testcase, with
+        // setting PIN wedged inbetween
+        let mut channel = MockChannel::new();
+        let mut info = create_info(&[("clientPin", false), ("pinUvAuthToken", true)], None);
+        info.pin_auth_protos = Some(vec![1]);
+
+        // Instrumenting the MockChannel with expected requests and responses
+        //
+        // 1. GetInfo request
+        let info_req = CborRequest::new(Ctap2CommandCode::AuthenticatorGetInfo);
+        let info_resp = CborResponse::new_success_from_slice(to_vec(&info).unwrap().as_slice());
+        channel.push_command_pair(info_req, info_resp);
+
+        // 2. KeyAgreement request and response (happens earlier than in full_ceremony_using_pin(), because we need it for setting the PIN, too)
+        let key_agreement_req = CborRequest::try_from(
+            &Ctap2ClientPinRequest::new_get_key_agreement(Ctap2PinUvAuthProtocol::One),
+        )
+        .unwrap();
+        let key_agreement = get_key_agreement();
+        let key_agreement_resp = CborResponse::new_success_from_slice(
+            to_vec(&Ctap2ClientPinResponse {
+                key_agreement: Some(key_agreement.clone()),
+                pin_uv_auth_token: None,
+                pin_retries: None,
+                power_cycle_state: None,
+                uv_retries: None,
+            })
+            .unwrap()
+            .as_slice(),
+        );
+        channel.push_command_pair(key_agreement_req.clone(), key_agreement_resp.clone());
+
+        // 3. ClientPin request (set PIN)
+        let pin_protocol = PinUvAuthProtocolOne::new();
+        let (public_key, shared_secret) = pin_protocol.encapsulate(&get_key_agreement()).unwrap();
+        let mut padded_new_pin = "1234".as_bytes().to_vec();
+        padded_new_pin.resize(64, 0x00);
+        let new_pin_enc = pin_protocol
+            .encrypt(&shared_secret, &padded_new_pin)
+            .unwrap();
+        let uv_auth_param = pin_protocol
+            .authenticate(&shared_secret, &new_pin_enc)
+            .unwrap();
+        let set_pin_req = CborRequest::try_from(&Ctap2ClientPinRequest::new_set_pin(
+            pin_protocol.version(),
+            &new_pin_enc,
+            public_key.clone(),
+            &uv_auth_param,
+        ))
+        .unwrap();
+
+        let set_pin_resp = CborResponse::new_success_from_slice(
+            to_vec(&Ctap2ClientPinResponse::default()) // all None
+                .unwrap()
+                .as_slice(),
+        );
+        channel.push_command_pair(set_pin_req, set_pin_resp);
+
+        let mut info = create_info(&[("clientPin", true), ("pinUvAuthToken", true)], None);
+        info.pin_auth_protos = Some(vec![1]);
+        let mut getassertion = create_get_assertion(&info, None);
+
+        // 4. Second GetInfo request, this time with clientPin set to true
+        let info_req = CborRequest::new(Ctap2CommandCode::AuthenticatorGetInfo);
+        let info_resp = CborResponse::new_success_from_slice(to_vec(&info).unwrap().as_slice());
+        channel.push_command_pair(info_req, info_resp);
+
+        // 5. Queueing PinRetries request and response
+        let pin_retries_req = CborRequest::try_from(&Ctap2ClientPinRequest::new_get_pin_retries(
+            Some(Ctap2PinUvAuthProtocol::One),
+        ))
+        .unwrap();
+        let pin_retries_resp = CborResponse::new_success_from_slice(
+            to_vec(&Ctap2ClientPinResponse {
+                key_agreement: None,
+                pin_uv_auth_token: None,
+                pin_retries: Some(5),
+                power_cycle_state: None,
+                uv_retries: None,
+            })
+            .unwrap()
+            .as_slice(),
+        );
+        channel.push_command_pair(pin_retries_req, pin_retries_resp);
+
+        // 6. Second key agreement call (reusing the previous one)
+        channel.push_command_pair(key_agreement_req, key_agreement_resp);
+
+        // 7. getPinUvAuth request and response
+        let pin_hash_enc = pin_protocol
+            .encrypt(&shared_secret, &pin_hash("1234".as_bytes()))
+            .unwrap();
+        let pin_req = CborRequest::try_from(&Ctap2ClientPinRequest::new_get_pin_token_with_perm(
+            Ctap2PinUvAuthProtocol::One,
+            public_key,
+            &pin_hash_enc,
+            getassertion.permissions(),
+            getassertion.permissions_rpid(),
+        ))
+        .unwrap();
+        // We do here what the device would need to do, i.e. generate a new random
+        // pinUvAuthToken (here all 5's), then encrypt it using the shared_secret.
+        let token = [5; 32];
+        let encrypted_token = pin_protocol.encrypt(&shared_secret, &token).unwrap();
+        let pin_resp = CborResponse::new_success_from_slice(
+            to_vec(&Ctap2ClientPinResponse {
+                key_agreement: None,
+                pin_uv_auth_token: Some(ByteBuf::from(encrypted_token)),
+                pin_retries: None,
+                power_cycle_state: None,
+                uv_retries: None,
+            })
+            .unwrap()
+            .as_slice(),
+        );
+        channel.push_command_pair(pin_req, pin_resp);
+
+        let mut recv = channel.get_ux_update_receiver();
+        let recv_handle = tokio::task::spawn(async move {
+            if let UvUpdate::PinNotSet(update) = recv.recv().await.unwrap() {
+                assert_eq!(update.reason, PinNotSetReason::PinNotSet);
+                update.set_pin("1234").unwrap();
+            } else {
+                panic!("Wrong UxUpdate received! Expected PinNotSet");
+            }
+            if let UvUpdate::PinRequired(update) = recv.recv().await.unwrap() {
+                update.send_pin("1234").unwrap();
+            } else {
+                panic!("Wrong UxUpdate received! Expected PinRequired");
+            }
+            recv
+        });
+
+        // We should receive a PinNotSet-UvUpdate here before a clientPIN-request is issued
+        let resp = user_verification(
+            &mut channel,
+            UserVerificationRequirement::Required,
+            &mut getassertion,
+            TIMEOUT,
+        )
+        .await;
+
+        let expected_result = Ok(UsedPinUvAuthToken::NewlyCalculated(
+            Ctap2UserVerificationOperation::GetPinUvAuthTokenUsingPinWithPermissions,
+        ));
+        assert_eq!(resp, expected_result);
+        // Something ended up in the auth store
+        assert!(channel.get_auth_data().is_some());
+        assert_eq!(
+            channel
+                .get_auth_data()
+                .as_ref()
+                .unwrap()
+                .pin_uv_auth_token
+                .as_ref()
+                .unwrap(),
+            &token
+        );
+        assert_eq!(
+            channel.get_auth_data().unwrap().shared_secret,
+            shared_secret
+        );
+        let recv = recv_handle.await.expect("Failed to join update thread");
+        // No more updates should be sent
+        assert!(recv.is_empty());
     }
 
     #[tokio::test]

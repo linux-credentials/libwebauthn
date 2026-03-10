@@ -100,7 +100,7 @@ impl Channel for MockChannel {
         assert_eq!(
             &expected,
             request,
-            "{} items still in the queue",
+            "{} items still in the queue. Left: Expected, Right: Received",
             self.expected_requests.len()
         );
         Ok(())

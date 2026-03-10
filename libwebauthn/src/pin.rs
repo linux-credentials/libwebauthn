@@ -433,18 +433,136 @@ pub fn hkdf_sha256(salt: Option<&[u8]>, ikm: &[u8], info: &[u8]) -> Result<Vec<u
     Ok(Vec::from(okm))
 }
 
-#[async_trait]
-pub(crate) trait PinManagementInternal {
-    async fn change_pin_internal(
-        &mut self,
-        get_info_response: &Ctap2GetInfoResponse,
-        new_pin: String,
-        timeout: Duration,
-    ) -> Result<(), Error>;
+// Defining a sealed trait for the internal API that is only visible within the crate
+// while not touching/extending the external API
+pub(crate) mod internal {
+    use super::*;
+
+    #[async_trait]
+    pub trait PinManagementInternal {
+        async fn change_pin_internal(
+            &mut self,
+            get_info_response: &Ctap2GetInfoResponse,
+            new_pin: String,
+            timeout: Duration,
+        ) -> Result<(), Error>;
+    }
+
+    #[async_trait]
+    impl<C> PinManagementInternal for C
+    where
+        C: Channel,
+    {
+        async fn change_pin_internal(
+            &mut self,
+            get_info_response: &Ctap2GetInfoResponse,
+            new_pin: String,
+            timeout: Duration,
+        ) -> Result<(), Error> {
+            // If the minPINLength member of the authenticatorGetInfo response is absent, then let platformMinPINLengthInCodePoints be 4.
+            if new_pin.len() < get_info_response.min_pin_length.unwrap_or(4) as usize {
+                // If platformCollectedPinLengthInCodePoints is less than platformMinPINLengthInCodePoints then the platform SHOULD display a "PIN too short" error message to the user.
+                return Err(Error::Platform(PlatformError::PinTooShort));
+            }
+
+            // If the byte length of "newPin" is greater than the max UTF-8 representation limit of 63 bytes, then the platform SHOULD display a "PIN too long" error message to the user.
+            if new_pin.len() >= 64 {
+                return Err(Error::Platform(PlatformError::PinTooLong));
+            }
+
+            let Some(uv_proto) = select_uv_proto(
+                #[cfg(test)]
+                self.get_forced_pin_protocol(),
+                get_info_response,
+            )
+            .await
+            else {
+                error!("No supported PIN/UV auth protocols found");
+                return Err(Error::Ctap(CtapError::Other));
+            };
+
+            let current_pin = match get_info_response
+                .options
+                .as_ref()
+                .ok_or(Error::Platform(PlatformError::InvalidDeviceResponse))?
+                .get("clientPin")
+            {
+                // Obtaining the current PIN, if one is set
+                Some(true) => Some(
+                    obtain_pin(
+                        self,
+                        get_info_response,
+                        uv_proto.version(),
+                        PinRequestReason::AuthenticatorPolicy,
+                        timeout,
+                    )
+                    .await?,
+                ),
+
+                // No PIN set yet
+                Some(false) => None,
+
+                // Device does not support PIN
+                None => {
+                    return Err(Error::Platform(PlatformError::PinNotSupported));
+                }
+            };
+
+            // In preparation for obtaining pinUvAuthToken, the platform:
+            // * Obtains a shared secret.
+            let (public_key, shared_secret) =
+                obtain_shared_secret(self, uv_proto.as_ref(), timeout).await?;
+
+            // paddedPin is newPin padded on the right with 0x00 bytes to make it 64 bytes long. (Since the maximum length of newPin is 63 bytes, there is always at least one byte of padding.)
+            let mut padded_new_pin = new_pin.as_bytes().to_vec();
+            padded_new_pin.resize(64, 0x00);
+
+            // newPinEnc: the result of calling encrypt(shared secret, paddedPin) where
+            let new_pin_enc = uv_proto.encrypt(&shared_secret, &padded_new_pin)?;
+
+            let req = match current_pin {
+                Some(curr_pin) => {
+                    // pinHashEnc: The result of calling encrypt(shared secret, LEFT(SHA-256(curPin), 16)).
+                    let pin_hash = pin_hash(&curr_pin);
+                    let pin_hash_enc = uv_proto.encrypt(&shared_secret, &pin_hash)?;
+
+                    // pinUvAuthParam: the result of calling authenticate(shared secret, newPinEnc || pinHashEnc)
+                    let uv_auth_param = uv_proto.authenticate(
+                        &shared_secret,
+                        &[new_pin_enc.as_slice(), pin_hash_enc.as_slice()].concat(),
+                    )?;
+
+                    Ctap2ClientPinRequest::new_change_pin(
+                        uv_proto.version(),
+                        &new_pin_enc,
+                        &pin_hash_enc,
+                        public_key,
+                        &uv_auth_param,
+                    )
+                }
+                None => {
+                    // pinUvAuthParam: the result of calling authenticate(shared secret, newPinEnc).
+                    let uv_auth_param = uv_proto.authenticate(&shared_secret, &new_pin_enc)?;
+
+                    Ctap2ClientPinRequest::new_set_pin(
+                        uv_proto.version(),
+                        &new_pin_enc,
+                        public_key,
+                        &uv_auth_param,
+                    )
+                }
+            };
+
+            // On success, this is an all-empty Ctap2ClientPinResponse
+            let _ = self.ctap2_client_pin(&req, timeout).await?;
+            Ok(())
+        }
+    }
 }
 
+use internal::PinManagementInternal;
+
 #[async_trait]
-#[allow(private_bounds)]
 pub trait PinManagement: PinManagementInternal {
     async fn change_pin(&mut self, new_pin: String, timeout: Duration) -> Result<(), Error>;
 }
@@ -458,116 +576,5 @@ where
         let get_info_response = self.ctap2_get_info().await?;
         self.change_pin_internal(&get_info_response, new_pin, timeout)
             .await
-    }
-}
-
-#[async_trait]
-impl<C> PinManagementInternal for C
-where
-    C: Channel,
-{
-    async fn change_pin_internal(
-        &mut self,
-        get_info_response: &Ctap2GetInfoResponse,
-        new_pin: String,
-        timeout: Duration,
-    ) -> Result<(), Error> {
-        // If the minPINLength member of the authenticatorGetInfo response is absent, then let platformMinPINLengthInCodePoints be 4.
-        if new_pin.len() < get_info_response.min_pin_length.unwrap_or(4) as usize {
-            // If platformCollectedPinLengthInCodePoints is less than platformMinPINLengthInCodePoints then the platform SHOULD display a "PIN too short" error message to the user.
-            return Err(Error::Platform(PlatformError::PinTooShort));
-        }
-
-        // If the byte length of "newPin" is greater than the max UTF-8 representation limit of 63 bytes, then the platform SHOULD display a "PIN too long" error message to the user.
-        if new_pin.len() >= 64 {
-            return Err(Error::Platform(PlatformError::PinTooLong));
-        }
-
-        let Some(uv_proto) = select_uv_proto(
-            #[cfg(test)]
-            self.get_forced_pin_protocol(),
-            get_info_response,
-        )
-        .await
-        else {
-            error!("No supported PIN/UV auth protocols found");
-            return Err(Error::Ctap(CtapError::Other));
-        };
-
-        let current_pin = match get_info_response
-            .options
-            .as_ref()
-            .ok_or(Error::Platform(PlatformError::InvalidDeviceResponse))?
-            .get("clientPin")
-        {
-            // Obtaining the current PIN, if one is set
-            Some(true) => Some(
-                obtain_pin(
-                    self,
-                    get_info_response,
-                    uv_proto.version(),
-                    PinRequestReason::AuthenticatorPolicy,
-                    timeout,
-                )
-                .await?,
-            ),
-
-            // No PIN set yet
-            Some(false) => None,
-
-            // Device does not support PIN
-            None => {
-                return Err(Error::Platform(PlatformError::PinNotSupported));
-            }
-        };
-
-        // In preparation for obtaining pinUvAuthToken, the platform:
-        // * Obtains a shared secret.
-        let (public_key, shared_secret) =
-            obtain_shared_secret(self, uv_proto.as_ref(), timeout).await?;
-
-        // paddedPin is newPin padded on the right with 0x00 bytes to make it 64 bytes long. (Since the maximum length of newPin is 63 bytes, there is always at least one byte of padding.)
-        let mut padded_new_pin = new_pin.as_bytes().to_vec();
-        padded_new_pin.resize(64, 0x00);
-
-        // newPinEnc: the result of calling encrypt(shared secret, paddedPin) where
-        let new_pin_enc = uv_proto.encrypt(&shared_secret, &padded_new_pin)?;
-
-        let req = match current_pin {
-            Some(curr_pin) => {
-                // pinHashEnc: The result of calling encrypt(shared secret, LEFT(SHA-256(curPin), 16)).
-                let pin_hash = pin_hash(&curr_pin);
-                let pin_hash_enc = uv_proto.encrypt(&shared_secret, &pin_hash)?;
-
-                // pinUvAuthParam: the result of calling authenticate(shared secret, newPinEnc || pinHashEnc)
-                let uv_auth_param = uv_proto.authenticate(
-                    &shared_secret,
-                    &[new_pin_enc.as_slice(), pin_hash_enc.as_slice()].concat(),
-                )?;
-
-                Ctap2ClientPinRequest::new_change_pin(
-                    uv_proto.version(),
-                    &new_pin_enc,
-                    &pin_hash_enc,
-                    public_key,
-                    &uv_auth_param,
-                )
-            }
-            None => {
-                // pinUvAuthParam: the result of calling authenticate(shared secret, newPinEnc).
-                let uv_auth_param = uv_proto.authenticate(&shared_secret, &new_pin_enc)?;
-
-                Ctap2ClientPinRequest::new_set_pin(
-                    uv_proto.version(),
-                    &new_pin_enc,
-                    public_key,
-                    &uv_auth_param,
-                )
-            }
-        };
-
-        // On success, this is an all-empty Ctap2ClientPinResponse
-        let _ = self.ctap2_client_pin(&req, timeout).await?;
-        Ok(())
     }
 }
