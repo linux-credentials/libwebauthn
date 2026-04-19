@@ -35,6 +35,8 @@ pub enum PlatformError {
     SyntaxError,
     #[error("cbor serialization error: {0}")]
     CborError(#[from] CborError),
+    #[error("crypto error: {0}")]
+    CryptoError(String),
     #[error("cancelled by user")]
     Cancelled,
 }

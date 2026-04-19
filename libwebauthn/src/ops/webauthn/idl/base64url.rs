@@ -40,7 +40,7 @@ impl<'de> Deserialize<'de> for Base64UrlString {
         let s: String = Deserialize::deserialize(deserializer)?;
         base64_url::decode(&s)
             .map_err(serde::de::Error::custom)
-            .map(|bytes| Base64UrlString(bytes))
+            .map(Base64UrlString)
     }
 }
 

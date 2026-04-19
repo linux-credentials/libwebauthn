@@ -196,10 +196,16 @@ impl<'de, T: DeserializeOwned> Deserialize<'de> for AuthenticatorData<T> {
 
                 let mut cursor = Cursor::new(&data);
                 let mut rp_id_hash = [0u8; 32];
-                cursor.read_exact(&mut rp_id_hash).unwrap(); // We checked the length
-                let flags_raw = cursor.read_u8().unwrap(); // We checked the length
+                cursor
+                    .read_exact(&mut rp_id_hash)
+                    .map_err(|e| DesError::custom(format!("failed to read rp_id_hash: {e}")))?;
+                let flags_raw = cursor
+                    .read_u8()
+                    .map_err(|e| DesError::custom(format!("failed to read flags: {e}")))?;
                 let flags = AuthenticatorDataFlags::from_bits_truncate(flags_raw);
-                let signature_count = cursor.read_u32::<BigEndian>().unwrap(); // We checked the length
+                let signature_count = cursor.read_u32::<BigEndian>().map_err(|e| {
+                    DesError::custom(format!("failed to read signature_count: {e}"))
+                })?;
 
                 let attested_credential =
                     if flags.contains(AuthenticatorDataFlags::ATTESTED_CREDENTIALS) {
@@ -209,13 +215,19 @@ impl<'de, T: DeserializeOwned> Deserialize<'de> for AuthenticatorData<T> {
                         }
 
                         let mut aaguid = [0u8; 16];
-                        cursor.read_exact(&mut aaguid).unwrap(); // We checked the length
-                        let credential_id_len = cursor.read_u16::<BigEndian>().unwrap() as usize; // We checked the length
+                        cursor
+                            .read_exact(&mut aaguid)
+                            .map_err(|e| DesError::custom(format!("failed to read aaguid: {e}")))?;
+                        let credential_id_len = cursor.read_u16::<BigEndian>().map_err(|e| {
+                            DesError::custom(format!("failed to read credential_id_len: {e}"))
+                        })? as usize;
                         if data.len() < 55 + credential_id_len {
                             return Err(DesError::invalid_length(data.len(), &"55+L"));
                         }
                         let mut credential_id = vec![0u8; credential_id_len];
-                        cursor.read_exact(&mut credential_id).unwrap(); // We checked the length
+                        cursor.read_exact(&mut credential_id).map_err(|e| {
+                            DesError::custom(format!("failed to read credential_id: {e}"))
+                        })?;
 
                         let credential_public_key: PublicKey =
                             cbor::from_cursor(&mut cursor).map_err(DesError::custom)?;

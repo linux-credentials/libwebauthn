@@ -53,7 +53,7 @@ impl HidMessage {
             ));
         }
 
-        let mut payload = self.payload.as_slice().into_iter().cloned().peekable();
+        let mut payload = self.payload.as_slice().iter().cloned().peekable();
         let mut packets = vec![];
 
         // Initial fragment
@@ -106,13 +106,19 @@ pub struct HidMessageParser {
     packets: Vec<Vec<u8>>,
 }
 
+impl Default for HidMessageParser {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HidMessageParser {
     pub fn new() -> Self {
         Self { packets: vec![] }
     }
 
     pub fn update(&mut self, packet: &[u8]) -> Result<HidMessageParserState, IOError> {
-        if (self.packets.len() == 0 && packet.len() < PACKET_INITIAL_HEADER_SIZE)
+        if (self.packets.is_empty() && packet.len() < PACKET_INITIAL_HEADER_SIZE)
             || packet.len() < PACKET_CONT_HEADER_SIZE + 1
         {
             error!("Packet length in invalid");
@@ -126,19 +132,18 @@ impl HidMessageParser {
         } else {
             self.packets.push(Vec::from(packet));
         }
-        return if self.more_packets_needed() {
+        if self.more_packets_needed() {
             Ok(HidMessageParserState::MorePacketsExpected)
         } else {
             Ok(HidMessageParserState::Done)
-        };
+        }
     }
 
     fn more_packets_needed(&self) -> bool {
-        if self.packets.is_empty() {
-            return true;
+        match self.expected_bytes() {
+            None => true,
+            Some(expected) => expected > self.payload_len(),
         }
-
-        self.expected_bytes().unwrap() > self.payload_len()
     }
 
     fn expected_bytes(&self) -> Option<usize> {
@@ -147,7 +152,7 @@ impl HidMessageParser {
         }
 
         let mut cursor = IOCursor::new(vec![self.packets[0][5], self.packets[0][6]]);
-        Some(cursor.read_u16::<BigEndian>().unwrap() as usize)
+        Some(cursor.read_u16::<BigEndian>().ok()? as usize)
     }
 
     fn payload_len(&self) -> usize {
@@ -250,9 +255,7 @@ mod tests {
         let mut parser = HidMessageParser::new();
         assert_eq!(
             parser
-                .update(&vec![
-                    0xC0, 0xC1, 0xC2, 0xC3, 0x83, 0x00, 0x04, 0x0A, 0x0B, 0x0C, 0x0D,
-                ])
+                .update(&[0xC0, 0xC1, 0xC2, 0xC3, 0x83, 0x00, 0x04, 0x0A, 0x0B, 0x0C, 0x0D,])
                 .unwrap(),
             HidMessageParserState::Done
         );
@@ -267,19 +270,19 @@ mod tests {
         let mut parser = HidMessageParser::new();
         assert_eq!(
             parser
-                .update(&vec![0xC0, 0xC1, 0xC2, 0xC3, 0x83, 0x00, 0x05, 0x0A])
+                .update(&[0xC0, 0xC1, 0xC2, 0xC3, 0x83, 0x00, 0x05, 0x0A])
                 .unwrap(),
             HidMessageParserState::MorePacketsExpected
         );
         assert_eq!(
             parser
-                .update(&vec![0xC0, 0xC1, 0xC2, 0xC3, 0x00, 0x0B, 0x0C])
+                .update(&[0xC0, 0xC1, 0xC2, 0xC3, 0x00, 0x0B, 0x0C])
                 .unwrap(),
             HidMessageParserState::MorePacketsExpected
         );
         assert_eq!(
             parser
-                .update(&vec![0xC0, 0xC1, 0xC2, 0xC3, 0x01, 0x0D, 0x0E, 0xFF]) // excess byte
+                .update(&[0xC0, 0xC1, 0xC2, 0xC3, 0x01, 0x0D, 0x0E, 0xFF]) // excess byte
                 .unwrap(),
             HidMessageParserState::Done
         );

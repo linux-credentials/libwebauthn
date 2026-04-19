@@ -5,6 +5,7 @@ pub mod channel;
 pub mod device;
 pub mod framing;
 
+pub use device::is_available;
 pub use device::list_devices;
 pub use device::BleDevice;
 

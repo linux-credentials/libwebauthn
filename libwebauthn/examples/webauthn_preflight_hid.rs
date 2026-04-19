@@ -1,4 +1,3 @@
-use std::convert::TryInto;
 use std::error::Error;
 use std::io::{self, Write};
 use std::time::Duration;
@@ -85,7 +84,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
     let user_id: [u8; 32] = thread_rng().gen();
 
     for mut device in devices {
-        println!("Selected HID authenticator: {}", &device);
+        println!("Selected HID authenticator: {}", device);
         let mut channel = device.channel().await?;
         channel.wink(TIMEOUT).await?;
 
@@ -165,7 +164,7 @@ async fn make_credential_call(
         origin: "example.org".to_owned(),
         cross_origin: None,
         relying_party: Ctap2PublicKeyCredentialRpEntity::new("example.org", "example.org"),
-        user: Ctap2PublicKeyCredentialUserEntity::new(&user_id, "mario.rossi", "Mario Rossi"),
+        user: Ctap2PublicKeyCredentialUserEntity::new(user_id, "mario.rossi", "Mario Rossi"),
         resident_key: Some(ResidentKeyRequirement::Discouraged),
         user_verification: UserVerificationRequirement::Preferred,
         algorithms: vec![Ctap2CredentialType::default()],

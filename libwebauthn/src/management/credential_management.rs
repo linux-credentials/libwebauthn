@@ -276,26 +276,26 @@ impl Ctap2UserVerifiableRequest for Ctap2CredentialManagementRequest {
 
     fn calculate_and_set_uv_auth(
         &mut self,
-        uv_proto: &Box<dyn PinUvAuthProtocol>,
+        uv_proto: &dyn PinUvAuthProtocol,
         uv_auth_token: &[u8],
-    ) {
-        let mut data = vec![self.subcommand.unwrap() as u8];
+    ) -> Result<(), Error> {
+        let subcommand = self
+            .subcommand
+            .ok_or(Error::Platform(PlatformError::InvalidDeviceResponse))?;
+        let mut data = vec![subcommand as u8];
 
         // e.g. pinUvAuthParam (0x04): authenticate(pinUvAuthToken, enumerateCredentialsBegin (0x04) || subCommandParams).
         if let Some(params) = &self.subcommand_params {
-            data.extend(cbor::to_vec(&params).unwrap());
+            data.extend(cbor::to_vec(&params)?);
         }
-        let uv_auth_param = uv_proto.authenticate(uv_auth_token, &data);
+        let uv_auth_param = uv_proto.authenticate(uv_auth_token, &data)?;
         self.protocol = Some(uv_proto.version());
         self.uv_auth_param = Some(ByteBuf::from(uv_auth_param));
-    }
-
-    fn client_data_hash(&self) -> &[u8] {
-        unreachable!()
+        Ok(())
     }
 
     fn permissions(&self) -> Ctap2AuthTokenPermissionRole {
-        return Ctap2AuthTokenPermissionRole::CREDENTIAL_MANAGEMENT;
+        Ctap2AuthTokenPermissionRole::CREDENTIAL_MANAGEMENT
     }
 
     fn permissions_rpid(&self) -> Option<&str> {

@@ -99,13 +99,11 @@ where
         let resp = self.ctap2_bio_enrollment(&req, timeout).await?;
         let Some(fingerprint_kind) = resp.fingerprint_kind else {
             warn!("Channel did not return fingerprint_kind in sensor info.");
-            return Err(Error::Ctap(CtapError::Other))
+            return Err(Error::Ctap(CtapError::Other));
         };
         Ok(Ctap2BioEnrollmentFingerprintSensorInfo {
             fingerprint_kind,
-            max_capture_samples_required_for_enroll: resp
-                .max_capture_samples_required_for_enroll
-                .clone(),
+            max_capture_samples_required_for_enroll: resp.max_capture_samples_required_for_enroll,
             max_template_friendly_name: resp.max_template_friendly_name,
         })
     }
@@ -297,32 +295,29 @@ impl Ctap2UserVerifiableRequest for Ctap2BioEnrollmentRequest {
 
     fn calculate_and_set_uv_auth(
         &mut self,
-        uv_proto: &Box<dyn PinUvAuthProtocol>,
+        uv_proto: &dyn PinUvAuthProtocol,
         uv_auth_token: &[u8],
-    ) {
+    ) -> Result<(), Error> {
         // pinUvAuthParam (0x05): authenticate(pinUvAuthToken, fingerprint (0x01) || enumerateEnrollments (0x04)).
-        let mut data = match self.subcommand {
-            None => unreachable!(),
-            Some(x) => {
-                let data = vec![Ctap2BioEnrollmentModality::Fingerprint as u8, x as u8];
-                data
-            }
-        };
+        let subcommand = self
+            .subcommand
+            .ok_or(Error::Platform(PlatformError::InvalidDeviceResponse))?;
+        let mut data = vec![
+            Ctap2BioEnrollmentModality::Fingerprint as u8,
+            subcommand as u8,
+        ];
         // e.g. "Authenticator calls verify(pinUvAuthToken, fingerprint (0x01) || removeEnrollment (0x06) || subCommandParams, pinUvAuthParam)"
         if let Some(params) = &self.subcommand_params {
-            data.extend(cbor::to_vec(&params).unwrap());
+            data.extend(cbor::to_vec(&params)?);
         }
-        let uv_auth_param = uv_proto.authenticate(uv_auth_token, &data);
+        let uv_auth_param = uv_proto.authenticate(uv_auth_token, &data)?;
         self.protocol = Some(uv_proto.version());
         self.uv_auth_param = Some(ByteBuf::from(uv_auth_param));
-    }
-
-    fn client_data_hash(&self) -> &[u8] {
-        unreachable!()
+        Ok(())
     }
 
     fn permissions(&self) -> Ctap2AuthTokenPermissionRole {
-        return Ctap2AuthTokenPermissionRole::BIO_ENROLLMENT;
+        Ctap2AuthTokenPermissionRole::BIO_ENROLLMENT
     }
 
     fn permissions_rpid(&self) -> Option<&str> {

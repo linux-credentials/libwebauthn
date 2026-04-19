@@ -139,7 +139,7 @@ where
     #[instrument(skip_all)]
     pub async fn wink(&mut self, _timeout: Duration) -> Result<bool, Error> {
         warn!("WINK capability is not supported");
-        return Ok(false);
+        Ok(false)
     }
 
     pub async fn select_fido2(&mut self) -> Result<(), Error> {
@@ -233,9 +233,7 @@ where
         self.status
     }
 
-    async fn close(&mut self) {
-        ()
-    }
+    async fn close(&mut self) {}
 
     #[instrument(level = Level::DEBUG, skip_all)]
     async fn apdu_send(&mut self, request: &ApduRequest, _timeout: Duration) -> Result<(), Error> {

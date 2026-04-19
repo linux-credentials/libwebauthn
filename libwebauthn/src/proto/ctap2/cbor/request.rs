@@ -8,6 +8,7 @@ use crate::proto::ctap2::model::Ctap2MakeCredentialRequest;
 use crate::proto::ctap2::Ctap2AuthenticatorConfigRequest;
 use crate::proto::ctap2::Ctap2BioEnrollmentRequest;
 use crate::proto::ctap2::Ctap2CredentialManagementRequest;
+use crate::webauthn::Error;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CborRequest {
@@ -36,66 +37,72 @@ impl CborRequest {
     }
 }
 
-impl From<&Ctap2MakeCredentialRequest> for CborRequest {
-    fn from(request: &Ctap2MakeCredentialRequest) -> CborRequest {
-        CborRequest {
+impl TryFrom<&Ctap2MakeCredentialRequest> for CborRequest {
+    type Error = Error;
+    fn try_from(request: &Ctap2MakeCredentialRequest) -> Result<CborRequest, Error> {
+        Ok(CborRequest {
             command: Ctap2CommandCode::AuthenticatorMakeCredential,
-            encoded_data: cbor::to_vec(&request).unwrap(),
-        }
+            encoded_data: cbor::to_vec(&request)?,
+        })
     }
 }
 
-impl From<&Ctap2GetAssertionRequest> for CborRequest {
-    fn from(request: &Ctap2GetAssertionRequest) -> CborRequest {
-        CborRequest {
+impl TryFrom<&Ctap2GetAssertionRequest> for CborRequest {
+    type Error = Error;
+    fn try_from(request: &Ctap2GetAssertionRequest) -> Result<CborRequest, Error> {
+        Ok(CborRequest {
             command: Ctap2CommandCode::AuthenticatorGetAssertion,
-            encoded_data: cbor::to_vec(&request).unwrap(),
-        }
+            encoded_data: cbor::to_vec(&request)?,
+        })
     }
 }
 
-impl From<&Ctap2ClientPinRequest> for CborRequest {
-    fn from(request: &Ctap2ClientPinRequest) -> CborRequest {
-        CborRequest {
+impl TryFrom<&Ctap2ClientPinRequest> for CborRequest {
+    type Error = Error;
+    fn try_from(request: &Ctap2ClientPinRequest) -> Result<CborRequest, Error> {
+        Ok(CborRequest {
             command: Ctap2CommandCode::AuthenticatorClientPin,
-            encoded_data: cbor::to_vec(&request).unwrap(),
-        }
+            encoded_data: cbor::to_vec(&request)?,
+        })
     }
 }
 
-impl From<&Ctap2AuthenticatorConfigRequest> for CborRequest {
-    fn from(request: &Ctap2AuthenticatorConfigRequest) -> CborRequest {
-        CborRequest {
+impl TryFrom<&Ctap2AuthenticatorConfigRequest> for CborRequest {
+    type Error = Error;
+    fn try_from(request: &Ctap2AuthenticatorConfigRequest) -> Result<CborRequest, Error> {
+        Ok(CborRequest {
             command: Ctap2CommandCode::AuthenticatorConfig,
-            encoded_data: cbor::to_vec(&request).unwrap(),
-        }
+            encoded_data: cbor::to_vec(&request)?,
+        })
     }
 }
 
-impl From<&Ctap2BioEnrollmentRequest> for CborRequest {
-    fn from(request: &Ctap2BioEnrollmentRequest) -> CborRequest {
+impl TryFrom<&Ctap2BioEnrollmentRequest> for CborRequest {
+    type Error = Error;
+    fn try_from(request: &Ctap2BioEnrollmentRequest) -> Result<CborRequest, Error> {
         let command = if request.use_legacy_preview {
             Ctap2CommandCode::AuthenticatorBioEnrollmentPreview
         } else {
             Ctap2CommandCode::AuthenticatorBioEnrollment
         };
-        CborRequest {
+        Ok(CborRequest {
             command,
-            encoded_data: cbor::to_vec(&request).unwrap(),
-        }
+            encoded_data: cbor::to_vec(&request)?,
+        })
     }
 }
 
-impl From<&Ctap2CredentialManagementRequest> for CborRequest {
-    fn from(request: &Ctap2CredentialManagementRequest) -> CborRequest {
+impl TryFrom<&Ctap2CredentialManagementRequest> for CborRequest {
+    type Error = Error;
+    fn try_from(request: &Ctap2CredentialManagementRequest) -> Result<CborRequest, Error> {
         let command = if request.use_legacy_preview {
             Ctap2CommandCode::AuthenticatorCredentialManagementPreview
         } else {
             Ctap2CommandCode::AuthenticatorCredentialManagement
         };
-        CborRequest {
+        Ok(CborRequest {
             command,
-            encoded_data: cbor::to_vec(&request).unwrap(),
-        }
+            encoded_data: cbor::to_vec(&request)?,
+        })
     }
 }

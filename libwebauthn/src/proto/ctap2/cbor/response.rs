@@ -25,7 +25,7 @@ impl CborResponse {
 impl TryFrom<&Vec<u8>> for CborResponse {
     type Error = IOError;
     fn try_from(packet: &Vec<u8>) -> Result<Self, Self::Error> {
-        if packet.len() < 1 {
+        if packet.is_empty() {
             return Err(IOError::new(
                 IOErrorKind::InvalidData,
                 "Cbor response packets must contain at least 1 byte.",

@@ -144,7 +144,7 @@ impl Ctap2GetAssertionRequest {
     ) -> bool {
         extensions
             .as_ref()
-            .map_or(true, |extensions| extensions.skip_serializing())
+            .is_none_or(|extensions| extensions.skip_serializing())
     }
 
     pub(crate) fn from_webauthn_request(
@@ -273,7 +273,7 @@ impl Ctap2GetAssertionRequestExtensions {
             return Ok(());
         };
 
-        let salt_auth = ByteBuf::from(uv_proto.authenticate(&auth_data.shared_secret, &salt_enc));
+        let salt_auth = ByteBuf::from(uv_proto.authenticate(&auth_data.shared_secret, &salt_enc)?);
 
         self.hmac_secret = Some(CalculatedHMACGetSecretInput {
             public_key,
@@ -419,16 +419,20 @@ impl Ctap2UserVerifiableRequest for Ctap2GetAssertionRequest {
 
     fn calculate_and_set_uv_auth(
         &mut self,
-        uv_proto: &Box<dyn PinUvAuthProtocol>,
+        uv_proto: &dyn PinUvAuthProtocol,
         uv_auth_token: &[u8],
-    ) {
-        let uv_auth_param = uv_proto.authenticate(uv_auth_token, self.client_data_hash());
+    ) -> Result<(), Error> {
+        let hash = self
+            .client_data_hash()
+            .ok_or(Error::Platform(PlatformError::InvalidDeviceResponse))?;
+        let uv_auth_param = uv_proto.authenticate(uv_auth_token, hash)?;
         self.pin_auth_proto = Some(uv_proto.version() as u32);
         self.pin_auth_param = Some(ByteBuf::from(uv_auth_param));
+        Ok(())
     }
 
-    fn client_data_hash(&self) -> &[u8] {
-        self.client_data_hash.as_slice()
+    fn client_data_hash(&self) -> Option<&[u8]> {
+        Some(self.client_data_hash.as_slice())
     }
 
     fn permissions(&self) -> Ctap2AuthTokenPermissionRole {
@@ -473,8 +477,17 @@ impl Ctap2GetAssertionResponse {
             .extensions
             .as_ref()
             .map(|x| x.to_unsigned_extensions(request, &self, auth_data));
+        // CTAP2 6.2.2: authenticators may omit credential ID when the allow list has one entry.
+        // We always return it, for convenience.
+        let credential_id = self.credential_id.or_else(|| {
+            if request.allow.len() == 1 {
+                Some(request.allow[0].clone())
+            } else {
+                None
+            }
+        });
         Assertion {
-            credential_id: self.credential_id,
+            credential_id,
             authenticator_data: self.authenticator_data,
             signature: self.signature.into_vec(),
             user: self.user,
@@ -514,7 +527,7 @@ impl Ctap2GetAssertionResponseExtensions {
         let decrypted_hmac = self.hmac_secret.as_ref().and_then(|x| {
             if let Some(auth_data) = auth_data {
                 let uv_proto = auth_data.protocol_version.create_protocol_object();
-                x.decrypt_output(&auth_data.shared_secret, &uv_proto)
+                x.decrypt_output(&auth_data.shared_secret, uv_proto.as_ref())
             } else {
                 None
             }
@@ -536,28 +549,113 @@ impl Ctap2GetAssertionResponseExtensions {
         });
 
         // LargeBlobs was requested
-        let large_blob = match request
+        let large_blob = request
             .extensions
             .as_ref()
             .and_then(|ext| ext.large_blob.as_ref())
-        {
-            None => None,
-            Some(GetAssertionLargeBlobExtension::Read) => {
-                Some(GetAssertionLargeBlobExtensionOutput {
-                    blob: response
-                        .large_blob_key
-                        .as_ref()
-                        .map(|x| x.clone().into_vec()),
-                    // Not yet supported
-                    // written: None,
-                })
-            }
-        };
+            .map(|_| GetAssertionLargeBlobExtensionOutput {
+                blob: response
+                    .large_blob_key
+                    .as_ref()
+                    .map(|x| x.clone().into_vec()),
+                // Not yet supported
+                // written: None,
+            });
 
         GetAssertionResponseUnsignedExtensions {
             hmac_get_secret: None,
             large_blob,
             prf,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fido::AuthenticatorDataFlags;
+    use crate::proto::ctap2::Ctap2PublicKeyCredentialType;
+    use std::time::Duration;
+
+    fn make_credential(id: &[u8]) -> Ctap2PublicKeyCredentialDescriptor {
+        Ctap2PublicKeyCredentialDescriptor {
+            id: ByteBuf::from(id.to_vec()),
+            r#type: Ctap2PublicKeyCredentialType::PublicKey,
+            transports: None,
+        }
+    }
+
+    fn make_response(
+        credential_id: Option<Ctap2PublicKeyCredentialDescriptor>,
+    ) -> Ctap2GetAssertionResponse {
+        Ctap2GetAssertionResponse {
+            credential_id,
+            authenticator_data: AuthenticatorData {
+                rp_id_hash: [0u8; 32],
+                flags: AuthenticatorDataFlags::USER_PRESENT,
+                signature_count: 0,
+                attested_credential: None,
+                extensions: None,
+            },
+            signature: ByteBuf::from(vec![0u8; 32]),
+            user: None,
+            credentials_count: None,
+            user_selected: None,
+            large_blob_key: None,
+            enterprise_attestation: None,
+            attestation_statement: None,
+        }
+    }
+
+    fn make_request(allow: Vec<Ctap2PublicKeyCredentialDescriptor>) -> GetAssertionRequest {
+        GetAssertionRequest {
+            relying_party_id: "example.com".to_string(),
+            challenge: vec![0u8; 32],
+            origin: "https://example.com".to_string(),
+            cross_origin: None,
+            allow,
+            extensions: None,
+            user_verification: Default::default(),
+            timeout: Duration::from_secs(30),
+        }
+    }
+
+    #[test]
+    fn populates_credential_id_from_single_entry_allow_list() {
+        let cred = make_credential(b"cred-1");
+        let response = make_response(None);
+        let request = make_request(vec![cred.clone()]);
+
+        let assertion = response.into_assertion_output(&request, None);
+        assert_eq!(assertion.credential_id, Some(cred));
+    }
+
+    #[test]
+    fn preserves_existing_credential_id() {
+        let existing = make_credential(b"existing");
+        let allow_entry = make_credential(b"allow-entry");
+        let response = make_response(Some(existing.clone()));
+        let request = make_request(vec![allow_entry]);
+
+        let assertion = response.into_assertion_output(&request, None);
+        assert_eq!(assertion.credential_id, Some(existing));
+    }
+
+    #[test]
+    fn none_with_multi_entry_allow_list() {
+        let response = make_response(None);
+        let request = make_request(vec![make_credential(b"a"), make_credential(b"b")]);
+
+        let assertion = response.into_assertion_output(&request, None);
+        assert_eq!(assertion.credential_id, None);
+    }
+
+    #[test]
+    fn none_with_empty_allow_list() {
+        let response = make_response(None);
+        let request = make_request(vec![]);
+
+        let assertion = response.into_assertion_output(&request, None);
+        assert_eq!(assertion.credential_id, None);
     }
 }

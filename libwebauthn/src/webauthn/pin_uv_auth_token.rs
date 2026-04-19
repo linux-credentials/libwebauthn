@@ -74,7 +74,7 @@ where
             ctap2_request.permissions_rpid(),
         );
         if let Some(uv_auth_token) = channel.get_uv_auth_token(&token_identifier) {
-            ctap2_request.calculate_and_set_uv_auth(&uv_proto, uv_auth_token);
+            ctap2_request.calculate_and_set_uv_auth(uv_proto.as_ref(), uv_auth_token)?;
             return Ok(UsedPinUvAuthToken::FromStorage);
         }
     }
@@ -214,7 +214,8 @@ where
 
         // In preparation for obtaining pinUvAuthToken, the platform:
         // * Obtains a shared secret.
-        let (public_key, shared_secret) = obtain_shared_secret(channel, &uv_proto, timeout).await?;
+        let (public_key, shared_secret) =
+            obtain_shared_secret(channel, uv_proto.as_ref(), timeout).await?;
 
         // Then the platform obtains a pinUvAuthToken from the authenticator, with the mc (and likely also with the ga)
         // permission (see "pre-flight", mentioned above), using the selected operation.
@@ -230,14 +231,26 @@ where
                 Ctap2ClientPinRequest::new_get_pin_token(
                     uv_proto.version(),
                     public_key.clone(),
-                    &uv_proto.encrypt(&shared_secret, &pin_hash(&pin.unwrap()))?,
+                    &uv_proto.encrypt(
+                        &shared_secret,
+                        &pin_hash(&pin.ok_or_else(|| {
+                            error!("PIN expected but not available");
+                            Error::Ctap(CtapError::PINRequired)
+                        })?),
+                    )?,
                 )
             }
             Ctap2UserVerificationOperation::GetPinUvAuthTokenUsingPinWithPermissions => {
                 Ctap2ClientPinRequest::new_get_pin_token_with_perm(
                     uv_proto.version(),
                     public_key.clone(),
-                    &uv_proto.encrypt(&shared_secret, &pin_hash(&pin.unwrap()))?,
+                    &uv_proto.encrypt(
+                        &shared_secret,
+                        &pin_hash(&pin.ok_or_else(|| {
+                            error!("PIN expected but not available");
+                            Error::Ctap(CtapError::PINRequired)
+                        })?),
+                    )?,
                     ctap2_request.permissions(),
                     ctap2_request.permissions_rpid(),
                 )
@@ -320,7 +333,10 @@ where
         | Ctap2UserVerificationOperation::GetPinUvAuthTokenUsingPinWithPermissions
         | Ctap2UserVerificationOperation::GetPinToken => {
             {
-                let token_response = token_response.unwrap();
+                let token_response = token_response.ok_or_else(|| {
+                    error!("Expected token response but got None");
+                    Error::Ctap(CtapError::Other)
+                })?;
                 let Some(encrypted_pin_uv_auth_token) = token_response.pin_uv_auth_token else {
                     error!("Client PIN response did not include a PIN UV auth token");
                     return Err(Error::Ctap(CtapError::Other));
@@ -349,7 +365,8 @@ where
                 // If successful, the platform creates the pinUvAuthParam parameter by calling
                 // authenticate(pinUvAuthToken, clientDataHash), and goes to Step 1.1.1.
                 // Sets the pinUvAuthProtocol parameter to the value as selected when it obtained the shared secret.
-                ctap2_request.calculate_and_set_uv_auth(&uv_proto, uv_auth_token.as_slice());
+                ctap2_request
+                    .calculate_and_set_uv_auth(uv_proto.as_ref(), uv_auth_token.as_slice())?;
 
                 Ok(UsedPinUvAuthToken::NewlyCalculated(uv_operation))
             }
@@ -359,7 +376,7 @@ where
 
 pub(crate) async fn obtain_shared_secret<C>(
     channel: &mut C,
-    pin_proto: &Box<dyn PinUvAuthProtocol>,
+    pin_proto: &dyn PinUvAuthProtocol,
     timeout: Duration,
 ) -> Result<(PublicKey, Vec<u8>), Error>
 where
@@ -748,9 +765,10 @@ mod test {
             let info_resp = CborResponse::new_success_from_slice(to_vec(&info).unwrap().as_slice());
             channel.push_command_pair(info_req, info_resp);
 
-            let pin_req = CborRequest::from(&Ctap2ClientPinRequest::new_get_key_agreement(
+            let pin_req = CborRequest::try_from(&Ctap2ClientPinRequest::new_get_key_agreement(
                 Ctap2PinUvAuthProtocol::One,
-            ));
+            ))
+            .unwrap();
             let pin_resp = CborResponse::new_success_from_slice(
                 to_vec(&Ctap2ClientPinResponse {
                     key_agreement: Some(get_key_agreement()),
@@ -822,9 +840,10 @@ mod test {
             channel.push_command_pair(info_req, info_resp);
 
             // Queueing KeyAgreement request and response
-            let key_agreement_req = CborRequest::from(
+            let key_agreement_req = CborRequest::try_from(
                 &Ctap2ClientPinRequest::new_get_key_agreement(Ctap2PinUvAuthProtocol::One),
-            );
+            )
+            .unwrap();
             let key_agreement_resp = CborResponse::new_success_from_slice(
                 to_vec(&Ctap2ClientPinResponse {
                     key_agreement: Some(get_key_agreement()),
@@ -844,12 +863,14 @@ mod test {
             let pin_protocol = PinUvAuthProtocolOne::new();
             let (public_key, shared_secret) =
                 pin_protocol.encapsulate(&get_key_agreement()).unwrap();
-            let pin_req = CborRequest::from(&Ctap2ClientPinRequest::new_get_uv_token_with_perm(
-                Ctap2PinUvAuthProtocol::One,
-                public_key,
-                getassertion.permissions(),
-                getassertion.permissions_rpid(),
-            ));
+            let pin_req =
+                CborRequest::try_from(&Ctap2ClientPinRequest::new_get_uv_token_with_perm(
+                    Ctap2PinUvAuthProtocol::One,
+                    public_key,
+                    getassertion.permissions(),
+                    getassertion.permissions_rpid(),
+                ))
+                .unwrap();
             // We do here what the device would need to do, i.e. generate a new random
             // pinUvAuthToken (here all 5's), then encrypt it using the shared_secret.
             let token = [5; 32];
@@ -937,9 +958,10 @@ mod test {
             channel.push_command_pair(info_req, info_resp);
 
             // Queueing PinRetries request and response
-            let pin_retries_req = CborRequest::from(&Ctap2ClientPinRequest::new_get_pin_retries(
-                Some(Ctap2PinUvAuthProtocol::One),
-            ));
+            let pin_retries_req = CborRequest::try_from(
+                &Ctap2ClientPinRequest::new_get_pin_retries(Some(Ctap2PinUvAuthProtocol::One)),
+            )
+            .unwrap();
             let pin_retries_resp = CborResponse::new_success_from_slice(
                 to_vec(&Ctap2ClientPinResponse {
                     key_agreement: None,
@@ -954,9 +976,10 @@ mod test {
             channel.push_command_pair(pin_retries_req, pin_retries_resp);
 
             // Queueing KeyAgreement request and response
-            let key_agreement_req = CborRequest::from(
+            let key_agreement_req = CborRequest::try_from(
                 &Ctap2ClientPinRequest::new_get_key_agreement(Ctap2PinUvAuthProtocol::One),
-            );
+            )
+            .unwrap();
             let key_agreement_resp = CborResponse::new_success_from_slice(
                 to_vec(&Ctap2ClientPinResponse {
                     key_agreement: Some(get_key_agreement()),
@@ -979,13 +1002,15 @@ mod test {
             let pin_hash_enc = pin_protocol
                 .encrypt(&shared_secret, &pin_hash("1234".as_bytes()))
                 .unwrap();
-            let pin_req = CborRequest::from(&Ctap2ClientPinRequest::new_get_pin_token_with_perm(
-                Ctap2PinUvAuthProtocol::One,
-                public_key,
-                &pin_hash_enc,
-                getassertion.permissions(),
-                getassertion.permissions_rpid(),
-            ));
+            let pin_req =
+                CborRequest::try_from(&Ctap2ClientPinRequest::new_get_pin_token_with_perm(
+                    Ctap2PinUvAuthProtocol::One,
+                    public_key,
+                    &pin_hash_enc,
+                    getassertion.permissions(),
+                    getassertion.permissions_rpid(),
+                ))
+                .unwrap();
             // We do here what the device would need to do, i.e. generate a new random
             // pinUvAuthToken (here all 5's), then encrypt it using the shared_secret.
             let token = [5; 32];

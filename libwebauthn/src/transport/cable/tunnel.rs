@@ -145,7 +145,9 @@ pub fn decode_tunnel_server_domain(encoded: u16) -> Option<String> {
     hasher.update(&sha_input);
     let digest = hasher.finalize();
 
-    let mut v = u64::from_le_bytes(digest[..8].try_into().unwrap());
+    let mut v = u64::from_le_bytes([
+        digest[0], digest[1], digest[2], digest[3], digest[4], digest[5], digest[6], digest[7],
+    ]);
     let tld_index = v & 3;
     v >>= 2;
 
@@ -200,7 +202,7 @@ impl std::fmt::Debug for CableTunnelConnectionType {
     }
 }
 
-pub(crate) async fn connect<'d>(
+pub(crate) async fn connect(
     tunnel_domain: &str,
     connection_type: &CableTunnelConnectionType,
 ) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>, TransportError> {
@@ -235,7 +237,7 @@ pub(crate) async fn connect<'d>(
             cbor::to_vec(client_payload).or(Err(TransportError::InvalidEndpoint))?;
         request.headers_mut().insert(
             "X-caBLE-Client-Payload",
-            hex::encode(&client_payload)
+            hex::encode(client_payload)
                 .parse()
                 .or(Err(TransportError::InvalidEndpoint))?,
         );
@@ -285,7 +287,7 @@ pub(crate) async fn do_handshake(
             ..
         } => Builder::new("Noise_NKpsk0_P256_AESGCM_SHA256".parse()?)
             .prologue(CABLE_PROLOGUE_STATE_ASSISTED)?
-            .remote_public_key(&authenticator_public_key)?
+            .remote_public_key(authenticator_public_key)?
             .psk(0, &psk)?
             .build_initiator(),
     };
@@ -355,9 +357,13 @@ pub(crate) async fn do_handshake(
     }
 
     let mut payload = [0u8; 1024];
-    let payload_len = noise_handshake
-        .read_message(&response, &mut payload)
-        .unwrap();
+    let payload_len = match noise_handshake.read_message(&response, &mut payload) {
+        Ok(len) => len,
+        Err(e) => {
+            error!(?e, "Failed to read handshake response message");
+            return Err(TransportError::ConnectionFailed);
+        }
+    };
 
     debug!(
         { handshake = ?payload[..payload_len] },
@@ -581,7 +587,7 @@ async fn connection_recv_update(message: &[u8]) -> Result<Option<CableLinkingInf
     // TODO(#66): Android adds a 999-key to the end the message, which is not part of the standard.
     // For now, we parse the message to a map and manuually import fields.
 
-    let update_message: BTreeMap<Value, Value> = match serde_cbor::from_slice(&message) {
+    let update_message: BTreeMap<Value, Value> = match serde_cbor::from_slice(message) {
         Ok(update_message) => update_message,
         Err(e) => {
             error!(?e, "Failed to decode update message");
@@ -704,12 +710,8 @@ async fn connection_recv(
             let device_id: CableKnownDeviceId = (&linking_info).into();
             match known_device_store {
                 Some(store) => {
-                    match parse_known_device(
-                        private_key,
-                        tunnel_domain,
-                        &linking_info,
-                        &noise_state,
-                    ) {
+                    match parse_known_device(private_key, tunnel_domain, &linking_info, noise_state)
+                    {
                         Ok(known_device) => {
                             debug!(?device_id, "Updating known device");
                             trace!(?known_device);
@@ -762,7 +764,8 @@ fn parse_known_device(
     .raw_secret_bytes()
     .to_vec();
 
-    let mut hmac = Hmac::<Sha256>::new_from_slice(&shared_secret).expect("Any key size is valid");
+    let mut hmac = Hmac::<Sha256>::new_from_slice(&shared_secret)
+        .map_err(|_| Error::Transport(TransportError::InvalidKey))?;
     hmac.update(&noise_state.handshake_hash);
     let expected_mac = hmac.finalize().into_bytes().to_vec();
 

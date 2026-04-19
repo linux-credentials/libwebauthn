@@ -42,8 +42,8 @@ pub(crate) async fn await_advertisement(
     eid_key: &[u8],
 ) -> Result<(FidoDevice, DecryptedAdvert), TransportError> {
     let uuids = &[
-        Uuid::parse_str(CABLE_UUID_FIDO).unwrap(),
-        Uuid::parse_str(CABLE_UUID_GOOGLE).unwrap(), // Deprecated, but may still be in use.
+        Uuid::parse_str(CABLE_UUID_FIDO).or(Err(TransportError::InvalidEndpoint))?,
+        Uuid::parse_str(CABLE_UUID_GOOGLE).or(Err(TransportError::InvalidEndpoint))?, // Deprecated, but may still be in use.
     ];
     let stream = btleplug::manager::start_discovery_for_service_data(uuids)
         .await
@@ -65,7 +65,7 @@ pub(crate) async fn await_advertisement(
         };
 
         trace!(?device, ?data, ?eid_key);
-        let Some(decrypted) = trial_decrypt_advert(&eid_key, &data) else {
+        let Some(decrypted) = trial_decrypt_advert(eid_key, &data) else {
             warn!(?device, "Trial decrypt failed, ignoring");
             continue;
         };

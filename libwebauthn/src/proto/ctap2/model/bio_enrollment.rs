@@ -226,15 +226,11 @@ impl Ctap2BioEnrollmentRequest {
     }
 
     pub fn new_start_new_enrollment(enrollment_timeout: Option<Duration>) -> Self {
-        let subcommand_params = if let Some(time) = enrollment_timeout {
-            Some(Ctap2BioEnrollmentParams {
-                template_id: None,
-                template_friendly_name: None,
-                timeout_milliseconds: Some(time.as_millis() as u64),
-            })
-        } else {
-            None
-        };
+        let subcommand_params = enrollment_timeout.map(|time| Ctap2BioEnrollmentParams {
+            template_id: None,
+            template_friendly_name: None,
+            timeout_milliseconds: Some(time.as_millis() as u64),
+        });
 
         Ctap2BioEnrollmentRequest {
             modality: Some(Ctap2BioEnrollmentModality::Fingerprint),

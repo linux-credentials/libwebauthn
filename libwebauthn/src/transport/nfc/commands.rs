@@ -96,6 +96,6 @@ impl<'a> From<&'a ApduRequest> for Command<'a> {
 impl_into_vec!(CtapMsgCommand<'a>);
 
 /// Constructs a `GET MSG` command.
-pub fn command_ctap_msg(has_more: bool, payload: &[u8]) -> CtapMsgCommand {
+pub fn command_ctap_msg(has_more: bool, payload: &[u8]) -> CtapMsgCommand<'_> {
     CtapMsgCommand::new(has_more, payload)
 }

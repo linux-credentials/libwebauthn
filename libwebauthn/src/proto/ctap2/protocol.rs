@@ -103,7 +103,7 @@ where
         timeout: Duration,
     ) -> Result<Ctap2MakeCredentialResponse, Error> {
         trace!(?request);
-        self.cbor_send(&request.into(), timeout).await?;
+        self.cbor_send(&request.try_into()?, timeout).await?;
         let cbor_response = self.cbor_recv(timeout).await?;
         match cbor_response.status_code {
             CtapError::Ok => (),
@@ -124,7 +124,7 @@ where
         timeout: Duration,
     ) -> Result<Ctap2GetAssertionResponse, Error> {
         trace!(?request);
-        self.cbor_send(&request.into(), timeout).await?;
+        self.cbor_send(&request.try_into()?, timeout).await?;
         let cbor_response = self.cbor_recv(timeout).await?;
         match cbor_response.status_code {
             CtapError::Ok => (),
@@ -179,7 +179,7 @@ where
         timeout: Duration,
     ) -> Result<Ctap2ClientPinResponse, Error> {
         trace!(?request);
-        self.cbor_send(&request.into(), timeout).await?;
+        self.cbor_send(&request.try_into()?, timeout).await?;
         let cbor_response = self.cbor_recv(timeout).await?;
         match cbor_response.status_code {
             CtapError::Ok => (),
@@ -205,7 +205,7 @@ where
         timeout: Duration,
     ) -> Result<(), Error> {
         trace!(?request);
-        self.cbor_send(&request.into(), timeout).await?;
+        self.cbor_send(&request.try_into()?, timeout).await?;
         let cbor_response = self.cbor_recv(timeout).await?;
         match cbor_response.status_code {
             CtapError::Ok => {
@@ -228,7 +228,7 @@ where
         timeout: Duration,
     ) -> Result<Ctap2BioEnrollmentResponse, Error> {
         trace!(?request);
-        self.cbor_send(&request.into(), timeout).await?;
+        self.cbor_send(&request.try_into()?, timeout).await?;
         let cbor_response = self.cbor_recv(timeout).await?;
         match cbor_response.status_code {
             CtapError::Ok => (),
@@ -254,7 +254,7 @@ where
         timeout: Duration,
     ) -> Result<Ctap2CredentialManagementResponse, Error> {
         trace!(?request);
-        self.cbor_send(&request.into(), timeout).await?;
+        self.cbor_send(&request.try_into()?, timeout).await?;
         let cbor_response = self.cbor_recv(timeout).await?;
         match cbor_response.status_code {
             CtapError::Ok => (),
