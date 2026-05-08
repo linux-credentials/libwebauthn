@@ -7,7 +7,8 @@ use cosey::PublicKey;
 
 use crate::ops::webauthn::UserVerificationRequirement;
 use crate::pin::{
-    pin_hash, PinRequestReason, PinUvAuthProtocol, PinUvAuthProtocolOne, PinUvAuthProtocolTwo,
+    internal::PinManagementInternal, pin_hash, PinNotSetReason, PinRequestReason,
+    PinUvAuthProtocol, PinUvAuthProtocolOne, PinUvAuthProtocolTwo,
 };
 use crate::proto::ctap2::{
     Ctap2, Ctap2ClientPinRequest, Ctap2GetInfoResponse, Ctap2PinUvAuthProtocol,
@@ -16,7 +17,7 @@ use crate::proto::ctap2::{
 pub use crate::transport::error::TransportError;
 use crate::transport::{AuthTokenData, Channel, Ctap2AuthTokenPermission};
 pub use crate::webauthn::error::{CtapError, Error, PlatformError};
-use crate::{PinRequiredUpdate, UvUpdate};
+use crate::{PinNotSetUpdate, PinRequiredUpdate, UvUpdate};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 
@@ -59,7 +60,7 @@ where
     C: Channel,
     R: Ctap2UserVerifiableRequest,
 {
-    let get_info_response = channel.ctap2_get_info().await?;
+    let mut get_info_response = channel.ctap2_get_info().await?;
     ctap2_request.handle_legacy_preview(&get_info_response);
     let maybe_uv_proto = select_uv_proto(
         #[cfg(test)]
@@ -81,7 +82,7 @@ where
 
     user_verification_helper(
         channel,
-        &get_info_response,
+        &mut get_info_response,
         user_verification,
         ctap2_request,
         timeout,
@@ -92,7 +93,7 @@ where
 #[instrument(skip_all)]
 async fn user_verification_helper<R, C>(
     channel: &mut C,
-    get_info_response: &Ctap2GetInfoResponse,
+    get_info_response: &mut Ctap2GetInfoResponse,
     user_verification: UserVerificationRequirement,
     ctap2_request: &mut R,
     timeout: Duration,
@@ -117,16 +118,29 @@ where
             return Ok(UsedPinUvAuthToken::None);
         }
 
-        if !dev_uv_protected && user_verification.is_required() {
-            error!(
-                "Request requires user verification, but device user verification is not available."
-            );
-            return Err(Error::Ctap(CtapError::PINNotSet));
-        };
-
-        if !dev_uv_protected && user_verification.is_preferred() {
-            warn!("User verification is preferred, but device user verification is not available. Ignoring.");
-            return Ok(UsedPinUvAuthToken::None);
+        if !dev_uv_protected {
+            if user_verification.is_required() {
+                error!(
+                    "Request requires user verification, but device user verification is not available. Try letting the user set a PIN."
+                );
+                // Lets try setting a PIN. Either we succeed in some fashion, or we return the resulting error here instead.
+                try_to_set_pin(
+                    channel,
+                    get_info_response,
+                    PinNotSetReason::PinNotSet,
+                    timeout,
+                )
+                .await?;
+                // Update get_info_response, because now maybe "clientPin" is set to `Some(true)`
+                *get_info_response = channel.ctap2_get_info().await?;
+                // Then simply continue with the normal flow. Either we have a PIN set now,
+                // then the user has to enter it (again), as in the normal flow, or the device
+                // itself has some kind of internal protocol to handle this situation.
+                // If not, it will (should) return an error like PinNotSet.
+            } else if user_verification.is_preferred() {
+                warn!("User verification is preferred, but device user verification is not available. Ignoring.");
+                return Ok(UsedPinUvAuthToken::None);
+            }
         }
     } else if !can_establish_shared_secret && !uv {
         // We need a shared secret, but the device does not support any form of query-able UV, so we can't establish a
@@ -441,27 +455,92 @@ where
     Ok(pin.as_bytes().to_owned())
 }
 
+pub(crate) async fn try_to_set_pin<C>(
+    channel: &mut C,
+    info: &Ctap2GetInfoResponse,
+    mut reason: PinNotSetReason,
+    timeout: Duration,
+) -> Result<(), Error>
+where
+    C: Channel,
+{
+    // If we have any Ctap2GetInfoResponse, we are already doing FIDO2,
+    // so setting PIN is theoretically possible
+
+    // Does the device even support a PIN?
+    if !info.option_exists("clientPin") {
+        // It does not. Maybe it has an built in internal way of handling this.
+        // Lets continue and see what happens.
+        return Ok(());
+    }
+
+    // Try to get a suitable PIN from the user until it meets the criteria
+    loop {
+        // Obtain PIN from user
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        channel
+            .send_ux_update(
+                UvUpdate::PinNotSet(PinNotSetUpdate {
+                    reply_to: Arc::new(tx),
+                    reason,
+                })
+                .into(),
+            )
+            .await;
+        let pin = match rx.await {
+            Ok(pin) => pin,
+            Err(_) => {
+                info!("User cancelled operation: no PIN provided");
+                return Err(Error::Platform(PlatformError::Cancelled));
+            }
+        };
+        match channel
+            .change_pin_internal(info, pin.clone(), timeout)
+            .await
+        {
+            Ok(()) => {
+                // PIN was successfully set. The user can now try to finish the ongoing operation.
+                return Ok(());
+            }
+            Err(Error::Platform(PlatformError::PinTooShort)) => {
+                reason = PinNotSetReason::PinTooShort;
+                continue;
+            }
+            Err(Error::Platform(PlatformError::PinTooLong)) => {
+                reason = PinNotSetReason::PinTooLong;
+                continue;
+            }
+            Err(Error::Ctap(CtapError::PINPolicyViolation)) => {
+                reason = PinNotSetReason::PinPolicyViolation;
+                continue;
+            }
+            // General, not PIN-related error
+            Err(err) => {
+                return Err(err);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
 
     use std::{collections::HashMap, time::Duration};
 
     use serde_bytes::ByteBuf;
+    use tokio::sync::broadcast::Receiver;
 
     use crate::{
         ops::webauthn::{
             GetAssertionRequest, GetAssertionRequestExtensions, PRFValue, PrfInput,
             UserVerificationRequirement,
         },
-        pin::{pin_hash, PinUvAuthProtocol, PinUvAuthProtocolOne},
-        proto::{
-            ctap2::{
-                cbor::{to_vec, CborRequest, CborResponse},
-                Ctap2ClientPinRequest, Ctap2ClientPinResponse, Ctap2CommandCode,
-                Ctap2GetAssertionRequest, Ctap2GetInfoResponse, Ctap2PinUvAuthProtocol,
-                Ctap2UserVerifiableRequest, Ctap2UserVerificationOperation,
-            },
-            CtapError,
+        pin::{pin_hash, PinNotSetReason, PinUvAuthProtocol, PinUvAuthProtocolOne},
+        proto::ctap2::{
+            cbor::{to_vec, CborRequest, CborResponse},
+            Ctap2ClientPinRequest, Ctap2ClientPinResponse, Ctap2CommandCode,
+            Ctap2GetAssertionRequest, Ctap2GetInfoResponse, Ctap2PinUvAuthProtocol,
+            Ctap2UserVerifiableRequest, Ctap2UserVerificationOperation,
         },
         transport::{mock::channel::MockChannel, Channel, Ctap2AuthTokenStore},
         webauthn::UsedPinUvAuthToken,
@@ -539,6 +618,68 @@ mod test {
         assert!(status_recv.is_empty());
     }
 
+    async fn handle_setting_pin_updates(
+        mut state_recv: Receiver<UvUpdate>,
+        expected_reasons: Vec<PinNotSetReason>,
+        pin_answers: Vec<String>,
+    ) -> () {
+        let mut idx = 0;
+        loop {
+            let update = state_recv
+                .recv()
+                .await
+                .expect("Failed to receive UV update");
+            match update {
+                UvUpdate::PinNotSet(pinnotset) => {
+                    assert_eq!(pinnotset.reason, expected_reasons[idx]);
+                    if idx >= pin_answers.len() {
+                        break;
+                    }
+                    pinnotset.set_pin(&pin_answers[idx]).unwrap();
+                }
+                e => {
+                    panic!("Received unexpected UvUpdate: {e:?}");
+                }
+            }
+            idx += 1;
+        }
+        // Drop state_recv here, to cancel operation
+    }
+
+    async fn test_setting_pin(expected_reasons: Vec<PinNotSetReason>, pin_answers: Vec<String>) {
+        let mut channel = MockChannel::new();
+        let status_recv = channel.get_ux_update_receiver();
+        let info = create_info(&[("clientPin", false)], None);
+        let info_req = CborRequest::new(Ctap2CommandCode::AuthenticatorGetInfo);
+        let info_resp = CborResponse::new_success_from_slice(to_vec(&info).unwrap().as_slice());
+
+        let handle = tokio::task::spawn(handle_setting_pin_updates(
+            status_recv,
+            expected_reasons,
+            pin_answers,
+        ));
+
+        channel.push_command_pair(info_req, info_resp);
+
+        let mut getassertion = create_get_assertion(&info, None);
+
+        // We should receive a PinNotSet-UvUpdate here before a clientPIN-request is issued
+        let resp = user_verification(
+            &mut channel,
+            UserVerificationRequirement::Required,
+            &mut getassertion,
+            TIMEOUT,
+        )
+        .await;
+
+        handle.await.unwrap();
+
+        assert_eq!(
+            resp,
+            Err(Error::Platform(crate::webauthn::PlatformError::Cancelled))
+        );
+    }
+
     #[tokio::test]
     async fn early_exit_device_no_options() {
         test_early_exits(
@@ -576,22 +717,190 @@ mod test {
     }
 
     #[tokio::test]
-    async fn early_exit_device_client_pin_not_set_but_uv_required() {
-        let testcases = vec![
-            vec![],
-            // Should be the same as above
-            vec![("clientPin", false)],
+    async fn device_client_pin_not_set_but_uv_required_hanging_up() {
+        let expected_reasons = vec![PinNotSetReason::PinNotSet];
+        let pin_answers = vec![];
+        test_setting_pin(expected_reasons, pin_answers).await;
+    }
+
+    #[tokio::test]
+    async fn device_client_pin_not_set_but_uv_required_try_setting_pin() {
+        let expected_reasons = vec![
+            PinNotSetReason::PinNotSet,
+            PinNotSetReason::PinTooShort,
+            PinNotSetReason::PinTooLong,
         ];
-        for testcase in testcases {
-            test_early_exits(
-                &testcase,
-                None,
-                UserVerificationRequirement::Required,
-                None,
-                Err(Error::Ctap(CtapError::PINNotSet)),
-            )
-            .await;
-        }
+        let pin_answers = vec![String::from("1"), "1".repeat(1000)];
+        test_setting_pin(expected_reasons, pin_answers).await;
+    }
+
+    #[tokio::test]
+    async fn device_client_pin_not_set_but_uv_required_good_path() {
+        // Mostly copy&paste from full_ceremony_using_pin() testcase, with
+        // setting PIN wedged inbetween
+        let mut channel = MockChannel::new();
+        let mut info = create_info(&[("clientPin", false), ("pinUvAuthToken", true)], None);
+        info.pin_auth_protos = Some(vec![1]);
+
+        // Instrumenting the MockChannel with expected requests and responses
+        //
+        // 1. GetInfo request
+        let info_req = CborRequest::new(Ctap2CommandCode::AuthenticatorGetInfo);
+        let info_resp = CborResponse::new_success_from_slice(to_vec(&info).unwrap().as_slice());
+        channel.push_command_pair(info_req, info_resp);
+
+        // 2. KeyAgreement request and response (happens earlier than in full_ceremony_using_pin(), because we need it for setting the PIN, too)
+        let key_agreement_req = CborRequest::try_from(
+            &Ctap2ClientPinRequest::new_get_key_agreement(Ctap2PinUvAuthProtocol::One),
+        )
+        .unwrap();
+        let key_agreement = get_key_agreement();
+        let key_agreement_resp = CborResponse::new_success_from_slice(
+            to_vec(&Ctap2ClientPinResponse {
+                key_agreement: Some(key_agreement.clone()),
+                pin_uv_auth_token: None,
+                pin_retries: None,
+                power_cycle_state: None,
+                uv_retries: None,
+            })
+            .unwrap()
+            .as_slice(),
+        );
+        channel.push_command_pair(key_agreement_req.clone(), key_agreement_resp.clone());
+
+        // 3. ClientPin request (set PIN)
+        let pin_protocol = PinUvAuthProtocolOne::new();
+        let (public_key, shared_secret) = pin_protocol.encapsulate(&get_key_agreement()).unwrap();
+        let mut padded_new_pin = "1234".as_bytes().to_vec();
+        padded_new_pin.resize(64, 0x00);
+        let new_pin_enc = pin_protocol
+            .encrypt(&shared_secret, &padded_new_pin)
+            .unwrap();
+        let uv_auth_param = pin_protocol
+            .authenticate(&shared_secret, &new_pin_enc)
+            .unwrap();
+        let set_pin_req = CborRequest::try_from(&Ctap2ClientPinRequest::new_set_pin(
+            pin_protocol.version(),
+            &new_pin_enc,
+            public_key.clone(),
+            &uv_auth_param,
+        ))
+        .unwrap();
+
+        let set_pin_resp = CborResponse::new_success_from_slice(
+            to_vec(&Ctap2ClientPinResponse::default()) // all None
+                .unwrap()
+                .as_slice(),
+        );
+        channel.push_command_pair(set_pin_req, set_pin_resp);
+
+        let mut info = create_info(&[("clientPin", true), ("pinUvAuthToken", true)], None);
+        info.pin_auth_protos = Some(vec![1]);
+        let mut getassertion = create_get_assertion(&info, None);
+
+        // 4. Second GetInfo request, this time with clientPin set to true
+        let info_req = CborRequest::new(Ctap2CommandCode::AuthenticatorGetInfo);
+        let info_resp = CborResponse::new_success_from_slice(to_vec(&info).unwrap().as_slice());
+        channel.push_command_pair(info_req, info_resp);
+
+        // 5. Queueing PinRetries request and response
+        let pin_retries_req = CborRequest::try_from(&Ctap2ClientPinRequest::new_get_pin_retries(
+            Some(Ctap2PinUvAuthProtocol::One),
+        ))
+        .unwrap();
+        let pin_retries_resp = CborResponse::new_success_from_slice(
+            to_vec(&Ctap2ClientPinResponse {
+                key_agreement: None,
+                pin_uv_auth_token: None,
+                pin_retries: Some(5),
+                power_cycle_state: None,
+                uv_retries: None,
+            })
+            .unwrap()
+            .as_slice(),
+        );
+        channel.push_command_pair(pin_retries_req, pin_retries_resp);
+
+        // 6. Second key agreement call (reusing the previous one)
+        channel.push_command_pair(key_agreement_req, key_agreement_resp);
+
+        // 7. getPinUvAuth request and response
+        let pin_hash_enc = pin_protocol
+            .encrypt(&shared_secret, &pin_hash("1234".as_bytes()))
+            .unwrap();
+        let pin_req = CborRequest::try_from(&Ctap2ClientPinRequest::new_get_pin_token_with_perm(
+            Ctap2PinUvAuthProtocol::One,
+            public_key,
+            &pin_hash_enc,
+            getassertion.permissions(),
+            getassertion.permissions_rpid(),
+        ))
+        .unwrap();
+        // We do here what the device would need to do, i.e. generate a new random
+        // pinUvAuthToken (here all 5's), then encrypt it using the shared_secret.
+        let token = [5; 32];
+        let encrypted_token = pin_protocol.encrypt(&shared_secret, &token).unwrap();
+        let pin_resp = CborResponse::new_success_from_slice(
+            to_vec(&Ctap2ClientPinResponse {
+                key_agreement: None,
+                pin_uv_auth_token: Some(ByteBuf::from(encrypted_token)),
+                pin_retries: None,
+                power_cycle_state: None,
+                uv_retries: None,
+            })
+            .unwrap()
+            .as_slice(),
+        );
+        channel.push_command_pair(pin_req, pin_resp);
+
+        let mut recv = channel.get_ux_update_receiver();
+        let recv_handle = tokio::task::spawn(async move {
+            if let UvUpdate::PinNotSet(update) = recv.recv().await.unwrap() {
+                assert_eq!(update.reason, PinNotSetReason::PinNotSet);
+                update.set_pin("1234").unwrap();
+            } else {
+                panic!("Wrong UxUpdate received! Expected PinNotSet");
+            }
+            if let UvUpdate::PinRequired(update) = recv.recv().await.unwrap() {
+                update.send_pin("1234").unwrap();
+            } else {
+                panic!("Wrong UxUpdate received! Expected PinRequired");
+            }
+            recv
+        });
+
+        // We should receive a PinNotSet-UvUpdate here before a clientPIN-request is issued
+        let resp = user_verification(
+            &mut channel,
+            UserVerificationRequirement::Required,
+            &mut getassertion,
+            TIMEOUT,
+        )
+        .await;
+
+        let expected_result = Ok(UsedPinUvAuthToken::NewlyCalculated(
+            Ctap2UserVerificationOperation::GetPinUvAuthTokenUsingPinWithPermissions,
+        ));
+        assert_eq!(resp, expected_result);
+        // Something ended up in the auth store
+        assert!(channel.get_auth_data().is_some());
+        assert_eq!(
+            channel
+                .get_auth_data()
+                .as_ref()
+                .unwrap()
+                .pin_uv_auth_token
+                .as_ref()
+                .unwrap(),
+            &token
+        );
+        assert_eq!(
+            channel.get_auth_data().unwrap().shared_secret,
+            shared_secret
+        );
+        let recv = recv_handle.await.expect("Failed to join update thread");
+        // No more updates should be sent
+        assert!(recv.is_empty());
     }
 
     #[tokio::test]
