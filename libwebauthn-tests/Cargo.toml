@@ -1,0 +1,9 @@
+[package]
+name = "libwebauthn-tests"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license-file = "../COPYING"
+
+[dependencies]
+libwebauthn = { path = "../libwebauthn" }
