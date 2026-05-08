@@ -25,11 +25,11 @@ use crate::proto::CtapError;
 use crate::transport::channel::{AuthTokenData, Channel, ChannelStatus, Ctap2AuthTokenStore};
 use crate::transport::device::SupportedProtocols;
 use crate::transport::error::TransportError;
+#[cfg(feature = "virt")]
+use crate::transport::hid::device::HidPipeBackend;
 use crate::transport::hid::framing::{
     HidCommand, HidMessage, HidMessageParser, HidMessageParserState,
 };
-#[cfg(feature = "virt")]
-use crate::transport::hid::device::HidPipeBackend;
 use crate::webauthn::error::{Error, PlatformError};
 use crate::UvUpdate;
 

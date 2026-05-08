@@ -1,10 +1,10 @@
 // Deny panic-inducing patterns in production code.
-// Tests are allowed to use unwrap/expect/panic for convenience.
-#![cfg_attr(not(test), deny(clippy::unwrap_used))]
-#![cfg_attr(not(test), deny(clippy::expect_used))]
-#![cfg_attr(not(test), deny(clippy::panic))]
-#![cfg_attr(not(test), deny(clippy::todo))]
-#![cfg_attr(not(test), deny(clippy::unreachable))]
+// Tests and the virt test-utility feature are allowed to use unwrap/expect/panic for convenience.
+#![cfg_attr(not(any(test, feature = "virt")), deny(clippy::unwrap_used))]
+#![cfg_attr(not(any(test, feature = "virt")), deny(clippy::expect_used))]
+#![cfg_attr(not(any(test, feature = "virt")), deny(clippy::panic))]
+#![cfg_attr(not(any(test, feature = "virt")), deny(clippy::todo))]
+#![cfg_attr(not(any(test, feature = "virt")), deny(clippy::unreachable))]
 
 pub mod fido;
 pub mod management;

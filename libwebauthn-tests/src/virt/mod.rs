@@ -34,36 +34,37 @@ impl TrussedVirtBackend {
         let worker = thread::spawn(move || {
             device::run_ctaphid(move |device| {
                 while let Ok(msg) = req_rx.recv() {
-                    let resp = match msg.cmd {
-                        HidCommand::Ping => device.ping(&msg.payload).map(|_| Vec::new()),
-                        HidCommand::Msg => device.ctap1(&msg.payload),
-                        HidCommand::Init => {
-                            let mut payload = msg.payload.clone();
-                            // Fake channel ID
-                            payload.extend_from_slice(&[1, 2, 3, 4]);
-                            payload.push(device.protocol_version());
-                            let versions = device.device_version();
-                            payload.push(versions.major);
-                            payload.push(versions.minor);
-                            payload.push(versions.build);
-                            payload.push(device.capabilities().bits());
-                            Ok(payload)
-                        }
-                        HidCommand::Wink => device.wink().map(|_| Vec::new()),
-                        HidCommand::Cbor => device
-                            .ctap2(msg.payload[0], &msg.payload[1..])
-                            .map(|payload| {
-                                // For CBOR, status code goes in front; success = 0.
-                                let mut status_with_payload = vec![0];
-                                status_with_payload.extend_from_slice(&payload);
-                                status_with_payload
-                            }),
-                        HidCommand::Cancel => break,
-                        HidCommand::Lock
-                        | HidCommand::Sync
-                        | HidCommand::KeepAlive
-                        | HidCommand::Error => unimplemented!(),
-                    };
+                    let resp =
+                        match msg.cmd {
+                            HidCommand::Ping => device.ping(&msg.payload).map(|_| Vec::new()),
+                            HidCommand::Msg => device.ctap1(&msg.payload),
+                            HidCommand::Init => {
+                                let mut payload = msg.payload.clone();
+                                // Fake channel ID
+                                payload.extend_from_slice(&[1, 2, 3, 4]);
+                                payload.push(device.protocol_version());
+                                let versions = device.device_version();
+                                payload.push(versions.major);
+                                payload.push(versions.minor);
+                                payload.push(versions.build);
+                                payload.push(device.capabilities().bits());
+                                Ok(payload)
+                            }
+                            HidCommand::Wink => device.wink().map(|_| Vec::new()),
+                            HidCommand::Cbor => device
+                                .ctap2(msg.payload[0], &msg.payload[1..])
+                                .map(|payload| {
+                                    // For CBOR, status code goes in front; success = 0.
+                                    let mut status_with_payload = vec![0];
+                                    status_with_payload.extend_from_slice(&payload);
+                                    status_with_payload
+                                }),
+                            HidCommand::Cancel => break,
+                            HidCommand::Lock
+                            | HidCommand::Sync
+                            | HidCommand::KeepAlive
+                            | HidCommand::Error => unimplemented!(),
+                        };
                     match resp {
                         Ok(payload) => {
                             let mut response = msg.clone();
