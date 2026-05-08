@@ -1,6 +1,7 @@
 mod base64url;
 pub mod create;
 pub mod get;
+pub mod origin;
 pub mod response;
 pub mod rpid;
 
