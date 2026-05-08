@@ -64,10 +64,10 @@ pub trait Channel: Send + Sync + Display + Ctap2AuthTokenStore {
 
     // Default no-op implementations for these, as we currently only have a test device
     // for HidChannel, and that will override these default implementations.
-    #[cfg(test)]
+    #[cfg(feature = "virt")]
     fn set_forced_pin_protocol(&mut self, _protocols: Ctap2PinUvAuthProtocol) {}
 
-    #[cfg(test)]
+    #[cfg(feature = "virt")]
     fn get_forced_pin_protocol(&mut self) -> Option<Ctap2PinUvAuthProtocol> {
         None
     }

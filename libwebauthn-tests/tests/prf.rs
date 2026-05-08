@@ -1,23 +1,23 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use crate::ops::webauthn::{
+use libwebauthn::ops::webauthn::{
     GetAssertionRequest, GetAssertionRequestExtensions, MakeCredentialPrfInput,
     MakeCredentialPrfOutput, MakeCredentialsRequestExtensions, PRFValue, PrfInput,
 };
-use crate::pin::PinManagement;
-use crate::proto::ctap2::{Ctap2PinUvAuthProtocol, Ctap2PublicKeyCredentialDescriptor};
-use crate::transport::hid::channel::HidChannel;
-use crate::transport::hid::get_virtual_device;
-use crate::transport::{Channel, Device};
-use crate::webauthn::{Error as WebAuthnError, PlatformError, WebAuthn};
-use crate::UvUpdate;
-use crate::{
+use libwebauthn::pin::PinManagement;
+use libwebauthn::proto::ctap2::{Ctap2PinUvAuthProtocol, Ctap2PublicKeyCredentialDescriptor};
+use libwebauthn::transport::hid::channel::HidChannel;
+use libwebauthn::transport::{Channel, Device};
+use libwebauthn::webauthn::{Error as WebAuthnError, PlatformError, WebAuthn};
+use libwebauthn::UvUpdate;
+use libwebauthn::{
     ops::webauthn::{MakeCredentialRequest, ResidentKeyRequirement, UserVerificationRequirement},
     proto::ctap2::{
         Ctap2CredentialType, Ctap2PublicKeyCredentialRpEntity, Ctap2PublicKeyCredentialUserEntity,
     },
 };
+use libwebauthn_tests::virt::get_virtual_device;
 use rand::{thread_rng, Rng};
 use test_log::test;
 use tokio::sync::broadcast::error::TryRecvError;

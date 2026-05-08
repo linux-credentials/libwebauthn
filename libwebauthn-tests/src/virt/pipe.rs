@@ -9,7 +9,7 @@
 // - Robin Krahl <robin@nitrokey.com>
 // - Sosthène Guédon <sosthene@nitrokey.com>
 
-use crate::proto::CtapError;
+use libwebauthn::proto::CtapError;
 use cosey::Bytes;
 use ctaphid_dispatch::{app::Command, Requester};
 use interchange;

@@ -4,12 +4,22 @@ use async_trait::async_trait;
 use hidapi::DeviceInfo;
 use hidapi::HidApi;
 use std::fmt;
+#[cfg(feature = "virt")]
+use std::sync::{Arc, Mutex};
 #[allow(unused_imports)]
 use tracing::{debug, info, instrument};
 
+#[cfg(feature = "virt")]
+use super::framing::HidMessage;
 use crate::transport::error::TransportError;
 use crate::transport::Device;
 use crate::webauthn::error::Error;
+
+#[cfg(feature = "virt")]
+pub trait HidPipeBackend: fmt::Debug + Send {
+    fn send(&mut self, msg: &HidMessage);
+    fn recv(&mut self) -> HidMessage;
+}
 
 #[derive(Debug, Clone)]
 pub struct HidDevice {
@@ -19,8 +29,8 @@ pub struct HidDevice {
 #[derive(Debug, Clone)]
 pub enum HidBackendDevice {
     HidApiDevice(DeviceInfo),
-    #[cfg(test)]
-    VirtualDevice,
+    #[cfg(feature = "virt")]
+    VirtualDevice(Arc<Mutex<dyn HidPipeBackend>>),
 }
 
 impl From<&DeviceInfo> for HidDevice {
@@ -40,8 +50,8 @@ impl fmt::Display for HidDevice {
                 let name = [manufacturer, product].join(" ");
                 write!(f, "{} (r{:?})", name.trim(), dev.release_number())
             }
-            #[cfg(test)]
-            HidBackendDevice::VirtualDevice => write!(f, "virtual fido-authenticator"),
+            #[cfg(feature = "virt")]
+            HidBackendDevice::VirtualDevice(_) => write!(f, "virtual fido-authenticator"),
         }
     }
 }
@@ -63,17 +73,10 @@ pub async fn list_devices() -> Result<Vec<HidDevice>, Error> {
     Ok(devices)
 }
 
-#[cfg(test)]
-pub fn get_virtual_device() -> HidDevice {
-    HidDevice::new_virtual()
-}
-
-#[cfg(test)]
-impl HidDevice {
-    pub fn new_virtual() -> Self {
-        Self {
-            backend: HidBackendDevice::VirtualDevice,
-        }
+#[cfg(feature = "virt")]
+pub fn virtual_device<B: HidPipeBackend + 'static>(backend: B) -> HidDevice {
+    HidDevice {
+        backend: HidBackendDevice::VirtualDevice(Arc::new(Mutex::new(backend))),
     }
 }
 

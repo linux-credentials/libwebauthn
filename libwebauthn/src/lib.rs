@@ -11,8 +11,6 @@ pub mod management;
 pub mod ops;
 pub mod pin;
 pub mod proto;
-#[cfg(test)]
-mod tests;
 pub mod transport;
 pub mod u2f;
 pub mod webauthn;
@@ -50,7 +48,7 @@ pub enum Transport {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(test, derive(PartialEq))]
+#[cfg_attr(any(test, feature = "virt"), derive(PartialEq))]
 pub enum UvUpdate {
     /// UV failed, but we can still retry. `attempts_left` optionally shows how many tries _in total_ are left.
     /// Builtin UV may still temporarily be blocked.
@@ -116,9 +114,9 @@ impl PinNotSetUpdate {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "virt"))]
 // This function is not _really_ `PartialEq`. We need it for testing purposes,
-// but should not expose it like this to consumers, so gating it behind cfg(test)
+// but should not expose it like this to consumers
 impl PartialEq for PinRequiredUpdate {
     fn eq(&self, other: &Self) -> bool {
         // We explicitly ignore `reply_to` and only compare the other fields.
@@ -126,9 +124,9 @@ impl PartialEq for PinRequiredUpdate {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "virt"))]
 // This function is not _really_ `PartialEq`. We need it for testing purposes,
-// but should not expose it like this to consumers, so gating it behind cfg(test)
+// but should not expose it like this to consumers
 impl PartialEq for PinNotSetUpdate {
     fn eq(&self, other: &Self) -> bool {
         // We explicitly ignore `reply_to` and only compare the other fields.

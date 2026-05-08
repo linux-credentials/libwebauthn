@@ -22,6 +22,10 @@ libnfc = [
   "nfc1-sys",
   "nfc1",
 ]
+# Exposes the `HidPipeBackend` trait and `virtual_device()` constructor so that
+# external crates (e.g. libwebauthn-tests) can plug in a virtual HID transport
+# for end-to-end tests.
+virt = []
 
 [dependencies]
 base64-url = "3.0.0"
@@ -82,23 +86,6 @@ nfc1-sys = { version = "0.3.9", optional = true, default-features = false }
 [dev-dependencies]
 tracing-subscriber = { version = "0.3.3", features = ["env-filter"] }
 qrcode = "0.14.1"
-
-# We can't have "virtual-hid-device" a feature, because
-# we need to be able to publish libwebauthn to crates.io
-# and trussted-staging has sadly not been published, so we have
-# to use it as dev-dependencies instead. And dev-features do not exist.
-# All of the below are for having a virtual HID device based
-# on fido-authenticator.
-ctaphid-dispatch = { version = "0.3" }
-ctaphid = { version = "0.3.1", default-features = false }
-fido-authenticator = { git = "https://github.com/Nitrokey/fido-authenticator.git",tag = "v0.1.1-nitrokey.27", features = ["dispatch", "log-all"] }
-littlefs2 = { version = "0.6.0" }
-trussed = { version = "0.1", features = ["virt"] }
-trussed-staging = { version = "0.3.0", features = ["chunked", "hkdf", "virt", "fs-info"] }
-interchange = { version = "0.3.0" }
-tempfile = { version = "3.21" }
-# For turning on logging in fido-authenticator
-delog = { version = "0.1", features = ["std-log"]}
 # For turning on logging in unittests
 test-log = { version = "0.2" }
 
