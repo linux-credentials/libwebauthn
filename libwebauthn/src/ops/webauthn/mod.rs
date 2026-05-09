@@ -2,6 +2,7 @@ mod client_data;
 mod get_assertion;
 pub mod idl;
 mod make_credential;
+pub mod psl;
 mod timeout;
 
 use super::u2f::{RegisterRequest, SignRequest};
@@ -29,6 +30,7 @@ pub use make_credential::{
     MakeCredentialsRequestExtensions, MakeCredentialsResponseExtensions,
     MakeCredentialsResponseUnsignedExtensions, ResidentKeyRequirement,
 };
+pub use psl::{DatFileLoadError, DatFilePublicSuffixList, PublicSuffixList, SYSTEM_PSL_PATH};
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq)]
