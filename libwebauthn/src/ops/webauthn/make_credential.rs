@@ -12,6 +12,7 @@ use crate::{
         client_data::ClientData,
         idl::{
             create::PublicKeyCredentialCreationOptionsJSON,
+            origin::is_registrable_domain_suffix_or_equal,
             response::{
                 AuthenticationExtensionsClientOutputsJSON, AuthenticatorAttestationResponseJSON,
                 CredentialPropertiesOutputJSON, LargeBlobOutputJSON, PRFOutputJSON,
@@ -372,8 +373,8 @@ impl FromIdlModel<PublicKeyCredentialCreationOptionsJSON, MakeCredentialRequestP
         let rp_id = RelyingPartyId::try_from(inner.rp.id.as_str()).map_err(|err| {
             MakeCredentialRequestParsingError::InvalidRelyingPartyId(err.to_string())
         })?;
-        // TODO(#160): Add support for related origin per WebAuthn Level 3.
-        if rp_id.0 != effective_rp_id {
+        // TODO(#160): Add related-origins fallback per WebAuthn L3 §5.11.
+        if !is_registrable_domain_suffix_or_equal(&rp_id.0, effective_rp_id) {
             return Err(
                 MakeCredentialRequestParsingError::MismatchingRelyingPartyId(
                     rp_id.0,
@@ -864,6 +865,38 @@ mod tests {
             REQUEST_BASE_JSON,
             "rp",
             r#"{"id": "other.example.org", "name": "example.org"}"#,
+        );
+
+        let result = MakeCredentialRequest::from_json(&request_origin, &req_json);
+        assert!(matches!(
+            result,
+            Err(MakeCredentialRequestParsingError::MismatchingRelyingPartyId(_, _))
+        ));
+    }
+
+    #[test]
+    fn test_request_from_json_rp_id_is_parent_registrable_suffix() {
+        // origin = login.example.org, rp.id = example.org -> accepted.
+        let request_origin: RequestOrigin = "https://login.example.org".parse().unwrap();
+        let req_json = json_field_add(
+            REQUEST_BASE_JSON,
+            "rp",
+            r#"{"id": "example.org", "name": "example.org"}"#,
+        );
+
+        let req = MakeCredentialRequest::from_json(&request_origin, &req_json).unwrap();
+        assert_eq!(req.relying_party.id, "example.org");
+        assert_eq!(req.origin, "https://login.example.org");
+    }
+
+    #[test]
+    fn test_request_from_json_rp_id_is_etld_rejected() {
+        // origin = example.co.uk, rp.id = co.uk (a public suffix) -> rejected.
+        let request_origin: RequestOrigin = "https://example.co.uk".parse().unwrap();
+        let req_json = json_field_add(
+            REQUEST_BASE_JSON,
+            "rp",
+            r#"{"id": "co.uk", "name": "co.uk"}"#,
         );
 
         let result = MakeCredentialRequest::from_json(&request_origin, &req_json);

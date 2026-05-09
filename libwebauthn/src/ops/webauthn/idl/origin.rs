@@ -240,10 +240,7 @@ impl TryFrom<String> for RequestOrigin {
 ///
 /// The check is Public Suffix List aware so e.g. `co.uk` cannot be used as a
 /// registrable suffix on its own.
-pub(crate) fn is_registrable_domain_suffix_or_equal(
-    rp_id: &str,
-    effective_domain: &str,
-) -> bool {
+pub(crate) fn is_registrable_domain_suffix_or_equal(rp_id: &str, effective_domain: &str) -> bool {
     if rp_id.is_empty() {
         return false;
     }
@@ -452,10 +449,7 @@ mod tests {
 
     #[test]
     fn registrable_suffix_etld_rejected() {
-        assert!(!is_registrable_domain_suffix_or_equal(
-            "com",
-            "example.com",
-        ));
+        assert!(!is_registrable_domain_suffix_or_equal("com", "example.com",));
     }
 
     #[test]
