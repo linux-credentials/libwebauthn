@@ -6,6 +6,11 @@
 #![cfg_attr(not(any(test, feature = "virt")), deny(clippy::todo))]
 #![cfg_attr(not(any(test, feature = "virt")), deny(clippy::unreachable))]
 
+#[cfg(all(feature = "nfc", not(any(feature = "pcsc", feature = "libnfc"))))]
+compile_error!(
+    "the `nfc` feature is an umbrella that requires at least one backend; enable `pcsc` and/or `libnfc`"
+);
+
 pub mod fido;
 pub mod management;
 pub mod ops;

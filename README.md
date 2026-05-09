@@ -55,13 +55,33 @@ Validating the relying party ID against the calling origin requires the [Public 
 ## Example programs
 
 After cloning, you can try out [one of the libwebauthn examples](libwebauthn/examples):
+
 ```
 $ cd libwebauthn
 $ git submodule update --init
-$ cargo run --example webauthn_hid
-$ cargo run --example webauthn_nfc
-$ cargo run --example webauthn_cable
-$ cargo run --example u2f_hid
+```
+
+| Transport             | FIDO U2F                                | WebAuthn (FIDO2)                                                                  |
+| --------------------- | --------------------------------------- | --------------------------------------------------------------------------------- |
+| **USB (HID)**         | `cargo run --example u2f_hid`           | `cargo run --example webauthn_hid`<br>`cargo run --example webauthn_json_hid`     |
+| **Bluetooth (BLE)**   | `cargo run --example u2f_ble`           | —                                                                                 |
+| **NFC** [^nfc]        | `cargo run --example u2f_nfc`           | `cargo run --example webauthn_nfc`                                                |
+| **Hybrid (caBLE v2)** | —                                       | `cargo run --example webauthn_cable`                                              |
+
+[^nfc]: NFC examples require an NFC backend feature: pass `--features pcsc` (recommended, pure userspace) or `--features libnfc` (needs the `libnfc` system library).
+
+Additional HID-only examples cover specific FIDO2 features and authenticator management:
+
+```
+$ cargo run --example webauthn_extensions_hid
+$ cargo run --example webauthn_preflight_hid
+$ cargo run --example webauthn_prf_hid
+$ cargo run --example prf_test
+$ cargo run --example hid_device_selection
+$ cargo run --example change_pin_hid
+$ cargo run --example bio_enrollment_hid
+$ cargo run --example authenticator_config_hid
+$ cargo run --example cred_management
 ```
 
 ## Contributing
