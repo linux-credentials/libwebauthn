@@ -321,8 +321,9 @@ pub struct MakeCredentialRequest {
     pub challenge: Vec<u8>,
     /// The origin of the request.
     pub origin: String,
-    /// Whether the request is cross-origin (optional per WebAuthn spec).
-    pub cross_origin: Option<bool>,
+    /// The top-level origin if the request was made from a cross-origin
+    /// nested browsing context. None for same-origin requests.
+    pub top_origin: Option<String>,
     /// rpEntity
     pub relying_party: Ctap2PublicKeyCredentialRpEntity,
     /// userEntity
@@ -345,8 +346,7 @@ impl MakeCredentialRequest {
             operation: Operation::MakeCredential,
             challenge: self.challenge.clone(),
             origin: self.origin.clone(),
-            cross_origin: self.cross_origin,
-            top_origin: None,
+            top_origin: self.top_origin.clone(),
         }
     }
 
@@ -411,7 +411,7 @@ impl FromIdlModel<PublicKeyCredentialCreationOptionsJSON, MakeCredentialRequestP
         Ok(Self {
             challenge: inner.challenge.to_vec(),
             origin: rpid.to_owned().into(),
-            cross_origin: None,
+            top_origin: None,
             relying_party,
             user: inner.user.into(),
             resident_key,
@@ -554,7 +554,7 @@ impl MakeCredentialRequest {
         Self {
             challenge: Vec::new(),
             origin: "example.org".to_owned(),
-            cross_origin: Some(false),
+            top_origin: None,
             relying_party: Ctap2PublicKeyCredentialRpEntity::dummy(),
             user: Ctap2PublicKeyCredentialUserEntity::dummy(),
             algorithms: vec![Ctap2CredentialType::default()],
@@ -680,7 +680,7 @@ mod tests {
         MakeCredentialRequest {
             challenge: base64_url::decode("Y3JlZGVudGlhbHMtZm9yLWxpbnV4L2xpYndlYmF1dGhu").unwrap(),
             origin: "example.org".to_string(),
-            cross_origin: None,
+            top_origin: None,
             relying_party: Ctap2PublicKeyCredentialRpEntity::new("example.org", "example.org"),
             user: Ctap2PublicKeyCredentialUserEntity::new(b"userid", "mario.rossi", "Mario Rossi"),
             resident_key: Some(ResidentKeyRequirement::Discouraged),
@@ -918,7 +918,7 @@ mod tests {
         MakeCredentialRequest {
             challenge: b"DEADCODE_challenge".to_vec(),
             origin: "example.org".to_string(),
-            cross_origin: None,
+            top_origin: None,
             relying_party: Ctap2PublicKeyCredentialRpEntity::new("example.org", "example.org"),
             user: Ctap2PublicKeyCredentialUserEntity::new(b"userid", "mario.rossi", "Mario Rossi"),
             resident_key: Some(ResidentKeyRequirement::Discouraged),

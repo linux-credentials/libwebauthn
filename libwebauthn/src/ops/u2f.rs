@@ -215,7 +215,7 @@ impl UpgradableResponse<GetAssertionResponse, SignRequest> for SignResponse {
             relying_party_id: String::new(), // We don't have access to that info here, but we don't need it either
             challenge: Vec::new(), // U2F path doesn't use client_data for response serialization
             origin: String::new(),
-            cross_origin: None,
+            top_origin: None,
             allow: vec![Ctap2PublicKeyCredentialDescriptor {
                 r#type: Ctap2PublicKeyCredentialType::PublicKey,
                 id: request.key_handle.clone().into(),

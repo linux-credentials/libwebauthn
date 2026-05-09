@@ -116,7 +116,7 @@ async fn run_test_battery(channel: &mut HidChannel<'_>, using_pin: bool) {
         exclude: None,
         extensions: Some(extensions),
         timeout: TIMEOUT,
-        cross_origin: None,
+        top_origin: None,
     };
 
     let state_recv = channel.get_ux_update_receiver();
@@ -175,7 +175,7 @@ async fn run_test_battery(channel: &mut HidChannel<'_>, using_pin: bool) {
         user_verification: UserVerificationRequirement::Preferred,
         extensions: None,
         timeout: TIMEOUT,
-        cross_origin: None,
+        top_origin: None,
     };
 
     let _response = channel
@@ -494,7 +494,7 @@ async fn run_success_test(
             ..Default::default()
         }),
         timeout: TIMEOUT,
-        cross_origin: None,
+        top_origin: None,
     };
 
     let response = channel
@@ -561,7 +561,7 @@ async fn run_failed_test(
             ..Default::default()
         }),
         timeout: TIMEOUT,
-        cross_origin: None,
+        top_origin: None,
     };
 
     let response: Result<(), WebAuthnError> = loop {
