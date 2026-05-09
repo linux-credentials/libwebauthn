@@ -61,14 +61,14 @@ $ cd libwebauthn
 $ git submodule update --init
 ```
 
-| Transport             | FIDO U2F                                | WebAuthn (FIDO2)                                                                  |
-| --------------------- | --------------------------------------- | --------------------------------------------------------------------------------- |
-| **USB (HID)**         | `cargo run --example u2f_hid`           | `cargo run --example webauthn_hid`<br>`cargo run --example webauthn_json_hid`     |
-| **Bluetooth (BLE)**   | `cargo run --example u2f_ble`           | —                                                                                 |
-| **NFC** [^nfc]        | `cargo run --example u2f_nfc`           | `cargo run --example webauthn_nfc`                                                |
-| **Hybrid (caBLE v2)** | —                                       | `cargo run --example webauthn_cable`                                              |
+| Transport             | FIDO U2F                                                                                                                       | WebAuthn (FIDO2)                                                                                                                           |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| **USB (HID)**         | `cargo run --example u2f_hid`                                                                                                  | `cargo run --example webauthn_hid`<br>`cargo run --example webauthn_json_hid`                                                              |
+| **Bluetooth (BLE)**   | `cargo run --example u2f_ble`                                                                                                  | —                                                                                                                                          |
+| **NFC** [^nfc]        | `cargo run --features nfc-backend-pcsc --example u2f_nfc`<br>`cargo run --features nfc-backend-libnfc --example u2f_nfc`       | `cargo run --features nfc-backend-pcsc --example webauthn_nfc`<br>`cargo run --features nfc-backend-libnfc --example webauthn_nfc`         |
+| **Hybrid (caBLE v2)** | —                                                                                                                              | `cargo run --example webauthn_cable`                                                                                                       |
 
-[^nfc]: NFC examples require an NFC backend feature: pass `--features pcsc` (recommended, pure userspace) or `--features libnfc` (needs the `libnfc` system library).
+[^nfc]: `nfc-backend-pcsc` is pure userspace and recommended on most systems. `nfc-backend-libnfc` requires the `libnfc` system library. Both can be enabled together; the first FIDO device found by either backend is used.
 
 Additional HID-only examples cover specific FIDO2 features and authenticator management:
 

@@ -3,9 +3,9 @@ use std::fmt::{Display, Formatter};
 pub mod channel;
 pub mod commands;
 pub mod device;
-#[cfg(feature = "libnfc")]
+#[cfg(feature = "nfc-backend-libnfc")]
 pub mod libnfc;
-#[cfg(feature = "pcsc")]
+#[cfg(feature = "nfc-backend-pcsc")]
 pub mod pcsc;
 
 pub use device::{get_nfc_device, is_nfc_available};
