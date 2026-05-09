@@ -12,6 +12,7 @@ use libwebauthn::ops::webauthn::{
     WebAuthnIDL as _, WebAuthnIDLResponse as _,
 };
 use libwebauthn::pin::PinRequestReason;
+use libwebauthn::proto::ctap2::Ctap2PublicKeyCredentialDescriptor;
 use libwebauthn::transport::hid::list_devices;
 use libwebauthn::transport::{Channel as _, Device};
 use libwebauthn::webauthn::{Error as WebAuthnError, WebAuthn};
@@ -152,16 +153,24 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             }
         }
 
-        let request_json = r#"
-                {
+        let cred: Ctap2PublicKeyCredentialDescriptor =
+            (&response.authenticator_data).try_into().unwrap();
+        let cred_id_b64 = base64_url::encode(cred.id.as_ref());
+        let request_json = format!(
+            r#"
+                {{
                     "challenge": "Y3JlZGVudGlhbHMtZm9yLWxpbnV4L2xpYndlYmF1dGhu",
                     "timeout": 30000,
                     "rpId": "example.org",
-                    "userVerification": "discouraged"
-                }
-                "#;
+                    "userVerification": "discouraged",
+                    "allowCredentials": [
+                        {{"id": "{cred_id_b64}", "type": "public-key", "transports": ["usb"]}}
+                    ]
+                }}
+                "#
+        );
         let get_assertion: GetAssertionRequest =
-            GetAssertionRequest::from_json(&request_origin, &psl, request_json)
+            GetAssertionRequest::from_json(&request_origin, &psl, &request_json)
                 .expect("Failed to parse request JSON");
         println!("WebAuthn GetAssertion request: {:?}", get_assertion);
 

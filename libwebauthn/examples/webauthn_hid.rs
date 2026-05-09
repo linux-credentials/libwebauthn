@@ -16,7 +16,7 @@ use libwebauthn::ops::webauthn::{
 use libwebauthn::pin::{PinNotSetReason, PinRequestReason};
 use libwebauthn::proto::ctap2::{
     Ctap2CredentialType, Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialRpEntity,
-    Ctap2PublicKeyCredentialUserEntity,
+    Ctap2PublicKeyCredentialUserEntity, Ctap2Transport,
 };
 use libwebauthn::transport::hid::list_devices;
 use libwebauthn::transport::{Channel as _, Device};
@@ -156,6 +156,10 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
 
         let credential: Ctap2PublicKeyCredentialDescriptor =
             (&response.authenticator_data).try_into().unwrap();
+        let credential = Ctap2PublicKeyCredentialDescriptor {
+            transports: Some(vec![Ctap2Transport::Usb]),
+            ..credential
+        };
         let get_assertion = GetAssertionRequest {
             relying_party_id: "example.org".to_owned(),
             challenge: Vec::from(challenge),
