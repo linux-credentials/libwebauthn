@@ -53,9 +53,8 @@ impl FromStr for OriginHost {
             Ok(h) => Ok(OriginHost(h.to_string())),
             Err(err) => {
                 let msg = err.to_string();
-                if msg.contains("IPv4") || msg.contains("ipv4") {
-                    Err(HostParseError::InvalidIp(msg))
-                } else if msg.contains("IPv6") || msg.contains("ipv6") {
+                let lower = msg.to_lowercase();
+                if lower.contains("ipv4") || lower.contains("ipv6") {
                     Err(HostParseError::InvalidIp(msg))
                 } else {
                     Err(HostParseError::InvalidDomain(msg))
@@ -149,9 +148,9 @@ fn split_host_and_port(s: &str) -> Result<(&str, Option<u16>), OriginParseError>
     // IPv6 literals are bracketed. Find the matching `]` first if present so
     // we don't confuse `:` inside the address with the host/port separator.
     if let Some(stripped) = s.strip_prefix('[') {
-        let end = stripped
-            .find(']')
-            .ok_or_else(|| OriginParseError::InvalidHost(HostParseError::InvalidIp(s.to_string())))?;
+        let end = stripped.find(']').ok_or_else(|| {
+            OriginParseError::InvalidHost(HostParseError::InvalidIp(s.to_string()))
+        })?;
         let host = &s[..end + 2]; // include the brackets
         let after = &s[end + 2..];
         if after.is_empty() {

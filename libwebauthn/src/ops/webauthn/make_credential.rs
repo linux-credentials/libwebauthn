@@ -19,7 +19,7 @@ use crate::{
             },
             Base64UrlString, FromIdlModel, JsonError, WebAuthnIDL,
         },
-        Operation, RelyingPartyId,
+        Operation, RelyingPartyId, RequestOrigin,
     },
     proto::{
         ctap1::{Ctap1RegisteredKey, Ctap1Version},
@@ -365,18 +365,19 @@ impl FromIdlModel<PublicKeyCredentialCreationOptionsJSON, MakeCredentialRequestP
     for MakeCredentialRequest
 {
     fn from_idl_model(
-        rpid: &RelyingPartyId,
+        request_origin: &RequestOrigin,
         inner: PublicKeyCredentialCreationOptionsJSON,
     ) -> Result<Self, MakeCredentialRequestParsingError> {
+        let effective_rp_id = request_origin.origin.host.as_str();
         let rp_id = RelyingPartyId::try_from(inner.rp.id.as_str()).map_err(|err| {
             MakeCredentialRequestParsingError::InvalidRelyingPartyId(err.to_string())
         })?;
         // TODO(#160): Add support for related origin per WebAuthn Level 3.
-        if rp_id.0 != rpid.0 {
+        if rp_id.0 != effective_rp_id {
             return Err(
                 MakeCredentialRequestParsingError::MismatchingRelyingPartyId(
                     rp_id.0,
-                    rpid.0.to_string(),
+                    effective_rp_id.to_string(),
                 ),
             );
         }
@@ -410,8 +411,8 @@ impl FromIdlModel<PublicKeyCredentialCreationOptionsJSON, MakeCredentialRequestP
 
         Ok(Self {
             challenge: inner.challenge.to_vec(),
-            origin: rpid.to_owned().into(),
-            top_origin: None,
+            origin: request_origin.origin.to_string(),
+            top_origin: request_origin.top_origin.as_ref().map(|o| o.to_string()),
             relying_party,
             user: inner.user.into(),
             resident_key,
@@ -641,8 +642,7 @@ impl DowngradableRequest<RegisterRequest> for MakeCredentialRequest {
 mod tests {
     use std::time::Duration;
 
-    use crate::ops::webauthn::MakeCredentialRequest;
-    use crate::ops::webauthn::RelyingPartyId;
+    use crate::ops::webauthn::{MakeCredentialRequest, RequestOrigin};
     use crate::proto::ctap2::Ctap2PublicKeyCredentialType;
 
     use super::*;
@@ -679,7 +679,7 @@ mod tests {
     fn request_base() -> MakeCredentialRequest {
         MakeCredentialRequest {
             challenge: base64_url::decode("Y3JlZGVudGlhbHMtZm9yLWxpbnV4L2xpYndlYmF1dGhu").unwrap(),
-            origin: "example.org".to_string(),
+            origin: "https://example.org".to_string(),
             top_origin: None,
             relying_party: Ctap2PublicKeyCredentialRpEntity::new("example.org", "example.org"),
             user: Ctap2PublicKeyCredentialUserEntity::new(b"userid", "mario.rossi", "Mario Rossi"),
@@ -707,10 +707,10 @@ mod tests {
     }
 
     fn test_request_from_json_required_field(field: &str) {
-        let rpid = RelyingPartyId::try_from("example.org").unwrap();
+        let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
         let req_json = json_field_rm(REQUEST_BASE_JSON, field);
 
-        let result = MakeCredentialRequest::from_json(&rpid, &req_json);
+        let result = MakeCredentialRequest::from_json(&request_origin, &req_json);
         assert!(matches!(
             result,
             Err(MakeCredentialRequestParsingError::EncodingError(_))
@@ -719,9 +719,9 @@ mod tests {
 
     #[test]
     fn test_request_from_json_base() {
-        let rpid = RelyingPartyId::try_from("example.org").unwrap();
+        let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
         let req: MakeCredentialRequest =
-            MakeCredentialRequest::from_json(&rpid, REQUEST_BASE_JSON).unwrap();
+            MakeCredentialRequest::from_json(&request_origin, REQUEST_BASE_JSON).unwrap();
         assert_eq!(req, request_base());
     }
 
@@ -748,11 +748,11 @@ mod tests {
     #[test]
     #[ignore] // FIXME(#134): Add validation for challenges
     fn test_request_from_json_challenge_empty() {
-        let rpid = RelyingPartyId::try_from("example.org").unwrap();
+        let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
         let req_json: String = json_field_rm(REQUEST_BASE_JSON, "challenge");
         let req_json = json_field_add(&req_json, "challenge", r#""""#);
 
-        let result = MakeCredentialRequest::from_json(&rpid, &req_json);
+        let result = MakeCredentialRequest::from_json(&request_origin, &req_json);
         assert!(matches!(
             result,
             Err(MakeCredentialRequestParsingError::EncodingError(_))
@@ -761,7 +761,7 @@ mod tests {
 
     #[test]
     fn test_request_from_json_prf_extension() {
-        let rpid = RelyingPartyId::try_from("example.org").unwrap();
+        let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
         let req_json = json_field_add(
             REQUEST_BASE_JSON,
             "extensions",
@@ -769,7 +769,7 @@ mod tests {
         );
 
         let req: MakeCredentialRequest =
-            MakeCredentialRequest::from_json(&rpid, &req_json).unwrap();
+            MakeCredentialRequest::from_json(&request_origin, &req_json).unwrap();
         assert!(matches!(
             req.extensions,
             Some(MakeCredentialsRequestExtensions { prf: Some(_), .. })
@@ -778,14 +778,14 @@ mod tests {
 
     #[test]
     fn test_request_from_json_unknown_pub_key_cred_params() {
-        let rpid = RelyingPartyId::try_from("example.org").unwrap();
+        let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
         let req_json = json_field_add(
             REQUEST_BASE_JSON,
             "pubKeyCredParams",
             r#"[{"type": "something", "alg": -12345}]"#,
         );
         let req: MakeCredentialRequest =
-            MakeCredentialRequest::from_json(&rpid, &req_json).unwrap();
+            MakeCredentialRequest::from_json(&request_origin, &req_json).unwrap();
         assert_eq!(
             req.algorithms,
             vec![Ctap2CredentialType {
@@ -797,11 +797,11 @@ mod tests {
 
     #[test]
     fn test_request_from_json_default_timeout() {
-        let rpid = RelyingPartyId::try_from("example.org").unwrap();
+        let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
         let req_json = json_field_rm(REQUEST_BASE_JSON, "timeout");
 
         let req: MakeCredentialRequest =
-            MakeCredentialRequest::from_json(&rpid, &req_json).unwrap();
+            MakeCredentialRequest::from_json(&request_origin, &req_json).unwrap();
         assert_eq!(req.timeout, DEFAULT_TIMEOUT);
     }
 
@@ -809,11 +809,11 @@ mod tests {
     /// https://www.w3.org/TR/webauthn-3/#dom-authenticatorselectioncriteria-userverification
     #[test]
     fn test_request_from_json_default_user_verification_preferred() {
-        let rpid = RelyingPartyId::try_from("example.org").unwrap();
+        let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
         let req_json = json_field_rm(REQUEST_BASE_JSON, "authenticatorSelection");
 
         let req: MakeCredentialRequest =
-            MakeCredentialRequest::from_json(&rpid, &req_json).unwrap();
+            MakeCredentialRequest::from_json(&request_origin, &req_json).unwrap();
         assert_eq!(
             req.user_verification,
             UserVerificationRequirement::Preferred
@@ -824,7 +824,7 @@ mod tests {
     /// it should default to "preferred".
     #[test]
     fn test_request_from_json_missing_user_verification_in_authenticator_selection() {
-        let rpid = RelyingPartyId::try_from("example.org").unwrap();
+        let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
         // Replace authenticatorSelection with one that has no userVerification field
         let mut req_json = json_field_rm(REQUEST_BASE_JSON, "authenticatorSelection");
         req_json = json_field_add(
@@ -834,7 +834,7 @@ mod tests {
         );
 
         let req: MakeCredentialRequest =
-            MakeCredentialRequest::from_json(&rpid, &req_json).unwrap();
+            MakeCredentialRequest::from_json(&request_origin, &req_json).unwrap();
         assert_eq!(
             req.user_verification,
             UserVerificationRequirement::Preferred
@@ -843,14 +843,14 @@ mod tests {
 
     #[test]
     fn test_request_from_json_invalid_rp_id() {
-        let rpid = RelyingPartyId::try_from("example.org").unwrap();
+        let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
         let req_json = json_field_add(
             REQUEST_BASE_JSON,
             "rp",
             r#"{"id": "example.org.", "name": "example.org"}"#,
         );
 
-        let result = MakeCredentialRequest::from_json(&rpid, &req_json);
+        let result = MakeCredentialRequest::from_json(&request_origin, &req_json);
         assert!(matches!(
             result,
             Err(MakeCredentialRequestParsingError::InvalidRelyingPartyId(_))
@@ -859,14 +859,14 @@ mod tests {
 
     #[test]
     fn test_request_from_json_mismatching_rp_id() {
-        let rpid = RelyingPartyId::try_from("example.org").unwrap();
+        let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
         let req_json = json_field_add(
             REQUEST_BASE_JSON,
             "rp",
             r#"{"id": "other.example.org", "name": "example.org"}"#,
         );
 
-        let result = MakeCredentialRequest::from_json(&rpid, &req_json);
+        let result = MakeCredentialRequest::from_json(&request_origin, &req_json);
         assert!(matches!(
             result,
             Err(MakeCredentialRequestParsingError::MismatchingRelyingPartyId(_, _))
