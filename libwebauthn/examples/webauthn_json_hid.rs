@@ -8,8 +8,8 @@ use tokio::sync::broadcast::Receiver;
 use tracing_subscriber::{self, EnvFilter};
 
 use libwebauthn::ops::webauthn::{
-    GetAssertionRequest, JsonFormat, MakeCredentialRequest, RequestOrigin, WebAuthnIDL as _,
-    WebAuthnIDLResponse as _,
+    DatFilePublicSuffixList, GetAssertionRequest, JsonFormat, MakeCredentialRequest, RequestOrigin,
+    WebAuthnIDL as _, WebAuthnIDLResponse as _,
 };
 use libwebauthn::pin::PinRequestReason;
 use libwebauthn::transport::hid::list_devices;
@@ -81,6 +81,9 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
 
         let request_origin: RequestOrigin =
             "https://example.org".try_into().expect("Invalid origin");
+        let psl = DatFilePublicSuffixList::from_system_file().expect(
+            "PSL not available; install the publicsuffix-list package or pass an explicit path",
+        );
         let request_json = r#"
                 {
                     "rp": {
@@ -106,7 +109,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
                 }
                 "#;
         let make_credentials_request: MakeCredentialRequest =
-            MakeCredentialRequest::from_json(&request_origin, request_json)
+            MakeCredentialRequest::from_json(&request_origin, &psl, request_json)
                 .expect("Failed to parse request JSON");
         println!(
             "WebAuthn MakeCredential request: {:?}",
@@ -158,7 +161,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
                 }
                 "#;
         let get_assertion: GetAssertionRequest =
-            GetAssertionRequest::from_json(&request_origin, request_json)
+            GetAssertionRequest::from_json(&request_origin, &psl, request_json)
                 .expect("Failed to parse request JSON");
         println!("WebAuthn GetAssertion request: {:?}", get_assertion);
 

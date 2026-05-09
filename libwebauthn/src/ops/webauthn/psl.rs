@@ -85,41 +85,43 @@ impl PublicSuffixList for DatFilePublicSuffixList {
     }
 }
 
+/// Test-only PSL that recognises a small fixed set of public suffixes.
+///
+/// Sufficient for unit tests of the suffix-check algorithm without reading
+/// the system file. Recognises `com`, `co.uk`, `org`, and `net`.
+#[cfg(test)]
+pub(crate) struct MockPublicSuffixList;
+
+#[cfg(test)]
+impl PublicSuffixList for MockPublicSuffixList {
+    fn public_suffix(&self, host: &str) -> Option<String> {
+        const KNOWN_SUFFIXES: &[&str] = &["com", "co.uk", "org", "net"];
+        for suffix in KNOWN_SUFFIXES {
+            if host == *suffix {
+                return Some((*suffix).to_string());
+            }
+            let needle = format!(".{suffix}");
+            if host.ends_with(&needle) {
+                return Some((*suffix).to_string());
+            }
+        }
+        None
+    }
+
+    fn registrable_domain(&self, host: &str) -> Option<String> {
+        let suffix = self.public_suffix(host)?;
+        if host == suffix {
+            return None;
+        }
+        let prefix = host.strip_suffix(&suffix)?.strip_suffix('.')?;
+        let last_label = prefix.rsplit('.').next()?;
+        Some(format!("{last_label}.{suffix}"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Test-only PSL that recognises a small fixed set of public suffixes.
-    /// Sufficient for unit tests of the suffix-check algorithm without
-    /// reading the system file.
-    pub(crate) struct MockPublicSuffixList;
-
-    const KNOWN_SUFFIXES: &[&str] = &["com", "co.uk", "org", "net"];
-
-    impl PublicSuffixList for MockPublicSuffixList {
-        fn public_suffix(&self, host: &str) -> Option<String> {
-            for suffix in KNOWN_SUFFIXES {
-                if host == *suffix {
-                    return Some((*suffix).to_string());
-                }
-                let needle = format!(".{suffix}");
-                if host.ends_with(&needle) {
-                    return Some((*suffix).to_string());
-                }
-            }
-            None
-        }
-
-        fn registrable_domain(&self, host: &str) -> Option<String> {
-            let suffix = self.public_suffix(host)?;
-            if host == suffix {
-                return None;
-            }
-            let prefix = host.strip_suffix(&suffix)?.strip_suffix('.')?;
-            let last_label = prefix.rsplit('.').next()?;
-            Some(format!("{last_label}.{suffix}"))
-        }
-    }
 
     #[test]
     fn mock_public_suffix_lookup() {
