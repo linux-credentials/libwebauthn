@@ -21,6 +21,10 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Build
         run: cargo build --workspace --all-targets --all-features
+      - name: Build with only nfc-backend-pcsc
+        run: cargo build -p libwebauthn --examples --features nfc-backend-pcsc
+      - name: Build with only nfc-backend-libnfc
+        run: cargo build -p libwebauthn --examples --features nfc-backend-libnfc
       - name: Run tests
         run: cargo test --workspace --verbose
       - name: Verify libwebauthn publishes cleanly
