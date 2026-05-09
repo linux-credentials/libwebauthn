@@ -49,7 +49,7 @@ async fn make_credential_call(
         exclude: exclude_list,
         extensions: None,
         timeout: TIMEOUT,
-        cross_origin: None,
+        top_origin: None,
     };
 
     let response = channel
@@ -71,7 +71,7 @@ async fn get_assertion_call(
         user_verification: UserVerificationRequirement::Discouraged,
         extensions: None,
         timeout: TIMEOUT,
-        cross_origin: None,
+        top_origin: None,
     };
 
     channel.webauthn_get_assertion(&get_assertion).await

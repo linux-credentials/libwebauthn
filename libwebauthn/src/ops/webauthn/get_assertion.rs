@@ -46,7 +46,9 @@ pub struct GetAssertionRequest {
     pub relying_party_id: String,
     pub challenge: Vec<u8>,
     pub origin: String,
-    pub cross_origin: Option<bool>,
+    /// The top-level origin if the request was made from a cross-origin
+    /// nested browsing context. None for same-origin requests.
+    pub top_origin: Option<String>,
     pub allow: Vec<Ctap2PublicKeyCredentialDescriptor>,
     pub extensions: Option<GetAssertionRequestExtensions>,
     pub user_verification: UserVerificationRequirement,
@@ -59,8 +61,7 @@ impl GetAssertionRequest {
             operation: Operation::GetAssertion,
             challenge: self.challenge.clone(),
             origin: self.origin.clone(),
-            cross_origin: self.cross_origin,
-            top_origin: None,
+            top_origin: self.top_origin.clone(),
         }
     }
 
@@ -157,7 +158,7 @@ impl FromIdlModel<PublicKeyCredentialRequestOptionsJSON, GetAssertionRequestPars
             relying_party_id: rpid.to_string(),
             challenge: inner.challenge.to_vec(),
             origin: rpid.to_string(),
-            cross_origin: None,
+            top_origin: None,
             allow: inner
                 .allow_credentials
                 .into_iter()
@@ -597,7 +598,7 @@ mod tests {
             relying_party_id: "example.org".to_owned(),
             challenge: base64_url::decode("Y3JlZGVudGlhbHMtZm9yLWxpbnV4L2xpYndlYmF1dGhu").unwrap(),
             origin: "example.org".to_string(),
-            cross_origin: None,
+            top_origin: None,
             allow: vec![Ctap2PublicKeyCredentialDescriptor {
                 r#type: Ctap2PublicKeyCredentialType::PublicKey,
                 id: ByteBuf::from(base64_url::decode("bXktY3JlZGVudGlhbC1pZA").unwrap()),
@@ -772,7 +773,7 @@ mod tests {
             relying_party_id: "example.org".to_owned(),
             challenge: b"DEADCODE_challenge".to_vec(),
             origin: "example.org".to_string(),
-            cross_origin: None,
+            top_origin: None,
             allow: vec![],
             extensions: None,
             user_verification: UserVerificationRequirement::Preferred,

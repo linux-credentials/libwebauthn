@@ -583,7 +583,7 @@ mod test {
                 extensions,
                 user_verification: UserVerificationRequirement::Preferred,
                 timeout: TIMEOUT,
-                cross_origin: None,
+                top_origin: None,
             },
             info,
         )

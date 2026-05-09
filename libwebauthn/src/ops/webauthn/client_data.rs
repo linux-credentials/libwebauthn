@@ -9,8 +9,8 @@ pub struct ClientData {
     pub operation: Operation,
     pub challenge: Vec<u8>,
     pub origin: String,
-    pub cross_origin: Option<bool>,
-    /// The origin of the top-level document, if in an iframe.
+    /// The origin of the top-level document, if the request was made in a
+    /// cross-origin nested browsing context (e.g. an iframe).
     /// https://www.w3.org/TR/webauthn-3/#dom-collectedclientdata-toporigin
     pub top_origin: Option<String>,
 }
@@ -24,12 +24,19 @@ impl ClientData {
         };
         let challenge_str = base64_url::encode(&self.challenge);
         let origin_str = &self.origin;
-        let cross_origin_str = if self.cross_origin.unwrap_or(false) {
+        let cross_origin_str = if self.top_origin.is_some() {
             "true"
         } else {
             "false"
         };
-        format!("{{\"type\":\"{op_str}\",\"challenge\":\"{challenge_str}\",\"origin\":\"{origin_str}\",\"crossOrigin\":{cross_origin_str}}}")
+        match &self.top_origin {
+            Some(top) => format!(
+                "{{\"type\":\"{op_str}\",\"challenge\":\"{challenge_str}\",\"origin\":\"{origin_str}\",\"crossOrigin\":{cross_origin_str},\"topOrigin\":\"{top}\"}}"
+            ),
+            None => format!(
+                "{{\"type\":\"{op_str}\",\"challenge\":\"{challenge_str}\",\"origin\":\"{origin_str}\",\"crossOrigin\":{cross_origin_str}}}"
+            ),
+        }
     }
 
     pub fn hash(&self) -> Vec<u8> {
@@ -44,65 +51,56 @@ impl ClientData {
 mod tests {
     use super::*;
 
-    fn make_client_data(cross_origin: Option<bool>) -> ClientData {
+    fn make_client_data(top_origin: Option<String>) -> ClientData {
         ClientData {
             operation: Operation::GetAssertion,
             challenge: b"test-challenge".to_vec(),
             origin: "https://example.org".to_string(),
-            cross_origin,
-            top_origin: None,
+            top_origin,
         }
     }
 
     #[test]
-    fn test_cross_origin_none_produces_false() {
+    fn same_origin_emits_cross_origin_false() {
         let client_data = make_client_data(None);
         let json = client_data.to_json();
         assert!(
             json.contains("\"crossOrigin\":false"),
-            "Expected crossOrigin:false, got: {}",
-            json
+            "Expected crossOrigin:false, got: {json}"
         );
-    }
-
-    #[test]
-    fn test_cross_origin_false_produces_false() {
-        let client_data = make_client_data(Some(false));
-        let json = client_data.to_json();
         assert!(
-            json.contains("\"crossOrigin\":false"),
-            "Expected crossOrigin:false, got: {}",
-            json
+            !json.contains("topOrigin"),
+            "Did not expect topOrigin, got: {json}"
         );
     }
 
     #[test]
-    fn test_cross_origin_true_produces_true() {
-        let client_data = make_client_data(Some(true));
+    fn cross_origin_emits_cross_origin_true_and_top_origin() {
+        let client_data = make_client_data(Some("https://top.example.org".to_string()));
         let json = client_data.to_json();
         assert!(
             json.contains("\"crossOrigin\":true"),
-            "Expected crossOrigin:true, got: {}",
-            json
+            "Expected crossOrigin:true, got: {json}"
+        );
+        assert!(
+            json.contains("\"topOrigin\":\"https://top.example.org\""),
+            "Expected topOrigin, got: {json}"
         );
     }
 
     #[test]
-    fn test_to_json_format() {
+    fn to_json_format() {
         let client_data = ClientData {
             operation: Operation::MakeCredential,
             challenge: b"DEADCODE".to_vec(),
             origin: "https://example.org".to_string(),
-            cross_origin: Some(true),
             top_origin: None,
         };
         let json = client_data.to_json();
 
-        // Verify the JSON contains expected structure
         assert!(json.contains("\"type\":\"webauthn.create\""));
         assert!(json.contains("\"origin\":\"https://example.org\""));
-        assert!(json.contains("\"crossOrigin\":true"));
-        // Challenge should be base64url encoded
-        assert!(json.contains("\"challenge\":\"REVBRENPREU\"")); // base64url of "DEADCODE"
+        assert!(json.contains("\"crossOrigin\":false"));
+        assert!(json.contains("\"challenge\":\"REVBRENPREU\""));
     }
 }

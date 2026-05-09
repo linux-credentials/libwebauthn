@@ -121,7 +121,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         let make_credentials_request = MakeCredentialRequest {
             challenge: Vec::from(challenge),
             origin: "example.org".to_owned(),
-            cross_origin: None,
+            top_origin: None,
             relying_party: Ctap2PublicKeyCredentialRpEntity::new("example.org", "example.org"),
             user: Ctap2PublicKeyCredentialUserEntity::new(&user_id, "mario.rossi", "Mario Rossi"),
             resident_key: Some(ResidentKeyRequirement::Discouraged),
@@ -160,7 +160,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             relying_party_id: "example.org".to_owned(),
             challenge: Vec::from(challenge),
             origin: "example.org".to_string(),
-            cross_origin: None,
+            top_origin: None,
             allow: vec![credential],
             user_verification: UserVerificationRequirement::Discouraged,
             extensions: Some(GetAssertionRequestExtensions::default()),

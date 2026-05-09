@@ -612,7 +612,7 @@ mod tests {
             relying_party_id: "example.com".to_string(),
             challenge: vec![0u8; 32],
             origin: "https://example.com".to_string(),
-            cross_origin: None,
+            top_origin: None,
             allow,
             extensions: None,
             user_verification: Default::default(),
