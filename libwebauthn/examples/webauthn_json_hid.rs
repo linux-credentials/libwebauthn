@@ -8,7 +8,7 @@ use tokio::sync::broadcast::Receiver;
 use tracing_subscriber::{self, EnvFilter};
 
 use libwebauthn::ops::webauthn::{
-    GetAssertionRequest, JsonFormat, MakeCredentialRequest, RelyingPartyId, WebAuthnIDL as _,
+    GetAssertionRequest, JsonFormat, MakeCredentialRequest, RequestOrigin, WebAuthnIDL as _,
     WebAuthnIDLResponse as _,
 };
 use libwebauthn::pin::PinRequestReason;
@@ -79,7 +79,8 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         let mut channel = device.channel().await?;
         channel.wink(TIMEOUT).await?;
 
-        let rpid = RelyingPartyId("example.org".to_owned());
+        let request_origin: RequestOrigin =
+            "https://example.org".try_into().expect("Invalid origin");
         let request_json = r#"
                 {
                     "rp": {
@@ -105,7 +106,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
                 }
                 "#;
         let make_credentials_request: MakeCredentialRequest =
-            MakeCredentialRequest::from_json(&rpid, request_json)
+            MakeCredentialRequest::from_json(&request_origin, request_json)
                 .expect("Failed to parse request JSON");
         println!(
             "WebAuthn MakeCredential request: {:?}",
@@ -157,7 +158,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
                 }
                 "#;
         let get_assertion: GetAssertionRequest =
-            GetAssertionRequest::from_json(&rpid, request_json)
+            GetAssertionRequest::from_json(&request_origin, request_json)
                 .expect("Failed to parse request JSON");
         println!("WebAuthn GetAssertion request: {:?}", get_assertion);
 
