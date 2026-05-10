@@ -246,7 +246,16 @@ impl Ctap2GetInfoResponse {
 
             // If we do have a PIN, check if we need to use legacy getPinToken or new getPinUvAuthToken..-command
             if self.option_enabled("pinUvAuthToken") {
-                assert!(self.option_enabled("clientPin"));
+                // `pinUvAuthToken` and `clientPin` are independent options
+                // (CTAP 2.2 §6.4). Tolerate the combination without `clientPin`
+                // and fall back to a shared-secret-only flow.
+                if !self.option_enabled("clientPin") {
+                    debug!(
+                        "Device advertises pinUvAuthToken without clientPin; \
+                         falling back to OnlyForSharedSecret"
+                    );
+                    return Some(Ctap2UserVerificationOperation::OnlyForSharedSecret);
+                }
                 debug!("getPinUvAuthTokenUsingPinWithPermissions");
                 Some(Ctap2UserVerificationOperation::GetPinUvAuthTokenUsingPinWithPermissions)
             } else if self.option_enabled("clientPin") {
@@ -565,6 +574,19 @@ mod test {
         assert!(!info.is_uv_protected());
         // But we should be able to establish a shared secret
         assert!(info.can_establish_shared_secret());
+        assert_eq!(
+            info.uv_operation(false),
+            Some(Ctap2UserVerificationOperation::OnlyForSharedSecret)
+        );
+        assert_eq!(
+            info.uv_operation(true),
+            Some(Ctap2UserVerificationOperation::OnlyForSharedSecret)
+        );
+    }
+
+    #[test]
+    fn device_pin_uv_auth_token_without_client_pin_does_not_panic() {
+        let info = create_info(&[("pinUvAuthToken", true)]);
         assert_eq!(
             info.uv_operation(false),
             Some(Ctap2UserVerificationOperation::OnlyForSharedSecret)
