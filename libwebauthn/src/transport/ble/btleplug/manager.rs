@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 use super::device::FidoEndpoints;
 use super::gatt::get_gatt_characteristic;
+use super::pairing::enforce_bonded;
 use super::{Connection, Error, FidoDevice};
 use crate::fido::{FidoProtocol, FidoRevision};
 
@@ -207,8 +208,8 @@ pub async fn supported_fido_revisions(
     Ok(supported)
 }
 
-/// Connect, discover FIDO services on this device, and
-/// select the FIDO revision to be used.
+/// Connect, discover FIDO services on this device, and select the FIDO
+/// revision to be used. Refuses unbonded LE links (CTAP 2.2 §11.4).
 pub async fn connect(
     peripheral: &Peripheral,
     revision: &FidoRevision,
@@ -217,6 +218,7 @@ pub async fn connect(
         .connect()
         .await
         .or(Err(Error::ConnectionFailed))?;
+    enforce_bonded(peripheral).await?;
     peripheral
         .discover_services()
         .await
