@@ -599,6 +599,32 @@ impl DowngradableRequest<RegisterRequest> for MakeCredentialRequest {
             return false;
         }
 
+        // Enforced credProtect with a non-default policy cannot be honoured by U2F.
+        if let Some(cred_protect) = self
+            .extensions
+            .as_ref()
+            .and_then(|e| e.cred_protect.as_ref())
+        {
+            if cred_protect.enforce_policy
+                && cred_protect.policy != CredentialProtectionPolicy::UserVerificationOptional
+            {
+                debug!("Not downgradable: request enforces a non-default credProtect policy");
+                return false;
+            }
+        }
+
+        // U2F has no large-blob storage.
+        if matches!(
+            self.extensions
+                .as_ref()
+                .and_then(|e| e.large_blob.as_ref())
+                .map(|lb| lb.support),
+            Some(MakeCredentialLargeBlobExtension::Required)
+        ) {
+            debug!("Not downgradable: request requires the largeBlob extension");
+            return false;
+        }
+
         true
     }
 
