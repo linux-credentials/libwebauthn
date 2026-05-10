@@ -189,7 +189,11 @@ impl<'d> HidChannel<'d> {
             return Err(Error::Transport(TransportError::InvalidEndpoint));
         }
 
-        if response.payload[0..INIT_NONCE_LEN] != nonce[0..INIT_NONCE_LEN] {
+        let payload_nonce = response
+            .payload
+            .get(..INIT_NONCE_LEN)
+            .ok_or(Error::Transport(TransportError::InvalidEndpoint))?;
+        if payload_nonce != nonce.as_slice() {
             warn!("INIT nonce mismatch. Terminating.");
             return Err(Error::Transport(TransportError::InvalidEndpoint));
         }

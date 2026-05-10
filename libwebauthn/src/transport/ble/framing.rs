@@ -126,16 +126,25 @@ impl BleFrameParser {
             ));
         }
 
-        let cmd = self.fragments[0][0].try_into().or(Err(IOError::new(
+        let (initial, continuations) = self
+            .fragments
+            .split_first()
+            .ok_or_else(|| IOError::new(IOErrorKind::InvalidData, "Frame has no fragments"))?;
+        let cmd_byte = *initial
+            .first()
+            .ok_or_else(|| IOError::new(IOErrorKind::InvalidData, "Initial fragment is empty"))?;
+        let cmd = cmd_byte.try_into().or(Err(IOError::new(
             IOErrorKind::InvalidData,
-            format!("Invalid BLE frame command: {:x}", self.fragments[0][0]),
+            format!("Invalid BLE frame command: {:x}", cmd_byte),
         )))?;
         let mut data = vec![];
-        data.extend(&self.fragments[0][INITIAL_FRAGMENT_HEADER_LENGTH..self.fragments[0].len()]);
-        for cont_fragment in &self.fragments[1..self.fragments.len()] {
-            data.extend_from_slice(
-                &cont_fragment[CONT_FRAGMENT_HEADER_LENGTH..cont_fragment.len()],
-            );
+        if let Some(initial_data) = initial.get(INITIAL_FRAGMENT_HEADER_LENGTH..) {
+            data.extend(initial_data);
+        }
+        for cont_fragment in continuations {
+            if let Some(cont_data) = cont_fragment.get(CONT_FRAGMENT_HEADER_LENGTH..) {
+                data.extend_from_slice(cont_data);
+            }
         }
 
         Ok(BleFrame::new(cmd, &data))
@@ -154,22 +163,23 @@ impl BleFrameParser {
     }
 
     fn expected_bytes(&self) -> Option<usize> {
-        if self.fragments.is_empty() {
-            return None;
-        }
-
-        let mut cursor = IOCursor::new(vec![self.fragments[0][1], self.fragments[0][2]]);
+        let initial = self.fragments.first()?;
+        let b1 = *initial.get(1)?;
+        let b2 = *initial.get(2)?;
+        let mut cursor = IOCursor::new(vec![b1, b2]);
         Some(cursor.read_u16::<BigEndian>().ok()? as usize)
     }
 
     fn data_len(&self) -> usize {
-        if self.fragments.is_empty() {
+        let Some((initial, continuations)) = self.fragments.split_first() else {
             return 0;
-        }
+        };
 
-        let mut data_len = self.fragments[0].len() - INITIAL_FRAGMENT_HEADER_LENGTH;
-        for cont_fragment in &self.fragments[1..self.fragments.len()] {
-            data_len += cont_fragment.len() - CONT_FRAGMENT_HEADER_LENGTH;
+        let mut data_len = initial.len().saturating_sub(INITIAL_FRAGMENT_HEADER_LENGTH);
+        for cont_fragment in continuations {
+            data_len += cont_fragment
+                .len()
+                .saturating_sub(CONT_FRAGMENT_HEADER_LENGTH);
         }
         data_len
     }
