@@ -64,6 +64,8 @@ p256 = { version = "0.13.2", features = ["ecdh", "arithmetic", "serde"] }
 heapless = "0.7"
 cosey = "0.3.2"
 aes = "0.8.2"
+aes-gcm = "0.10"
+flate2 = "1.0"
 hmac = "0.12.1"
 cbc = { version = "0.1", features = ["alloc"] }
 hkdf = "0.12"
