@@ -6,7 +6,11 @@ use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::fido::FidoProtocol;
 use crate::ops::u2f::{RegisterRequest, SignRequest, UpgradableResponse};
-use crate::ops::webauthn::{DowngradableRequest, GetAssertionRequest, GetAssertionResponse};
+use crate::ops::webauthn::{
+    AuthenticatorLargeBlobStorage, DowngradableRequest, GetAssertionLargeBlobExtension,
+    GetAssertionLargeBlobExtensionOutput, GetAssertionRequest, GetAssertionResponse,
+    GetAssertionResponseUnsignedExtensions, LargeBlobStorage,
+};
 use crate::ops::webauthn::{MakeCredentialRequest, MakeCredentialResponse};
 use crate::proto::ctap1::Ctap1;
 use crate::proto::ctap2::preflight::ctap2_preflight;
@@ -235,6 +239,57 @@ where
             let response = self.ctap2_get_next_assertion(op.timeout).await?;
             assertions.push(response.into_assertion_output(op, self.get_auth_data()));
         }
+
+        // largeBlob.read: fetch and decrypt the on-device blob via
+        // authenticatorLargeBlobs(get). Failures are non-fatal; per WebAuthn
+        // L3 §10.1.5 the `blob` field is absent when the read cannot complete.
+        let large_blob_read_requested = op.extensions.as_ref().and_then(|e| e.large_blob.as_ref())
+            == Some(&GetAssertionLargeBlobExtension::Read);
+        if large_blob_read_requested {
+            for assertion in assertions.iter_mut() {
+                let Some(key_vec) = assertion.large_blob_key.as_ref() else {
+                    continue;
+                };
+                let Ok(key) = <[u8; 32]>::try_from(key_vec.as_slice()) else {
+                    warn!(
+                        len = key_vec.len(),
+                        "largeBlobKey has unexpected length (expected 32); skipping fetch"
+                    );
+                    continue;
+                };
+                let credential_id = assertion
+                    .credential_id
+                    .as_ref()
+                    .map(|c| c.id.to_vec())
+                    .unwrap_or_default();
+                let storage = AuthenticatorLargeBlobStorage::new(
+                    self,
+                    credential_id.clone(),
+                    key,
+                    op.timeout,
+                );
+                let blob = match storage.read(&credential_id).await {
+                    Ok(b) => b,
+                    Err(e) => {
+                        warn!(?e, "authenticatorLargeBlobs(get) failed; no blob returned");
+                        None
+                    }
+                };
+                let entry = GetAssertionLargeBlobExtensionOutput { blob };
+                match assertion.unsigned_extensions_output.as_mut() {
+                    Some(unsigned) => unsigned.large_blob = Some(entry),
+                    None => {
+                        assertion.unsigned_extensions_output =
+                            Some(GetAssertionResponseUnsignedExtensions {
+                                hmac_get_secret: None,
+                                large_blob: Some(entry),
+                                prf: None,
+                            });
+                    }
+                }
+            }
+        }
+
         Ok(assertions.as_slice().into())
     }
 
