@@ -83,13 +83,20 @@ impl<'a> From<CtapMsgCommand<'a>> for Command<'a> {
 
 impl<'a> From<&'a ApduRequest> for Command<'a> {
     fn from(cmd: &'a ApduRequest) -> Self {
-        Self::new_with_payload(
-            0, // CLA
-            cmd.ins,
-            cmd.p1,
-            cmd.p2,
-            cmd.data.as_deref().unwrap_or(&[]),
-        )
+        // U2F REGISTER and AUTHENTICATE are Case 4 APDUs per FIDO U2F Raw
+        // Message Formats §3 / §4 and FIDO U2F NFC §3.1: the encoder must
+        // propagate `response_max_length` as Le so the authenticator knows
+        // a response payload is expected. Strict implementations reject
+        // requests missing Le.
+        let payload = cmd.data.as_deref().unwrap_or(&[]);
+        match cmd.response_max_length {
+            Some(le) => {
+                // Short-form Le: APDU_SHORT_LE (256) is mapped to a single
+                // byte 0x00 by apdu-core (`l as u8`).
+                Self::new_with_payload_le(CLA_DEFAULT, cmd.ins, cmd.p1, cmd.p2, le as u16, payload)
+            }
+            None => Self::new_with_payload(CLA_DEFAULT, cmd.ins, cmd.p1, cmd.p2, payload),
+        }
     }
 }
 
@@ -98,4 +105,33 @@ impl_into_vec!(CtapMsgCommand<'a>);
 /// Constructs a `GET MSG` command.
 pub fn command_ctap_msg(has_more: bool, payload: &[u8]) -> CtapMsgCommand<'_> {
     CtapMsgCommand::new(has_more, payload)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn apdu_request_with_le_encodes_as_case_4_short() {
+        // U2F REGISTER-style request: 64 byte payload, Le = 256.
+        // Short form encodes Le as a single 0x00 byte (since 256 as u8 = 0).
+        let payload = vec![0xAAu8; 64];
+        let request = ApduRequest::new(0x01, 0x03, 0x00, Some(&payload), Some(0x100));
+        let bytes: Vec<u8> = Command::from(&request).into();
+        assert_eq!(bytes[0..5], [0x00, 0x01, 0x03, 0x00, 0x40]); // header + Lc=64
+        assert_eq!(&bytes[5..69], payload.as_slice());
+        assert_eq!(bytes[69], 0x00, "Le must be present (0x00 = 256)");
+        assert_eq!(bytes.len(), 70);
+    }
+
+    #[test]
+    fn apdu_request_without_le_encodes_as_case_3() {
+        // Genuine Case 3: no Le.
+        let payload = vec![0xAAu8; 64];
+        let request = ApduRequest::new(0x01, 0x03, 0x00, Some(&payload), None);
+        let bytes: Vec<u8> = Command::from(&request).into();
+        assert_eq!(bytes[0..5], [0x00, 0x01, 0x03, 0x00, 0x40]); // header + Lc=64
+        assert_eq!(&bytes[5..69], payload.as_slice());
+        assert_eq!(bytes.len(), 69, "no trailing Le");
+    }
 }
