@@ -1,11 +1,12 @@
 use std::io::Cursor as IOCursor;
 
-use btleplug::api::{Peripheral as _, WriteType};
+use btleplug::api::Peripheral as _;
 use btleplug::platform::Peripheral;
 use byteorder::{BigEndian, ReadBytesExt};
 use tracing::{debug, info, instrument, trace, warn};
 
 use super::device::FidoEndpoints;
+use super::gatt::write_type_for;
 use super::Error;
 use crate::fido::FidoRevision;
 use crate::transport::ble::framing::{
@@ -60,16 +61,14 @@ impl Connection {
             .fragments(max_fragment_size)
             .or(Err(Error::InvalidFraming))?;
 
+        let write_type = write_type_for(&self.services.control_point);
+
         for (i, fragment) in fragments.iter().enumerate() {
             debug!({ fragment = i, len = fragment.len() }, "Sending fragment");
             trace!(?fragment);
 
             self.peripheral
-                .write(
-                    &self.services.control_point,
-                    fragment,
-                    WriteType::WithoutResponse,
-                )
+                .write(&self.services.control_point, fragment, write_type)
                 .await
                 .or(Err(Error::OperationFailed))?;
         }
@@ -79,12 +78,9 @@ impl Connection {
 
     pub(crate) async fn select_fido_revision(&self, revision: &FidoRevision) -> Result<(), Error> {
         let ack: u8 = *revision as u8;
+        let write_type = write_type_for(&self.services.service_revision_bitfield);
         self.peripheral
-            .write(
-                &self.services.service_revision_bitfield,
-                &[ack],
-                WriteType::WithoutResponse,
-            )
+            .write(&self.services.service_revision_bitfield, &[ack], write_type)
             .await
             .or(Err(Error::OperationFailed))?;
 
