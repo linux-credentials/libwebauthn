@@ -106,6 +106,14 @@ impl ApduRequest {
             raw.write_u24::<BigEndian>(0)?;
         }
 
+        // Per ISO 7816-4 and FIDO U2F Raw Message Formats §3, §4: when a
+        // response is expected, append a 2-byte extended-length Le.
+        // Le=0x0000 is the wildcard meaning "up to 65536 bytes".
+        if let Some(le) = self.response_max_length {
+            let le_field = if le >= 0x1_0000 { 0u16 } else { le as u16 };
+            raw.write_u16::<BigEndian>(le_field)?;
+        }
+
         Ok(raw)
     }
 }
@@ -209,5 +217,70 @@ mod tests {
             &[0x00, 0x01, 0x02, 0x03, 0x00, 0x02, 0x00],
         );
         assert_eq!(&serialized[7..519], data.as_slice());
+    }
+
+    #[test]
+    fn apdu_raw_long_with_data_and_le() {
+        // Case 4 Extended APDU: header + Lc(3 BE) + data + Le(2 BE).
+        let data: Vec<u8> = vec![0xAA, 0xBB, 0xCC];
+        let apdu = ApduRequest::new(0x01, 0x02, 0x03, Some(&data), Some(0x100));
+        assert_eq!(
+            apdu.raw_long().unwrap(),
+            [
+                0x00, 0x01, 0x02, 0x03, // CLA, INS, P1, P2
+                0x00, 0x00, 0x03, // Lc = 3 (extended)
+                0xAA, 0xBB, 0xCC, // payload
+                0x01, 0x00, // Le = 256 (big-endian)
+            ],
+        );
+    }
+
+    #[test]
+    fn apdu_raw_long_no_data_with_le() {
+        // Case 2 Extended APDU: header + Lc=0 (3 BE) + Le(2 BE).
+        let apdu = ApduRequest::new(0x01, 0x02, 0x03, None, Some(0x100));
+        assert_eq!(
+            apdu.raw_long().unwrap(),
+            [
+                0x00, 0x01, 0x02, 0x03, // CLA, INS, P1, P2
+                0x00, 0x00, 0x00, // Lc = 0 (extended)
+                0x01, 0x00, // Le = 256 (big-endian)
+            ],
+        );
+    }
+
+    #[test]
+    fn apdu_raw_long_with_data_and_le_wildcard() {
+        // Le >= 65536 encodes as 0x0000 wildcard per ISO 7816-4.
+        let data: Vec<u8> = vec![0xAA];
+        let apdu = ApduRequest::new(0x01, 0x02, 0x03, Some(&data), Some(0x1_0000));
+        let serialized = apdu.raw_long().unwrap();
+        let trailing = &serialized[serialized.len() - 2..];
+        assert_eq!(trailing, &[0x00, 0x00], "Le wildcard for max length");
+    }
+
+    #[test]
+    fn apdu_raw_long_register_request_is_case_4() {
+        // Mirrors the encoding produced by `From<&Ctap1RegisterRequest> for ApduRequest`.
+        let mut payload = vec![0x11u8; 32]; // challenge
+        payload.extend(vec![0x22u8; 32]); // app id hash
+        let apdu = ApduRequest::new(
+            0x01, // U2F_REGISTER
+            0x03, // CONTROL_BYTE_ENFORCE_UP_AND_SIGN
+            0x00,
+            Some(&payload),
+            Some(0x100),
+        );
+        let serialized = apdu.raw_long().unwrap();
+        // Header (4) + extended Lc (3) + payload (64) + extended Le (2)
+        assert_eq!(serialized.len(), 4 + 3 + 64 + 2);
+        // Must terminate with the 2-byte Le; otherwise it is Case 3 and
+        // strict authenticators reject it.
+        let trailing = &serialized[serialized.len() - 2..];
+        assert_eq!(
+            trailing,
+            &[0x01, 0x00],
+            "REGISTER must be Case 4 with Le=256 (extended)",
+        );
     }
 }
