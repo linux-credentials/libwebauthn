@@ -282,7 +282,14 @@ where
 mod tests {
     use std::time::Duration;
 
+    use serde_bytes::ByteBuf;
+
     use crate::proto::ctap2::cbor::{CborRequest, CborResponse};
+    use crate::proto::ctap2::model::{
+        Ctap2AuthenticatorConfigRequest, Ctap2BioEnrollmentRequest, Ctap2ClientPinRequest,
+        Ctap2CredentialManagementRequest, Ctap2GetAssertionRequest, Ctap2MakeCredentialRequest,
+        Ctap2PinUvAuthProtocol,
+    };
     use crate::proto::ctap2::Ctap2CommandCode;
     use crate::transport::mock::channel::MockChannel;
     use crate::webauthn::error::{CtapError, Error};
@@ -291,6 +298,53 @@ mod tests {
 
     const TIMEOUT: Duration = Duration::from_secs(1);
 
+    fn error_response(status_code: CtapError) -> CborResponse {
+        CborResponse {
+            status_code,
+            data: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn ctap2_get_info_propagates_non_ok_status() {
+        let mut channel = MockChannel::new();
+        let expected_request = CborRequest::new(Ctap2CommandCode::AuthenticatorGetInfo);
+        channel.push_command_pair(expected_request, error_response(CtapError::Other));
+
+        let result = channel.ctap2_get_info().await;
+        assert_eq!(result.err(), Some(Error::Ctap(CtapError::Other)));
+    }
+
+    #[tokio::test]
+    async fn ctap2_make_credential_propagates_non_ok_status() {
+        let mut channel = MockChannel::new();
+        let request = Ctap2MakeCredentialRequest::dummy();
+        let expected_request: CborRequest = (&request).try_into().unwrap();
+        channel.push_command_pair(expected_request, error_response(CtapError::OperationDenied));
+
+        let result = channel.ctap2_make_credential(&request, TIMEOUT).await;
+        assert_eq!(result.err(), Some(Error::Ctap(CtapError::OperationDenied)));
+    }
+
+    #[tokio::test]
+    async fn ctap2_get_assertion_propagates_non_ok_status() {
+        let mut channel = MockChannel::new();
+        let request = Ctap2GetAssertionRequest {
+            relying_party_id: "example.org".to_owned(),
+            client_data_hash: ByteBuf::from(vec![0u8; 32]),
+            allow: vec![],
+            extensions: None,
+            options: None,
+            pin_auth_param: None,
+            pin_auth_proto: None,
+        };
+        let expected_request: CborRequest = (&request).try_into().unwrap();
+        channel.push_command_pair(expected_request, error_response(CtapError::NoCredentials));
+
+        let result = channel.ctap2_get_assertion(&request, TIMEOUT).await;
+        assert_eq!(result.err(), Some(Error::Ctap(CtapError::NoCredentials)));
+    }
+
     #[tokio::test]
     async fn ctap2_get_next_assertion_propagates_non_ok_status() {
         let mut channel = MockChannel::new();
@@ -298,11 +352,7 @@ mod tests {
         // Simulate the authenticator returning CTAP2_ERR_NOT_ALLOWED (0x30),
         // which is the spec-defined error when no further assertion is
         // available within the 30-second window.
-        let response = CborResponse {
-            status_code: CtapError::NotAllowed,
-            data: None,
-        };
-        channel.push_command_pair(expected_request, response);
+        channel.push_command_pair(expected_request, error_response(CtapError::NotAllowed));
 
         let result = channel.ctap2_get_next_assertion(TIMEOUT).await;
         assert_eq!(result.err(), Some(Error::Ctap(CtapError::NotAllowed)));
@@ -312,7 +362,7 @@ mod tests {
     async fn ctap2_get_next_assertion_does_not_parse_data_on_error() {
         let mut channel = MockChannel::new();
         let expected_request = CborRequest::new(Ctap2CommandCode::AuthenticatorGetNextAssertion);
-        // Per CTAP 2.2 §6, when the status byte is non-zero the trailing bytes
+        // Per CTAP 2.2 §8, when the status byte is non-zero the trailing bytes
         // are undefined. Make sure the library surfaces the status error and
         // never reaches the CBOR parser, regardless of payload contents.
         let response = CborResponse {
@@ -323,5 +373,87 @@ mod tests {
 
         let result = channel.ctap2_get_next_assertion(TIMEOUT).await;
         assert_eq!(result.err(), Some(Error::Ctap(CtapError::Other)));
+    }
+
+    #[tokio::test]
+    async fn ctap2_client_pin_propagates_non_ok_status() {
+        let mut channel = MockChannel::new();
+        let request = Ctap2ClientPinRequest::new_get_key_agreement(Ctap2PinUvAuthProtocol::One);
+        let expected_request: CborRequest = (&request).try_into().unwrap();
+        channel.push_command_pair(expected_request, error_response(CtapError::PINBlocked));
+
+        let result = channel.ctap2_client_pin(&request, TIMEOUT).await;
+        assert_eq!(result.err(), Some(Error::Ctap(CtapError::PINBlocked)));
+    }
+
+    #[tokio::test]
+    async fn ctap2_selection_propagates_non_ok_status() {
+        let mut channel = MockChannel::new();
+        let expected_request = CborRequest::new(Ctap2CommandCode::AuthenticatorSelection);
+        // Selection returns Ok(()) on success, so cover the error path
+        // explicitly.
+        channel.push_command_pair(
+            expected_request,
+            error_response(CtapError::UserActionTimeout),
+        );
+
+        let result = channel.ctap2_selection(TIMEOUT).await;
+        assert_eq!(
+            result.err(),
+            Some(Error::Ctap(CtapError::UserActionTimeout))
+        );
+    }
+
+    #[tokio::test]
+    async fn ctap2_authenticator_config_propagates_non_ok_status() {
+        let mut channel = MockChannel::new();
+        let request = Ctap2AuthenticatorConfigRequest::new_toggle_always_uv();
+        let expected_request: CborRequest = (&request).try_into().unwrap();
+        channel.push_command_pair(
+            expected_request,
+            error_response(CtapError::UnauthorizedPermission),
+        );
+
+        let result = channel.ctap2_authenticator_config(&request, TIMEOUT).await;
+        assert_eq!(
+            result.err(),
+            Some(Error::Ctap(CtapError::UnauthorizedPermission))
+        );
+    }
+
+    #[tokio::test]
+    async fn ctap2_bio_enrollment_propagates_non_ok_status() {
+        let mut channel = MockChannel::new();
+        let request = Ctap2BioEnrollmentRequest {
+            modality: None,
+            subcommand: None,
+            subcommand_params: None,
+            protocol: None,
+            uv_auth_param: None,
+            get_modality: Some(true),
+            use_legacy_preview: false,
+        };
+        let expected_request: CborRequest = (&request).try_into().unwrap();
+        channel.push_command_pair(expected_request, error_response(CtapError::InvalidOption));
+
+        let result = channel.ctap2_bio_enrollment(&request, TIMEOUT).await;
+        assert_eq!(result.err(), Some(Error::Ctap(CtapError::InvalidOption)));
+    }
+
+    #[tokio::test]
+    async fn ctap2_credential_management_propagates_non_ok_status() {
+        let mut channel = MockChannel::new();
+        let request = Ctap2CredentialManagementRequest {
+            subcommand: None,
+            subcommand_params: None,
+            protocol: None,
+            uv_auth_param: None,
+            use_legacy_preview: false,
+        };
+        let expected_request: CborRequest = (&request).try_into().unwrap();
+        channel.push_command_pair(expected_request, error_response(CtapError::PINRequired));
+
+        let result = channel.ctap2_credential_management(&request, TIMEOUT).await;
+        assert_eq!(result.err(), Some(Error::Ctap(CtapError::PINRequired)));
     }
 }
