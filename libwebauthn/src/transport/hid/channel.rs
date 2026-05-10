@@ -3,7 +3,7 @@ use std::fmt::{Debug, Display, Formatter};
 use std::io::{Cursor as IOCursor, Seek, SeekFrom};
 use std::ops::DerefMut;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use byteorder::{BigEndian, ReadBytesExt};
@@ -43,6 +43,13 @@ const INIT_TIMEOUT: Duration = Duration::from_millis(200);
 
 const PACKET_SIZE: usize = 64;
 const REPORT_ID: u8 = 0x00;
+
+// Per-iteration cap on hidapi::read_timeout. `read_timeout` returns as soon
+// as the device delivers a report, so this does NOT add latency to normal
+// responses; it only bounds how quickly the loop wakes up to re-check the
+// wall-clock deadline and the cancel signal. 100ms is a small fraction of
+// any realistic CTAP timeout and gives ~10 wakeups/sec per active channel.
+const HID_READ_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 // Some devices fail when sending a WINK command followed immediately
 // by a CBOR command, so we want to ensure we wait some time after winking.
@@ -384,7 +391,11 @@ impl<'d> HidChannel<'d> {
                     debug!("Ignoring HID keep-alive");
                     continue;
                 }
-                Err(Error::Platform(PlatformError::Cancelled)) => {
+                Err(Error::Platform(PlatformError::Cancelled))
+                | Err(Error::Transport(TransportError::Timeout)) => {
+                    // CTAP 2.2 §11.2.9.1.5: send CTAPHID_CANCEL when the
+                    // platform gives up (caller cancelled or wall-clock
+                    // budget exhausted).
                     let _ = self.hid_cancel().await;
                     break response;
                 }
@@ -399,16 +410,37 @@ impl<'d> HidChannel<'d> {
         timeout: Duration,
     ) -> Result<HidMessage, Error> {
         let mut parser = HidMessageParser::new();
+        let deadline = Instant::now().checked_add(timeout);
         loop {
             if !matches!(cancel_rx.try_recv(), Err(TryRecvError::Empty)) {
                 return Err(Error::Platform(PlatformError::Cancelled));
             }
 
+            // Cap each read at HID_READ_POLL_INTERVAL so we re-check the
+            // cancel channel and remaining budget; a stalled device cannot
+            // hang the caller past `timeout`.
+            let remaining = match deadline {
+                Some(d) => d.saturating_duration_since(Instant::now()),
+                None => timeout,
+            };
+            if remaining.is_zero() {
+                warn!("HID receive timed out before any data was read");
+                return Err(Error::Transport(TransportError::Timeout));
+            }
+            let read_for = remaining.min(HID_READ_POLL_INTERVAL);
+
             let mut report = [0; PACKET_SIZE];
-            device
-                .read_timeout(&mut report, timeout.as_millis() as i32)
+            let bytes_read = device
+                .read_timeout(&mut report, read_for.as_millis() as i32)
                 .or(Err(Error::Transport(TransportError::ConnectionLost)))?;
-            debug!({ len = report.len() }, "Received HID report");
+            if bytes_read == 0 {
+                // hidapi signals per-iteration timeout as Ok(0); retry
+                // against the remaining budget rather than passing the
+                // zero-initialised buffer to the parser.
+                trace!("hidapi read_timeout returned 0 bytes, continuing");
+                continue;
+            }
+            debug!({ len = bytes_read }, "Received HID report");
             trace!(?report);
             if let HidMessageParserState::Done = parser
                 .update(&report)
