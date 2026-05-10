@@ -147,22 +147,21 @@ impl HidMessageParser {
     }
 
     fn expected_bytes(&self) -> Option<usize> {
-        if self.packets.is_empty() {
-            return None;
-        }
-
-        let mut cursor = IOCursor::new(vec![self.packets[0][5], self.packets[0][6]]);
+        let initial = self.packets.first()?;
+        let b5 = *initial.get(5)?;
+        let b6 = *initial.get(6)?;
+        let mut cursor = IOCursor::new(vec![b5, b6]);
         Some(cursor.read_u16::<BigEndian>().ok()? as usize)
     }
 
     fn payload_len(&self) -> usize {
-        if self.packets.is_empty() {
+        let Some((initial, continuations)) = self.packets.split_first() else {
             return 0;
-        }
+        };
 
-        let mut payload_len = self.packets[0].len() - PACKET_INITIAL_HEADER_SIZE;
-        for cont_packet in &self.packets[1..self.packets.len()] {
-            payload_len += cont_packet.len() - PACKET_CONT_HEADER_SIZE;
+        let mut payload_len = initial.len().saturating_sub(PACKET_INITIAL_HEADER_SIZE);
+        for cont_packet in continuations {
+            payload_len += cont_packet.len().saturating_sub(PACKET_CONT_HEADER_SIZE);
         }
         payload_len
     }
@@ -175,7 +174,11 @@ impl HidMessageParser {
             ));
         }
 
-        let mut cursor = IOCursor::new(&self.packets[0]);
+        let (initial, continuations) = self
+            .packets
+            .split_first()
+            .ok_or_else(|| IOError::new(IOErrorKind::InvalidData, "Message has no packets"))?;
+        let mut cursor = IOCursor::new(initial);
         let cid = cursor.read_u32::<BigEndian>()?;
         let cmd = cursor.read_u8()? ^ PACKET_INITIAL_CMD_MASK;
         let Ok(cmd) = cmd.try_into() else {
@@ -188,9 +191,13 @@ impl HidMessageParser {
         let expected_size = cursor.read_u16::<BigEndian>()?;
 
         let mut payload = vec![];
-        payload.extend(&self.packets[0][PACKET_INITIAL_HEADER_SIZE..]);
-        for cont_packet in &self.packets[1..] {
-            payload.extend_from_slice(&cont_packet[PACKET_CONT_HEADER_SIZE..]);
+        if let Some(initial_payload) = initial.get(PACKET_INITIAL_HEADER_SIZE..) {
+            payload.extend(initial_payload);
+        }
+        for cont_packet in continuations {
+            if let Some(cont_payload) = cont_packet.get(PACKET_CONT_HEADER_SIZE..) {
+                payload.extend_from_slice(cont_payload);
+            }
         }
 
         payload.truncate(expected_size as usize);
