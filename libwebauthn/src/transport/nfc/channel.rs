@@ -196,7 +196,8 @@ where
         let mut rapdu = Vec::new();
 
         let len = self.handle_in_ctx(ctx, &command_buf, &mut buf)?;
-        let mut resp = Response::from(&buf[..len]);
+        let resp_bytes = buf.get(..len).ok_or(HandleError::NotEnoughBuffer(len))?;
+        let mut resp = Response::from(resp_bytes);
 
         let (mut sw1, mut sw2) = resp.trailer;
         rapdu.extend_from_slice(resp.payload);
@@ -205,7 +206,8 @@ where
             let get_response_cmd = command_get_response(0x00, 0x00, sw2);
             let get_response_buf = Vec::from(get_response_cmd);
             let len = self.handle_in_ctx(ctx, &get_response_buf, &mut buf)?;
-            resp = Response::from(&buf[..len]);
+            let resp_bytes = buf.get(..len).ok_or(HandleError::NotEnoughBuffer(len))?;
+            resp = Response::from(resp_bytes);
             (sw1, sw2) = resp.trailer;
             rapdu.extend_from_slice(resp.payload);
         }
@@ -272,8 +274,8 @@ where
         let mut rest: &[u8] = data;
 
         while rest.len() > 250 {
-            let to_send = &rest[..250];
-            rest = &rest[250..];
+            let (to_send, remaining) = rest.split_at(250);
+            rest = remaining;
             let ctap_msg = command_ctap_msg(true, to_send);
             let resp = self.handle(self.ctx, ctap_msg)?;
             trace!("cbor_send has_more {:?} {:?}", to_send, resp);
