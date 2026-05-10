@@ -685,4 +685,138 @@ mod tests {
         let got = storage.read(b"cred-A").await.expect("read");
         assert!(got.is_none());
     }
+
+    /// End-to-end check of the read path through `webauthn_get_assertion`:
+    /// drives the CTAP exchange, array parsing, AES-256-GCM decrypt, deflate
+    /// decompress, and surfaces the plaintext as the WebAuthn JSON output.
+    #[tokio::test]
+    async fn webauthn_get_assertion_returns_decrypted_large_blob() {
+        use crate::ops::webauthn::{
+            GetAssertionLargeBlobExtension, GetAssertionRequest, GetAssertionRequestExtensions,
+            UserVerificationRequirement,
+        };
+        use crate::proto::ctap2::cbor::{to_vec, CborRequest, CborResponse, Value};
+        use crate::proto::ctap2::{
+            Ctap2CommandCode, Ctap2GetInfoResponse, Ctap2LargeBlobsResponse,
+        };
+        use crate::transport::mock::channel::MockChannel;
+        use crate::webauthn::WebAuthn;
+        use std::collections::{BTreeMap, HashMap};
+
+        let large_blob_key = [0x77u8; 32];
+        let nonce = [0x22u8; 12];
+        let plaintext = b"webauthn end-to-end largeBlob".to_vec();
+        let entry = encrypt_entry(&large_blob_key, &nonce, &plaintext).unwrap();
+        let serialized_array = build_serialized_array(&[entry]);
+
+        // Build the assertion-response CBOR by hand so we can populate field
+        // 0x07 (largeBlobKey) without adding a Serialize impl to the response
+        // model.
+        let credential_id = b"cred-id".to_vec();
+        let mut auth_data = vec![0u8; 37];
+        auth_data[32] = 0x01; // USER_PRESENT flag
+        let mut cred_id_map = BTreeMap::new();
+        cred_id_map.insert(Value::Text("type".into()), Value::Text("public-key".into()));
+        cred_id_map.insert(
+            Value::Text("id".into()),
+            Value::Bytes(credential_id.clone()),
+        );
+        let mut response_map = BTreeMap::new();
+        response_map.insert(Value::Integer(1), Value::Map(cred_id_map));
+        response_map.insert(Value::Integer(2), Value::Bytes(auth_data));
+        response_map.insert(Value::Integer(3), Value::Bytes(vec![0u8; 32]));
+        response_map.insert(Value::Integer(7), Value::Bytes(large_blob_key.to_vec()));
+        let assertion_resp_cbor = to_vec(&Value::Map(response_map)).unwrap();
+
+        // GetInfo response advertising support for largeBlobs.
+        let mut info = Ctap2GetInfoResponse {
+            versions: vec!["FIDO_2_1".into()],
+            ..Default::default()
+        };
+        let mut options = HashMap::new();
+        options.insert("largeBlobs".into(), true);
+        info.options = Some(options);
+        let info_cbor = to_vec(&info).unwrap();
+
+        let mut channel = MockChannel::new();
+
+        // 1. _webauthn_get_assertion_fido2 calls ctap2_get_info().
+        channel.push_command_pair(
+            CborRequest::new(Ctap2CommandCode::AuthenticatorGetInfo),
+            CborResponse::new_success_from_slice(&info_cbor),
+        );
+        // 2. user_verification calls ctap2_get_info() again.
+        channel.push_command_pair(
+            CborRequest::new(Ctap2CommandCode::AuthenticatorGetInfo),
+            CborResponse::new_success_from_slice(&info_cbor),
+        );
+        // 3. ctap2_get_assertion. The default From<GetAssertionRequest>
+        //    impl produces options { up: true, uv: false }, matching the
+        //    Discouraged UV path; that's what we exercise here.
+        let req = crate::proto::ctap2::Ctap2GetAssertionRequest::from(GetAssertionRequest {
+            relying_party_id: "example.com".into(),
+            challenge: vec![0u8; 32],
+            origin: "example.com".into(),
+            cross_origin: None,
+            allow: vec![],
+            extensions: Some(GetAssertionRequestExtensions {
+                cred_blob: false,
+                prf: None,
+                large_blob: Some(GetAssertionLargeBlobExtension::Read),
+            }),
+            user_verification: UserVerificationRequirement::Discouraged,
+            timeout: Duration::from_secs(5),
+        });
+        let assertion_req_cbor = crate::proto::ctap2::cbor::to_vec(&req).unwrap();
+        channel.push_command_pair(
+            CborRequest {
+                command: Ctap2CommandCode::AuthenticatorGetAssertion,
+                encoded_data: assertion_req_cbor,
+            },
+            CborResponse::new_success_from_slice(&assertion_resp_cbor),
+        );
+        // 4. authenticatorLargeBlobs(get).
+        let blobs_req = Ctap2LargeBlobsRequest::new_get(0, LARGE_BLOB_DEFAULT_CHUNK);
+        let blobs_resp = Ctap2LargeBlobsResponse {
+            config: Some(serde_bytes::ByteBuf::from(serialized_array)),
+        };
+        channel.push_command_pair(
+            CborRequest {
+                command: Ctap2CommandCode::AuthenticatorLargeBlobs,
+                encoded_data: crate::proto::ctap2::cbor::to_vec(&blobs_req).unwrap(),
+            },
+            CborResponse::new_success_from_slice(
+                &crate::proto::ctap2::cbor::to_vec(&blobs_resp).unwrap(),
+            ),
+        );
+
+        let request = GetAssertionRequest {
+            relying_party_id: "example.com".into(),
+            challenge: vec![0u8; 32],
+            origin: "example.com".into(),
+            cross_origin: None,
+            allow: vec![],
+            extensions: Some(GetAssertionRequestExtensions {
+                cred_blob: false,
+                prf: None,
+                large_blob: Some(GetAssertionLargeBlobExtension::Read),
+            }),
+            user_verification: UserVerificationRequirement::Discouraged,
+            timeout: Duration::from_secs(5),
+        };
+
+        let response = channel
+            .webauthn_get_assertion(&request)
+            .await
+            .expect("webauthn_get_assertion should succeed");
+        assert_eq!(response.assertions.len(), 1);
+        let large_blob = response.assertions[0]
+            .unsigned_extensions_output
+            .as_ref()
+            .expect("unsigned extensions present")
+            .large_blob
+            .as_ref()
+            .expect("largeBlob extension output present");
+        assert_eq!(large_blob.blob.as_deref(), Some(plaintext.as_slice()));
+    }
 }
