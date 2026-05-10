@@ -523,6 +523,31 @@ async fn connection_recv_binary_frame(message: Message) -> Result<Option<Vec<u8>
     }
 }
 
+/// Strip the trailing padding-length byte and `padding_len` bytes of padding
+/// from a decrypted Noise transport frame, returning `InvalidFraming` on an
+/// empty plaintext or a declared padding length that exceeds the frame.
+fn strip_frame_padding(mut decrypted_frame: Vec<u8>) -> Result<Vec<u8>, Error> {
+    let padding_len = match decrypted_frame.last() {
+        Some(&b) => b as usize,
+        None => {
+            error!("Decrypted frame is empty; cannot read padding length");
+            return Err(Error::Transport(TransportError::InvalidFraming));
+        }
+    };
+    let new_len = decrypted_frame
+        .len()
+        .checked_sub(padding_len + 1)
+        .ok_or_else(|| {
+            error!(
+                frame_len = decrypted_frame.len(),
+                padding_len, "Padding length exceeds frame length"
+            );
+            Error::Transport(TransportError::InvalidFraming)
+        })?;
+    decrypted_frame.truncate(new_len);
+    Ok(decrypted_frame)
+}
+
 async fn decrypt_frame(
     encrypted_frame: Vec<u8>,
     noise_state: &mut TunnelNoiseState,
@@ -543,8 +568,7 @@ async fn decrypt_frame(
         }
     }
 
-    let padding_len = decrypted_frame[decrypted_frame.len() - 1] as usize;
-    decrypted_frame.truncate(decrypted_frame.len() - (padding_len + 1));
+    let decrypted_frame = strip_frame_padding(decrypted_frame)?;
     trace!(
         ?decrypted_frame,
         decrypted_frame_len = decrypted_frame.len(),
@@ -795,4 +819,32 @@ mod tests {
     }
 
     // TODO: test the non-known case
+
+    #[test]
+    fn strip_frame_padding_rejects_empty() {
+        let result = strip_frame_padding(Vec::new());
+        assert!(matches!(
+            result,
+            Err(Error::Transport(TransportError::InvalidFraming))
+        ));
+    }
+
+    #[test]
+    fn strip_frame_padding_rejects_overlong_padding() {
+        // Length 1 + declared padding of 5 -> would require subtracting 6 from 1.
+        let frame = vec![0x05u8];
+        let result = strip_frame_padding(frame);
+        assert!(matches!(
+            result,
+            Err(Error::Transport(TransportError::InvalidFraming))
+        ));
+    }
+
+    #[test]
+    fn strip_frame_padding_strips_normal_padding() {
+        // 4 bytes of payload, 3 bytes of zero padding, then padding-length 3.
+        let frame = vec![0xAA, 0xBB, 0xCC, 0xDD, 0x00, 0x00, 0x00, 0x03];
+        let stripped = strip_frame_padding(frame).unwrap();
+        assert_eq!(stripped, vec![0xAA, 0xBB, 0xCC, 0xDD]);
+    }
 }
