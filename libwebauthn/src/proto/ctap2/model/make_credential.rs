@@ -231,12 +231,10 @@ impl Ctap2MakeCredentialsRequestExtensions {
             .map(|info| info.support)
         {
             Some(MakeCredentialLargeBlobExtension::Required) => {
-                // "required": The credential will be created with an authenticator to store blobs. The create() call will fail if this is impossible.
+                // Required + unsupported must fail rather than silently degrade.
                 if !info.option_enabled("largeBlobs") {
-                    warn!("This request will potentially fail. Large blob extension required, but device does not support it.");
+                    return Err(Error::Ctap(CtapError::UnsupportedExtension));
                 }
-                // We still send the request to the device and let it sort it out.
-                // We only add a warning for easier debugging.
                 Some(true)
             }
             Some(MakeCredentialLargeBlobExtension::Preferred) => {
@@ -385,4 +383,90 @@ pub struct Ctap2MakeCredentialsResponseExtensions {
     // Current min PIN lenght
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_pin_length: Option<u32>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ops::webauthn::MakeCredentialLargeBlobExtensionInput;
+    use std::collections::HashMap;
+
+    fn info_with_options(options: &[(&str, bool)]) -> Ctap2GetInfoResponse {
+        let mut info = Ctap2GetInfoResponse::default();
+        let mut map = HashMap::new();
+        for (k, v) in options {
+            map.insert((*k).to_string(), *v);
+        }
+        info.options = Some(map);
+        info
+    }
+
+    #[test]
+    fn ctap2_extensions_large_blob_required_unsupported_returns_unsupported_extension() {
+        let info = info_with_options(&[("largeBlobs", false)]);
+        let requested = MakeCredentialsRequestExtensions {
+            large_blob: Some(MakeCredentialLargeBlobExtensionInput {
+                support: MakeCredentialLargeBlobExtension::Required,
+            }),
+            ..MakeCredentialsRequestExtensions::default()
+        };
+
+        let result =
+            Ctap2MakeCredentialsRequestExtensions::from_webauthn_request(&requested, &info);
+        assert!(matches!(
+            result,
+            Err(Error::Ctap(CtapError::UnsupportedExtension))
+        ));
+    }
+
+    #[test]
+    fn ctap2_extensions_large_blob_required_option_absent_returns_unsupported_extension() {
+        // No options at all (largeBlobs neither present nor enabled).
+        let info = Ctap2GetInfoResponse::default();
+        let requested = MakeCredentialsRequestExtensions {
+            large_blob: Some(MakeCredentialLargeBlobExtensionInput {
+                support: MakeCredentialLargeBlobExtension::Required,
+            }),
+            ..MakeCredentialsRequestExtensions::default()
+        };
+
+        let result =
+            Ctap2MakeCredentialsRequestExtensions::from_webauthn_request(&requested, &info);
+        assert!(matches!(
+            result,
+            Err(Error::Ctap(CtapError::UnsupportedExtension))
+        ));
+    }
+
+    #[test]
+    fn ctap2_extensions_large_blob_required_supported_returns_some_true() {
+        let info = info_with_options(&[("largeBlobs", true)]);
+        let requested = MakeCredentialsRequestExtensions {
+            large_blob: Some(MakeCredentialLargeBlobExtensionInput {
+                support: MakeCredentialLargeBlobExtension::Required,
+            }),
+            ..MakeCredentialsRequestExtensions::default()
+        };
+
+        let extensions =
+            Ctap2MakeCredentialsRequestExtensions::from_webauthn_request(&requested, &info)
+                .unwrap();
+        assert_eq!(extensions.large_blob_key, Some(true));
+    }
+
+    #[test]
+    fn ctap2_extensions_large_blob_preferred_unsupported_omits_request() {
+        let info = info_with_options(&[("largeBlobs", false)]);
+        let requested = MakeCredentialsRequestExtensions {
+            large_blob: Some(MakeCredentialLargeBlobExtensionInput {
+                support: MakeCredentialLargeBlobExtension::Preferred,
+            }),
+            ..MakeCredentialsRequestExtensions::default()
+        };
+
+        let extensions =
+            Ctap2MakeCredentialsRequestExtensions::from_webauthn_request(&requested, &info)
+                .unwrap();
+        assert_eq!(extensions.large_blob_key, None);
+    }
 }

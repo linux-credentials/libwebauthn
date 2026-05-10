@@ -25,10 +25,11 @@ pub use idl::{
 };
 pub use make_credential::{
     CredentialPropsExtension, CredentialProtectionExtension, CredentialProtectionPolicy,
-    MakeCredentialLargeBlobExtension, MakeCredentialLargeBlobExtensionOutput,
-    MakeCredentialPrfInput, MakeCredentialPrfOutput, MakeCredentialRequest, MakeCredentialResponse,
-    MakeCredentialsRequestExtensions, MakeCredentialsResponseExtensions,
-    MakeCredentialsResponseUnsignedExtensions, ResidentKeyRequirement,
+    MakeCredentialLargeBlobExtension, MakeCredentialLargeBlobExtensionInput,
+    MakeCredentialLargeBlobExtensionOutput, MakeCredentialPrfInput, MakeCredentialPrfOutput,
+    MakeCredentialRequest, MakeCredentialResponse, MakeCredentialsRequestExtensions,
+    MakeCredentialsResponseExtensions, MakeCredentialsResponseUnsignedExtensions,
+    ResidentKeyRequirement,
 };
 pub use psl::{DatFileLoadError, DatFilePublicSuffixList, PublicSuffixList, SYSTEM_PSL_PATH};
 use serde::Deserialize;
