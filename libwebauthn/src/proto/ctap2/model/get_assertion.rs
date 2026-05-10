@@ -556,10 +556,21 @@ impl Ctap2GetAssertionResponseExtensions {
             .and_then(|ext| ext.large_blob.as_ref())
             .map(|_| GetAssertionLargeBlobExtensionOutput { blob: None });
 
+        // FIDO AppID extension: on the FIDO2 path the application parameter
+        // is always derived from rp.id, so if the caller requested `appid`
+        // we signal "not used" (Some(false)). When the extension was not
+        // requested, we leave it None so it doesn't appear in the JSON output.
+        let appid = request
+            .extensions
+            .as_ref()
+            .and_then(|ext| ext.appid.as_ref())
+            .map(|_| false);
+
         GetAssertionResponseUnsignedExtensions {
             hmac_get_secret: None,
             large_blob,
             prf,
+            appid,
         }
     }
 }
@@ -669,6 +680,7 @@ mod tests {
             cred_blob: false,
             prf: None,
             large_blob: Some(GetAssertionLargeBlobExtension::Read),
+            appid: None,
         });
 
         let assertion = response.into_assertion_output(&request, None);
