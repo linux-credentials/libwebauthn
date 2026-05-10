@@ -147,6 +147,10 @@ where
         let cbor_request = CborRequest::new(Ctap2CommandCode::AuthenticatorGetNextAssertion);
         self.cbor_send(&cbor_request, timeout).await?;
         let cbor_response = self.cbor_recv(timeout).await?;
+        match cbor_response.status_code {
+            CtapError::Ok => (),
+            error => return Err(Error::Ctap(error)),
+        };
         let data = unwrap_field!(cbor_response.data);
         let ctap_response = parse_cbor!(Ctap2GetAssertionResponse, &data);
         debug!("CTAP2 GetNextAssertion successful");
@@ -271,5 +275,53 @@ where
             // So we work around it here by creating our own default value.
             Ok(Ctap2CredentialManagementResponse::default())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use crate::proto::ctap2::cbor::{CborRequest, CborResponse};
+    use crate::proto::ctap2::Ctap2CommandCode;
+    use crate::transport::mock::channel::MockChannel;
+    use crate::webauthn::error::{CtapError, Error};
+
+    use super::Ctap2;
+
+    const TIMEOUT: Duration = Duration::from_secs(1);
+
+    #[tokio::test]
+    async fn ctap2_get_next_assertion_propagates_non_ok_status() {
+        let mut channel = MockChannel::new();
+        let expected_request = CborRequest::new(Ctap2CommandCode::AuthenticatorGetNextAssertion);
+        // Simulate the authenticator returning CTAP2_ERR_NOT_ALLOWED (0x30),
+        // which is the spec-defined error when no further assertion is
+        // available within the 30-second window.
+        let response = CborResponse {
+            status_code: CtapError::NotAllowed,
+            data: None,
+        };
+        channel.push_command_pair(expected_request, response);
+
+        let result = channel.ctap2_get_next_assertion(TIMEOUT).await;
+        assert_eq!(result.err(), Some(Error::Ctap(CtapError::NotAllowed)));
+    }
+
+    #[tokio::test]
+    async fn ctap2_get_next_assertion_does_not_parse_data_on_error() {
+        let mut channel = MockChannel::new();
+        let expected_request = CborRequest::new(Ctap2CommandCode::AuthenticatorGetNextAssertion);
+        // Per CTAP 2.2 §6, when the status byte is non-zero the trailing bytes
+        // are undefined. Make sure the library surfaces the status error and
+        // never reaches the CBOR parser, regardless of payload contents.
+        let response = CborResponse {
+            status_code: CtapError::Other,
+            data: Some(vec![0xff, 0xff, 0xff, 0xff]),
+        };
+        channel.push_command_pair(expected_request, response);
+
+        let result = channel.ctap2_get_next_assertion(TIMEOUT).await;
+        assert_eq!(result.err(), Some(Error::Ctap(CtapError::Other)));
     }
 }
