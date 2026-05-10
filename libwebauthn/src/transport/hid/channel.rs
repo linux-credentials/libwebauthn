@@ -2,6 +2,7 @@ use std::convert::TryFrom;
 use std::fmt::{Debug, Display, Formatter};
 use std::io::{Cursor as IOCursor, Seek, SeekFrom};
 use std::ops::DerefMut;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -9,9 +10,7 @@ use async_trait::async_trait;
 use byteorder::{BigEndian, ReadBytesExt};
 use hidapi::HidDevice as HidApiDevice;
 use rand::{thread_rng, Rng};
-use tokio::sync::broadcast;
-use tokio::sync::mpsc::error::TryRecvError;
-use tokio::sync::mpsc::{self, Receiver, Sender};
+use tokio::sync::{broadcast, Notify};
 use tokio::time::sleep;
 use tracing::{debug, info, instrument, trace, warn, Level};
 
@@ -47,29 +46,55 @@ const REPORT_ID: u8 = 0x00;
 // Per-iteration cap on hidapi::read_timeout. `read_timeout` returns as soon
 // as the device delivers a report, so this does NOT add latency to normal
 // responses; it only bounds how quickly the loop wakes up to re-check the
-// wall-clock deadline and the cancel signal. 100ms is a small fraction of
-// any realistic CTAP timeout and gives ~10 wakeups/sec per active channel.
+// wall-clock deadline and the cancel flag. 100ms is a small fraction of any
+// realistic CTAP timeout, gives ~10 wakeups/sec per active channel (cheap
+// even on battery), and is short enough that user-perceived cancel latency
+// stays well under the round-trip a click already costs.
 const HID_READ_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 // Some devices fail when sending a WINK command followed immediately
 // by a CBOR command, so we want to ensure we wait some time after winking.
 const WINK_MIN_WAIT: Duration = Duration::from_secs(2);
 
-pub type CancelHidOperation = ();
 enum OpenHidDevice {
-    HidApiDevice(Arc<Mutex<(HidApiDevice, mpsc::Receiver<CancelHidOperation>)>>),
+    HidApiDevice(Arc<Mutex<HidApiDevice>>),
     #[cfg(test)]
     VirtualDevice(Arc<Mutex<virt::VirtHidDevice>>),
 }
 
+/// Shared cancel state. The atomic flag is checked by the blocking hidapi
+/// reader between poll iterations; the notify wakes the async caller so a
+/// cancel observed from another task is seen without waiting out the poll
+/// interval.
+#[derive(Debug, Default)]
+struct CancelState {
+    flag: AtomicBool,
+    notify: Notify,
+}
+
+impl CancelState {
+    fn signal(&self) {
+        self.flag.store(true, Ordering::SeqCst);
+        self.notify.notify_waiters();
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.flag.load(Ordering::SeqCst)
+    }
+
+    fn reset(&self) {
+        self.flag.store(false, Ordering::SeqCst);
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct HidChannelHandle {
-    tx: Sender<CancelHidOperation>,
+    cancel: Arc<CancelState>,
 }
 
 impl HidChannelHandle {
     pub async fn cancel_ongoing_operation(&self) {
-        let _ = self.tx.send(()).await;
+        self.cancel.signal();
     }
 }
 
@@ -81,6 +106,7 @@ pub struct HidChannel<'d> {
     auth_token_data: Option<AuthTokenData>,
     ux_update_sender: broadcast::Sender<UvUpdate>,
     handle: HidChannelHandle,
+    cancel: Arc<CancelState>,
     #[cfg(test)]
     pin_protocol_override: Option<Ctap2PinUvAuthProtocol>,
 }
@@ -88,8 +114,10 @@ pub struct HidChannel<'d> {
 impl<'d> HidChannel<'d> {
     pub async fn new(device: &'d HidDevice) -> Result<HidChannel<'d>, Error> {
         let (ux_update_sender, _) = broadcast::channel(16);
-        let (handle_tx, handle_rx) = mpsc::channel(1);
-        let handle = HidChannelHandle { tx: handle_tx };
+        let cancel = Arc::new(CancelState::default());
+        let handle = HidChannelHandle {
+            cancel: cancel.clone(),
+        };
 
         let mut channel = Self {
             status: ChannelStatus::Ready,
@@ -97,7 +125,7 @@ impl<'d> HidChannel<'d> {
             open_device: match device.backend {
                 HidBackendDevice::HidApiDevice(_) => {
                     let hidapi_device = Self::hid_open(device)?;
-                    OpenHidDevice::HidApiDevice(Arc::new(Mutex::new((hidapi_device, handle_rx))))
+                    OpenHidDevice::HidApiDevice(Arc::new(Mutex::new(hidapi_device)))
                 }
                 #[cfg(test)]
                 HidBackendDevice::VirtualDevice => {
@@ -108,6 +136,7 @@ impl<'d> HidChannel<'d> {
             auth_token_data: None,
             ux_update_sender,
             handle,
+            cancel,
             #[cfg(test)]
             pin_protocol_override: None,
         };
@@ -300,15 +329,14 @@ impl<'d> HidChannel<'d> {
                     warn!("Poisoned lock on HID API device");
                     return Err(Error::Transport(TransportError::ConnectionLost));
                 };
-                let (device, cancel_rx) = guard.deref_mut();
-                let response = Self::hid_send_hidapi(device, cancel_rx, msg);
+                let device = guard.deref_mut();
+                let response = Self::hid_send_hidapi(device, &self.cancel, msg);
                 if matches!(response, Err(Error::Platform(PlatformError::Cancelled))) {
-                    // Using hid_send_hidapi directly, instead of hid_cancel, to avoid recursion
-                    let _ = Self::hid_send_hidapi(
-                        device,
-                        cancel_rx,
-                        &HidMessage::new(self.init.cid, HidCommand::Cancel, &[]),
-                    );
+                    // CTAPHID_CANCEL must still reach the device even though
+                    // the cancel flag is set; bypass the flag check via
+                    // write_packets (also avoids recursing into hid_cancel).
+                    let cancel_msg = HidMessage::new(self.init.cid, HidCommand::Cancel, &[]);
+                    let _ = Self::write_packets(device, &cancel_msg);
                 }
                 response
             }
@@ -325,14 +353,14 @@ impl<'d> HidChannel<'d> {
 
     fn hid_send_hidapi(
         device: &hidapi::HidDevice,
-        cancel_rx: &mut Receiver<CancelHidOperation>,
+        cancel: &CancelState,
         msg: &HidMessage,
     ) -> Result<(), Error> {
         let packets = msg
             .packets(PACKET_SIZE)
             .or(Err(Error::Transport(TransportError::InvalidFraming)))?;
         for (i, packet) in packets.iter().enumerate() {
-            if !matches!(cancel_rx.try_recv(), Err(TryRecvError::Empty)) {
+            if cancel.is_cancelled() {
                 return Err(Error::Platform(PlatformError::Cancelled));
             }
 
@@ -348,30 +376,74 @@ impl<'d> HidChannel<'d> {
         Ok(())
     }
 
+    /// Send a message without consulting the cancel flag. Used when emitting
+    /// CTAPHID_CANCEL after a cancellation has already been observed.
+    fn write_packets(device: &hidapi::HidDevice, msg: &HidMessage) -> Result<(), Error> {
+        let packets = msg
+            .packets(PACKET_SIZE)
+            .or(Err(Error::Transport(TransportError::InvalidFraming)))?;
+        for packet in &packets {
+            let mut report: Vec<u8> = vec![REPORT_ID];
+            report.extend(packet);
+            report.extend(vec![0; PACKET_SIZE - packet.len()]);
+            device
+                .write(&report)
+                .or(Err(Error::Transport(TransportError::ConnectionLost)))?;
+        }
+        Ok(())
+    }
+
     #[instrument(skip_all)]
     pub async fn hid_recv(&self, timeout: Duration) -> Result<HidMessage, Error> {
+        // Reset the cancel flag so a prior cancellation does not short-circuit
+        // a fresh receive. The drop guard signals the flag if this future is
+        // dropped before completing, so the blocking reader self-terminates
+        // within one HID_READ_POLL_INTERVAL.
+        self.cancel.reset();
+        let mut drop_guard = CancelOnDrop::new(&self.cancel);
+
+        let result = self.hid_recv_inner(timeout).await;
+        drop_guard.disarm();
+        result
+    }
+
+    async fn hid_recv_inner(&self, timeout: Duration) -> Result<HidMessage, Error> {
         loop {
             let response = match &self.open_device {
                 OpenHidDevice::HidApiDevice(hidapi_device) => {
                     let device = Arc::clone(hidapi_device);
+                    let cancel = Arc::clone(&self.cancel);
                     // The HID device will block when waiting for a user to
                     // interact with the device, so mark the task as blocking to
                     // allow other tasks to complete.
                     // Note that we're just using spawn_blocking() on hid_recv(), not on hid_send(),
                     // since implementing this on hid_send and would cause unnecessary copies/locking.
-                    tokio::task::spawn_blocking(move || {
+                    let read = tokio::task::spawn_blocking(move || {
                         let Ok(mut guard) = device.lock() else {
                             warn!("Poisoned lock on HID API device");
                             return Err(Error::Transport(TransportError::ConnectionLost));
                         };
-                        let (device, cancel_rx) = guard.deref_mut();
-                        Self::hid_recv_hidapi(device, cancel_rx, timeout)
-                    })
-                    .await
-                    .map_err(|e| {
-                        warn!(?e, "HID read task failed");
-                        Error::Transport(TransportError::ConnectionLost)
-                    })?
+                        let device = guard.deref_mut();
+                        Self::hid_recv_hidapi(device, &cancel, timeout)
+                    });
+                    tokio::pin!(read);
+                    // Race the blocking read against cancel notifications.
+                    // spawn_blocking cannot be aborted, so the flag store
+                    // here is observed by the reader on its next poll
+                    // (bounded by HID_READ_POLL_INTERVAL).
+                    loop {
+                        tokio::select! {
+                            res = &mut read => {
+                                break res.map_err(|e| {
+                                    warn!(?e, "HID read task failed");
+                                    Error::Transport(TransportError::ConnectionLost)
+                                })?;
+                            }
+                            _ = self.cancel.notify.notified() => {
+                                self.cancel.flag.store(true, Ordering::SeqCst);
+                            }
+                        }
+                    }
                 }
                 #[cfg(test)]
                 OpenHidDevice::VirtualDevice(virt_device) => {
@@ -395,7 +467,10 @@ impl<'d> HidChannel<'d> {
                 | Err(Error::Transport(TransportError::Timeout)) => {
                     // CTAP 2.2 §11.2.9.1.5: send CTAPHID_CANCEL when the
                     // platform gives up (caller cancelled or wall-clock
-                    // budget exhausted).
+                    // budget exhausted). The blocking reader has released
+                    // the device mutex by now; reset the flag so the send
+                    // itself is not short-circuited.
+                    self.cancel.reset();
                     let _ = self.hid_cancel().await;
                     break response;
                 }
@@ -406,18 +481,18 @@ impl<'d> HidChannel<'d> {
 
     fn hid_recv_hidapi(
         device: &hidapi::HidDevice,
-        cancel_rx: &mut Receiver<CancelHidOperation>,
+        cancel: &CancelState,
         timeout: Duration,
     ) -> Result<HidMessage, Error> {
         let mut parser = HidMessageParser::new();
         let deadline = Instant::now().checked_add(timeout);
         loop {
-            if !matches!(cancel_rx.try_recv(), Err(TryRecvError::Empty)) {
+            if cancel.is_cancelled() {
                 return Err(Error::Platform(PlatformError::Cancelled));
             }
 
             // Cap each read at HID_READ_POLL_INTERVAL so we re-check the
-            // cancel channel and remaining budget; a stalled device cannot
+            // cancel flag and remaining budget; a stalled device cannot
             // hang the caller past `timeout`.
             let remaining = match deadline {
                 Some(d) => d.saturating_duration_since(Instant::now()),
@@ -459,6 +534,34 @@ impl<'d> HidChannel<'d> {
     }
 }
 
+/// Signals the cancel flag if its scope exits via panic or future-drop.
+/// Call `disarm()` on the normal-return path.
+struct CancelOnDrop<'a> {
+    cancel: &'a CancelState,
+    armed: bool,
+}
+
+impl<'a> CancelOnDrop<'a> {
+    fn new(cancel: &'a CancelState) -> Self {
+        Self {
+            cancel,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for CancelOnDrop<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.cancel.signal();
+        }
+    }
+}
+
 impl Drop for HidChannel<'_> {
     #[instrument(level = Level::DEBUG, skip_all, fields(dev = %self.device))]
     fn drop(&mut self) {
@@ -467,11 +570,28 @@ impl Drop for HidChannel<'_> {
             return;
         }
 
-        if let Err(err) = futures::executor::block_on(self.hid_cancel()) {
-            warn!(
-                ?err,
-                "Failed to send hid_cancel on the channel being dropped"
-            )
+        // Lock-free: signal any in-flight blocking read to abort on its
+        // next poll iteration. Then best-effort emit CTAPHID_CANCEL via
+        // try_lock; if the device mutex is contended (reader still active)
+        // we skip — the reader is about to release it and the device's
+        // own transaction timeout will reclaim the channel.
+        self.cancel.signal();
+
+        match &self.open_device {
+            OpenHidDevice::HidApiDevice(hidapi_device) => match hidapi_device.try_lock() {
+                Ok(mut guard) => {
+                    let device = guard.deref_mut();
+                    let cancel_msg = HidMessage::new(self.init.cid, HidCommand::Cancel, &[]);
+                    if let Err(err) = Self::write_packets(device, &cancel_msg) {
+                        debug!(?err, "Best-effort CTAPHID_CANCEL on channel drop failed");
+                    }
+                }
+                Err(_) => {
+                    debug!("Device mutex contended on drop, skipping CTAPHID_CANCEL packet");
+                }
+            },
+            #[cfg(test)]
+            OpenHidDevice::VirtualDevice(_) => {}
         }
     }
 }
