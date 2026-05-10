@@ -82,7 +82,11 @@ pub trait DowngradableRequest<T> {
 
 #[cfg(test)]
 mod tests {
-    use crate::ops::webauthn::make_credential::ResidentKeyRequirement;
+    use crate::ops::webauthn::make_credential::{
+        CredentialProtectionExtension, CredentialProtectionPolicy,
+        MakeCredentialLargeBlobExtension, MakeCredentialLargeBlobExtensionInput,
+        MakeCredentialsRequestExtensions, ResidentKeyRequirement,
+    };
     use crate::ops::webauthn::{
         DowngradableRequest, MakeCredentialRequest, UserVerificationRequirement,
     };
@@ -122,5 +126,87 @@ mod tests {
             Ctap2COSEAlgorithmIdentifier::EDDSA,
         )];
         assert!(!request.is_downgradable());
+    }
+
+    #[test]
+    fn ctap2_make_credential_downgradable_enforced_cred_protect_required() {
+        let mut request = MakeCredentialRequest::dummy();
+        request.algorithms = vec![Ctap2CredentialType::default()];
+        request.extensions = Some(MakeCredentialsRequestExtensions {
+            cred_protect: Some(CredentialProtectionExtension {
+                policy: CredentialProtectionPolicy::UserVerificationRequired,
+                enforce_policy: true,
+            }),
+            ..MakeCredentialsRequestExtensions::default()
+        });
+        assert!(!request.is_downgradable());
+    }
+
+    #[test]
+    fn ctap2_make_credential_downgradable_enforced_cred_protect_optional_with_list() {
+        let mut request = MakeCredentialRequest::dummy();
+        request.algorithms = vec![Ctap2CredentialType::default()];
+        request.extensions = Some(MakeCredentialsRequestExtensions {
+            cred_protect: Some(CredentialProtectionExtension {
+                policy: CredentialProtectionPolicy::UserVerificationOptionalWithCredentialIDList,
+                enforce_policy: true,
+            }),
+            ..MakeCredentialsRequestExtensions::default()
+        });
+        assert!(!request.is_downgradable());
+    }
+
+    #[test]
+    fn ctap2_make_credential_downgradable_enforced_cred_protect_optional() {
+        let mut request = MakeCredentialRequest::dummy();
+        request.algorithms = vec![Ctap2CredentialType::default()];
+        request.extensions = Some(MakeCredentialsRequestExtensions {
+            cred_protect: Some(CredentialProtectionExtension {
+                policy: CredentialProtectionPolicy::UserVerificationOptional,
+                enforce_policy: true,
+            }),
+            ..MakeCredentialsRequestExtensions::default()
+        });
+        assert!(request.is_downgradable());
+    }
+
+    #[test]
+    fn ctap2_make_credential_downgradable_non_enforced_cred_protect() {
+        let mut request = MakeCredentialRequest::dummy();
+        request.algorithms = vec![Ctap2CredentialType::default()];
+        request.extensions = Some(MakeCredentialsRequestExtensions {
+            cred_protect: Some(CredentialProtectionExtension {
+                policy: CredentialProtectionPolicy::UserVerificationRequired,
+                enforce_policy: false,
+            }),
+            ..MakeCredentialsRequestExtensions::default()
+        });
+        assert!(request.is_downgradable());
+    }
+
+    #[test]
+    fn ctap2_make_credential_downgradable_large_blob_required() {
+        let mut request = MakeCredentialRequest::dummy();
+        request.algorithms = vec![Ctap2CredentialType::default()];
+        request.extensions = Some(MakeCredentialsRequestExtensions {
+            large_blob: Some(MakeCredentialLargeBlobExtensionInput {
+                support: MakeCredentialLargeBlobExtension::Required,
+            }),
+            ..MakeCredentialsRequestExtensions::default()
+        });
+        assert!(!request.is_downgradable());
+    }
+
+    #[test]
+    fn ctap2_make_credential_downgradable_large_blob_preferred() {
+        let mut request = MakeCredentialRequest::dummy();
+        request.algorithms = vec![Ctap2CredentialType::default()];
+        request.extensions = Some(MakeCredentialsRequestExtensions {
+            large_blob: Some(MakeCredentialLargeBlobExtensionInput {
+                support: MakeCredentialLargeBlobExtension::Preferred,
+            }),
+            ..MakeCredentialsRequestExtensions::default()
+        });
+        assert!(request.is_downgradable());
     }
 }
