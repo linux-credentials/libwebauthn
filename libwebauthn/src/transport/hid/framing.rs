@@ -3,12 +3,13 @@ use std::io::{Cursor as IOCursor, Error as IOError, ErrorKind as IOErrorKind};
 
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
-use tracing::{debug, error};
+use tracing::error;
 
 const BROADCAST_CID: u32 = 0xFFFFFFFF;
 const PACKET_INITIAL_HEADER_SIZE: usize = 7;
 const PACKET_INITIAL_CMD_MASK: u8 = 0x80;
 const PACKET_CONT_HEADER_SIZE: usize = 5;
+const PACKET_CONT_SEQ_MAX: u8 = 0x7F;
 
 #[derive(Debug, IntoPrimitive, TryFromPrimitive, Copy, Clone, PartialEq)]
 #[repr(u8)]
@@ -121,17 +122,69 @@ impl HidMessageParser {
         if (self.packets.is_empty() && packet.len() < PACKET_INITIAL_HEADER_SIZE)
             || packet.len() < PACKET_CONT_HEADER_SIZE + 1
         {
-            error!("Packet length in invalid");
+            error!("Packet length is invalid");
             return Err(IOError::new(
                 IOErrorKind::InvalidInput,
                 "Packet length is invalid",
             ));
         }
+
+        // CID 0x00000000 is reserved (CTAP 2.2 §11.2.4); reject all-zero frames.
         if packet.iter().all(|&b| b == 0) {
-            debug!("Received unexpected packet of all zeroes, ignoring"); // ?!
-        } else {
-            self.packets.push(Vec::from(packet));
+            error!("Received all-zero packet, rejecting");
+            return Err(IOError::new(
+                IOErrorKind::InvalidData,
+                "All-zero packet is not a valid CTAPHID frame",
+            ));
         }
+
+        if self.packets.is_empty() {
+            // First packet must be an initialization packet: high bit of
+            // byte 4 set (CTAP 2.2 §11.2.4).
+            if packet[4] & PACKET_INITIAL_CMD_MASK == 0 {
+                error!("First packet is not an initialization packet");
+                return Err(IOError::new(
+                    IOErrorKind::InvalidData,
+                    "First packet must be an initialization packet",
+                ));
+            }
+        } else {
+            // Continuation packets: same CID as the initial packet, SEQ has
+            // high bit cleared, SEQ starts at 0 and increments monotonically.
+            let initial = &self.packets[0];
+            if packet[..4] != initial[..4] {
+                error!("Continuation packet CID does not match initial packet");
+                return Err(IOError::new(
+                    IOErrorKind::InvalidData,
+                    "Continuation packet CID mismatch",
+                ));
+            }
+            let seq = packet[4];
+            if seq & PACKET_INITIAL_CMD_MASK != 0 {
+                error!(seq, "Unexpected init packet during continuation");
+                return Err(IOError::new(
+                    IOErrorKind::InvalidData,
+                    "Unexpected initialization packet during continuation",
+                ));
+            }
+            let expected_seq = (self.packets.len() - 1) as u8;
+            if expected_seq > PACKET_CONT_SEQ_MAX {
+                error!(seq, "Continuation count exceeds maximum SEQ");
+                return Err(IOError::new(
+                    IOErrorKind::InvalidData,
+                    "Too many continuation packets",
+                ));
+            }
+            if seq != expected_seq {
+                error!(seq, expected_seq, "Out-of-order continuation SEQ");
+                return Err(IOError::new(
+                    IOErrorKind::InvalidData,
+                    "Out-of-order continuation SEQ",
+                ));
+            }
+        }
+
+        self.packets.push(Vec::from(packet));
         if self.more_packets_needed() {
             Ok(HidMessageParserState::MorePacketsExpected)
         } else {
@@ -291,5 +344,92 @@ mod tests {
         assert_eq!(msg.cid, CHANNEL_ID);
         assert_eq!(msg.cmd, HidCommand::Msg);
         assert_eq!(msg.payload, vec![0x0A, 0x0B, 0x0C, 0x0D, 0x0E]);
+    }
+
+    #[test]
+    fn parse_continuation_with_wrong_cid_is_rejected() {
+        let mut parser = HidMessageParser::new();
+        assert_eq!(
+            parser
+                .update(&[0xC0, 0xC1, 0xC2, 0xC3, 0x83, 0x00, 0x05, 0x0A])
+                .unwrap(),
+            HidMessageParserState::MorePacketsExpected
+        );
+        // Continuation from a different channel.
+        let err = parser
+            .update(&[0xD0, 0xD1, 0xD2, 0xD3, 0x00, 0x0B, 0x0C])
+            .unwrap_err();
+        assert_eq!(err.kind(), IOErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn parse_continuation_with_non_zero_first_seq_is_rejected() {
+        let mut parser = HidMessageParser::new();
+        assert_eq!(
+            parser
+                .update(&[0xC0, 0xC1, 0xC2, 0xC3, 0x83, 0x00, 0x05, 0x0A])
+                .unwrap(),
+            HidMessageParserState::MorePacketsExpected
+        );
+        // First continuation must have SEQ=0.
+        let err = parser
+            .update(&[0xC0, 0xC1, 0xC2, 0xC3, 0x01, 0x0B, 0x0C])
+            .unwrap_err();
+        assert_eq!(err.kind(), IOErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn parse_continuation_with_non_monotonic_seq_is_rejected() {
+        let mut parser = HidMessageParser::new();
+        assert_eq!(
+            parser
+                .update(&[0xC0, 0xC1, 0xC2, 0xC3, 0x83, 0x00, 0x07, 0x0A])
+                .unwrap(),
+            HidMessageParserState::MorePacketsExpected
+        );
+        assert_eq!(
+            parser
+                .update(&[0xC0, 0xC1, 0xC2, 0xC3, 0x00, 0x0B, 0x0C])
+                .unwrap(),
+            HidMessageParserState::MorePacketsExpected
+        );
+        // Skipping SEQ=1 and jumping to SEQ=2 is not allowed.
+        let err = parser
+            .update(&[0xC0, 0xC1, 0xC2, 0xC3, 0x02, 0x0D, 0x0E])
+            .unwrap_err();
+        assert_eq!(err.kind(), IOErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn parse_init_packet_after_init_is_rejected() {
+        let mut parser = HidMessageParser::new();
+        assert_eq!(
+            parser
+                .update(&[0xC0, 0xC1, 0xC2, 0xC3, 0x83, 0x00, 0x05, 0x0A])
+                .unwrap(),
+            HidMessageParserState::MorePacketsExpected
+        );
+        // Another init packet (high bit set on byte 4) for a new transaction.
+        let err = parser
+            .update(&[0xC0, 0xC1, 0xC2, 0xC3, 0x83, 0x00, 0x05, 0x0B])
+            .unwrap_err();
+        assert_eq!(err.kind(), IOErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn parse_all_zero_packet_is_rejected() {
+        let mut parser = HidMessageParser::new();
+        let err = parser.update(&[0u8; 64]).unwrap_err();
+        assert_eq!(err.kind(), IOErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn parse_first_packet_must_be_init_packet() {
+        // High bit of byte 4 cleared means continuation; not allowed first.
+        let mut parser = HidMessageParser::new();
+        let err = parser
+            .update(&[0xC0, 0xC1, 0xC2, 0xC3, 0x00, 0x00, 0x05, 0x0A])
+            .unwrap_err();
+        assert_eq!(err.kind(), IOErrorKind::InvalidData);
     }
 }
