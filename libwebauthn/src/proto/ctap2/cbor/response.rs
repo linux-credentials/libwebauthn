@@ -25,25 +25,25 @@ impl CborResponse {
 impl TryFrom<&Vec<u8>> for CborResponse {
     type Error = IOError;
     fn try_from(packet: &Vec<u8>) -> Result<Self, Self::Error> {
-        if packet.is_empty() {
-            return Err(IOError::new(
+        let (status_byte, body) = packet.split_first().ok_or_else(|| {
+            IOError::new(
                 IOErrorKind::InvalidData,
                 "Cbor response packets must contain at least 1 byte.",
-            ));
-        }
+            )
+        })?;
 
-        let Ok(status_code) = packet[0].try_into() else {
-            error!({ code = ?packet[0] }, "Invalid CTAP error code");
+        let Ok(status_code) = (*status_byte).try_into() else {
+            error!({ code = ?*status_byte }, "Invalid CTAP error code");
             return Err(IOError::new(
                 IOErrorKind::InvalidData,
-                format!("Invalid CTAP error code: {:x}", packet[0]),
+                format!("Invalid CTAP error code: {:x}", status_byte),
             ));
         };
 
-        let data = if packet.len() > 1 {
-            Some(Vec::from(&packet[1..]))
-        } else {
+        let data = if body.is_empty() {
             None
+        } else {
+            Some(Vec::from(body))
         };
         Ok(CborResponse { status_code, data })
     }
