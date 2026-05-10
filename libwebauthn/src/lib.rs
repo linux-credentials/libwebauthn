@@ -1,10 +1,11 @@
-// Deny panic-inducing patterns in production code.
 // Tests and the virt test-utility feature are allowed to use unwrap/expect/panic for convenience.
 #![cfg_attr(not(any(test, feature = "virt")), deny(clippy::unwrap_used))]
 #![cfg_attr(not(any(test, feature = "virt")), deny(clippy::expect_used))]
 #![cfg_attr(not(any(test, feature = "virt")), deny(clippy::panic))]
 #![cfg_attr(not(any(test, feature = "virt")), deny(clippy::todo))]
 #![cfg_attr(not(any(test, feature = "virt")), deny(clippy::unreachable))]
+#![cfg_attr(not(any(test, feature = "virt")), deny(clippy::indexing_slicing))]
+#![cfg_attr(not(any(test, feature = "virt")), deny(clippy::unwrap_in_result))]
 
 #[cfg(all(
     feature = "nfc",
