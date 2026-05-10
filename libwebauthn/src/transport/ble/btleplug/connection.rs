@@ -1,8 +1,14 @@
 use std::io::Cursor as IOCursor;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::time::Duration;
 
-use btleplug::api::Peripheral as _;
+use btleplug::api::{Peripheral as _, ValueNotification, WriteType};
 use btleplug::platform::Peripheral;
 use byteorder::{BigEndian, ReadBytesExt};
+use futures::stream::{Stream, StreamExt};
+use tokio::sync::Mutex;
+use tokio::time::timeout;
 use tracing::{debug, info, instrument, trace, warn};
 
 use super::device::FidoEndpoints;
@@ -13,10 +19,24 @@ use crate::transport::ble::framing::{
     BleCommand, BleFrame as Frame, BleFrameParser, BleFrameParserResult,
 };
 
-#[derive(Debug, Clone)]
+type NotificationStream = Pin<Box<dyn Stream<Item = ValueNotification> + Send>>;
+
+#[derive(Clone)]
 pub struct Connection {
     pub peripheral: Peripheral,
     pub services: FidoEndpoints,
+    /// `fidoStatus` is Notify-only (CTAP 2.2 §11.4); we consume notifications
+    /// rather than issue GATT Read.
+    notifications: Arc<Mutex<NotificationStream>>,
+}
+
+impl std::fmt::Debug for Connection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Connection")
+            .field("peripheral", &self.peripheral)
+            .field("services", &self.services)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Connection {
@@ -25,9 +45,26 @@ impl Connection {
         services: &FidoEndpoints,
         revision: &FidoRevision,
     ) -> Result<Self, Error> {
+        // Subscribe before opening the stream so early frames aren't dropped.
+        peripheral
+            .subscribe(&services.status)
+            .await
+            .or(Err(Error::OperationFailed))?;
+
+        let status_uuid = services.status.uuid;
+        let raw_stream = peripheral
+            .notifications()
+            .await
+            .or(Err(Error::OperationFailed))?;
+        let notifications: NotificationStream = Box::pin(raw_stream.filter(move |n| {
+            let matches = n.uuid == status_uuid;
+            async move { matches }
+        }));
+
         let connection = Self {
             peripheral: peripheral.to_owned(),
             services: services.clone(),
+            notifications: Arc::new(Mutex::new(notifications)),
         };
         connection.select_fido_revision(revision).await?;
         Ok(connection)
@@ -88,12 +125,53 @@ impl Connection {
         Ok(())
     }
 
+    /// Sends a best-effort Cancel on `fidoControlPoint` using
+    /// `WriteType::WithoutResponse` so cancellation never blocks.
+    async fn send_cancel(&self) -> Result<(), Error> {
+        let cancel_frame = Frame::new(BleCommand::Cancel, &[]);
+        let max_fragment_size = self.control_point_length().await.unwrap_or(20);
+        let fragments = cancel_frame
+            .fragments(max_fragment_size)
+            .or(Err(Error::InvalidFraming))?;
+        for fragment in fragments {
+            self.peripheral
+                .write(
+                    &self.services.control_point,
+                    &fragment,
+                    WriteType::WithoutResponse,
+                )
+                .await
+                .or(Err(Error::OperationFailed))?;
+        }
+        Ok(())
+    }
+
     #[instrument(skip_all)]
-    pub async fn frame_recv(&self) -> Result<Frame, Error> {
+    pub async fn frame_recv(&self, op_timeout: Duration) -> Result<Frame, Error> {
         let mut parser = BleFrameParser::new();
+        let mut stream = self.notifications.lock().await;
 
         loop {
-            let fragment = self.receive_fragment().await?;
+            let fragment = match timeout(op_timeout, stream.next()).await {
+                Ok(Some(notification)) => notification.value,
+                Ok(None) => {
+                    warn!("Notification stream ended unexpectedly");
+                    return Err(Error::ConnectionFailed);
+                }
+                Err(_) => {
+                    warn!(
+                        ?op_timeout,
+                        "Timed out waiting for fidoStatus notification; sending Cancel"
+                    );
+                    // Drop the lock so a late notification doesn't deadlock the cancel.
+                    drop(stream);
+                    if let Err(e) = self.send_cancel().await {
+                        warn!(?e, "Failed to send Cancel after timeout");
+                    }
+                    return Err(Error::Timeout);
+                }
+            };
+
             debug!("Received fragment");
             trace!(?fragment);
 
@@ -129,13 +207,7 @@ impl Connection {
         }
     }
 
-    async fn receive_fragment(&self) -> Result<Vec<u8>, Error> {
-        self.peripheral
-            .read(&self.services.status)
-            .await
-            .or(Err(Error::OperationFailed))
-    }
-
+    /// Enables notifications on `fidoStatus`. Idempotent.
     pub async fn subscribe(&self) -> Result<(), Error> {
         self.peripheral
             .subscribe(&self.services.status)

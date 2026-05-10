@@ -100,12 +100,16 @@ impl<'a> Channel for BleChannel<'a> {
     }
 
     #[instrument(level = Level::DEBUG, skip_all)]
-    async fn apdu_recv(&mut self, _timeout: Duration) -> Result<ApduResponse, Error> {
+    async fn apdu_recv(&mut self, timeout: Duration) -> Result<ApduResponse, Error> {
         let response_frame = self
             .connection
-            .frame_recv()
+            .frame_recv(timeout)
             .await
-            .or(Err(Error::Transport(TransportError::ConnectionFailed)))?;
+            .map_err(|e| match e {
+                btleplug::Error::Timeout => Error::Transport(TransportError::Timeout),
+                _ => Error::Transport(TransportError::ConnectionFailed),
+            })?;
+
         match response_frame.cmd {
             BleCommand::Error => return Err(Error::Transport(TransportError::InvalidFraming)), // Encapsulation layer error
             BleCommand::Cancel => return Err(Error::Ctap(CtapError::KeepAliveCancel)),
@@ -143,12 +147,15 @@ impl<'a> Channel for BleChannel<'a> {
     }
 
     #[instrument(level = Level::DEBUG, skip_all)]
-    async fn cbor_recv(&mut self, _timeout: std::time::Duration) -> Result<CborResponse, Error> {
+    async fn cbor_recv(&mut self, timeout: std::time::Duration) -> Result<CborResponse, Error> {
         let response_frame = self
             .connection
-            .frame_recv()
+            .frame_recv(timeout)
             .await
-            .or(Err(Error::Transport(TransportError::ConnectionFailed)))?;
+            .map_err(|e| match e {
+                btleplug::Error::Timeout => Error::Transport(TransportError::Timeout),
+                _ => Error::Transport(TransportError::ConnectionFailed),
+            })?;
         match response_frame.cmd {
             BleCommand::Error => return Err(Error::Transport(TransportError::InvalidFraming)), // Encapsulation layer error
             BleCommand::Cancel => return Err(Error::Ctap(CtapError::KeepAliveCancel)),
