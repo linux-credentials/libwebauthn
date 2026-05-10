@@ -1,6 +1,7 @@
 mod client_data;
 mod get_assertion;
 pub mod idl;
+mod large_blob;
 mod make_credential;
 mod timeout;
 
@@ -19,6 +20,10 @@ pub use idl::{
     AuthenticatorAssertionResponseJSON, AuthenticatorAttestationResponseJSON, Base64UrlString,
     JsonFormat, RegistrationResponseJSON, ResponseSerializationError, WebAuthnIDL,
     WebAuthnIDLResponse,
+};
+pub use large_blob::{
+    AuthenticatorLargeBlobStorage, LargeBlobError, LargeBlobStorage, MemoryLargeBlobStorage,
+    LARGE_BLOB_DEFAULT_CHUNK,
 };
 pub use make_credential::{
     CredentialPropsExtension, CredentialProtectionExtension, CredentialProtectionPolicy,
