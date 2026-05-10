@@ -175,11 +175,23 @@ where
             );
             return Err(Error::Ctap(CtapError::Other));
         };
-        let encoded_point = EncodedPoint::from_affine_coordinates(
-            peer_public_key.x.as_bytes().into(),
-            peer_public_key.y.as_bytes().into(),
-            false,
-        );
+        // x and y must be exactly 32 bytes (P-256 field size). `cosey` accepts
+        // any length up to 32; validate before converting to `&FieldBytes`.
+        let x: &[u8; 32] = peer_public_key.x.as_bytes().try_into().map_err(|_| {
+            error!(
+                x_len = peer_public_key.x.as_bytes().len(),
+                "Peer public key x coordinate is not 32 bytes"
+            );
+            Error::Ctap(CtapError::Other)
+        })?;
+        let y: &[u8; 32] = peer_public_key.y.as_bytes().try_into().map_err(|_| {
+            error!(
+                y_len = peer_public_key.y.as_bytes().len(),
+                "Peer public key y coordinate is not 32 bytes"
+            );
+            Error::Ctap(CtapError::Other)
+        })?;
+        let encoded_point = EncodedPoint::from_affine_coordinates(x.into(), y.into(), false);
         let Some(peer_public_key) = P256PublicKey::from_encoded_point(&encoded_point).into() else {
             error!("Failed to parse public key.");
             return Err(Error::Ctap(CtapError::Other));
@@ -576,5 +588,51 @@ where
         let get_info_response = self.ctap2_get_info().await?;
         self.change_pin_internal(&get_info_response, new_pin, timeout)
             .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cosey::{Bytes, EcdhEsHkdf256PublicKey};
+
+    fn make_peer_key(x: &[u8], y: &[u8]) -> cose::PublicKey {
+        cose::PublicKey::EcdhEsHkdf256Key(EcdhEsHkdf256PublicKey {
+            x: Bytes::from_slice(x).unwrap(),
+            y: Bytes::from_slice(y).unwrap(),
+        })
+    }
+
+    #[test]
+    fn ecdh_rejects_short_x() {
+        let proto = PinUvAuthProtocolOne::new();
+        let x = vec![0x01u8; 31];
+        let y = vec![0x02u8; 32];
+        let key = make_peer_key(&x, &y);
+
+        let result = PinUvAuthProtocol::encapsulate(&proto, &key);
+        assert!(matches!(result, Err(Error::Ctap(CtapError::Other))));
+    }
+
+    #[test]
+    fn ecdh_rejects_empty_x() {
+        let proto = PinUvAuthProtocolOne::new();
+        let x: Vec<u8> = Vec::new();
+        let y = vec![0x02u8; 32];
+        let key = make_peer_key(&x, &y);
+
+        let result = PinUvAuthProtocol::encapsulate(&proto, &key);
+        assert!(matches!(result, Err(Error::Ctap(CtapError::Other))));
+    }
+
+    #[test]
+    fn ecdh_rejects_short_y() {
+        let proto = PinUvAuthProtocolTwo::new();
+        let x = vec![0x01u8; 32];
+        let y = vec![0x02u8; 16];
+        let key = make_peer_key(&x, &y);
+
+        let result = PinUvAuthProtocol::encapsulate(&proto, &key);
+        assert!(matches!(result, Err(Error::Ctap(CtapError::Other))));
     }
 }
