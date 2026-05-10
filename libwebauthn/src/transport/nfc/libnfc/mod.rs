@@ -150,7 +150,9 @@ impl Channel {
                 baud_rate: *baud_rate,
             })
             .collect::<Vec<nfc1::Modulation>>();
-        let modulation = &modulations[modulations.len() - 1];
+        let modulation = modulations
+            .last()
+            .ok_or(Error::Transport(TransportError::TransportUnavailable))?;
         let is_one_rate = modulations.len() == 1;
         for i in 0..2 {
             if i > 0 {
