@@ -13,8 +13,8 @@ use super::model::Ctap2ClientPinResponse;
 use super::{
     Ctap2AuthenticatorConfigRequest, Ctap2BioEnrollmentRequest, Ctap2ClientPinRequest,
     Ctap2CredentialManagementRequest, Ctap2CredentialManagementResponse, Ctap2GetAssertionRequest,
-    Ctap2GetAssertionResponse, Ctap2GetInfoResponse, Ctap2MakeCredentialRequest,
-    Ctap2MakeCredentialResponse,
+    Ctap2GetAssertionResponse, Ctap2GetInfoResponse, Ctap2LargeBlobsRequest,
+    Ctap2LargeBlobsResponse, Ctap2MakeCredentialRequest, Ctap2MakeCredentialResponse,
 };
 
 const TIMEOUT_GET_INFO: Duration = Duration::from_millis(250);
@@ -73,6 +73,11 @@ pub trait Ctap2 {
         request: &Ctap2CredentialManagementRequest,
         timeout: Duration,
     ) -> Result<Ctap2CredentialManagementResponse, Error>;
+    async fn ctap2_large_blobs(
+        &mut self,
+        request: &Ctap2LargeBlobsRequest,
+        timeout: Duration,
+    ) -> Result<Ctap2LargeBlobsResponse, Error>;
 }
 
 #[async_trait]
@@ -270,6 +275,31 @@ where
             // Can't deserialize an empty vec[], even though everything is optional and marked as default.
             // So we work around it here by creating our own default value.
             Ok(Ctap2CredentialManagementResponse::default())
+        }
+    }
+
+    #[instrument(skip_all)]
+    async fn ctap2_large_blobs(
+        &mut self,
+        request: &Ctap2LargeBlobsRequest,
+        timeout: Duration,
+    ) -> Result<Ctap2LargeBlobsResponse, Error> {
+        trace!(?request);
+        self.cbor_send(&request.try_into()?, timeout).await?;
+        let cbor_response = self.cbor_recv(timeout).await?;
+        match cbor_response.status_code {
+            CtapError::Ok => (),
+            error => return Err(Error::Ctap(error)),
+        };
+        if let Some(data) = cbor_response.data {
+            let ctap_response = parse_cbor!(Ctap2LargeBlobsResponse, &data);
+            debug!("CTAP2 LargeBlobs successful");
+            trace!(?ctap_response);
+            Ok(ctap_response)
+        } else {
+            // Write responses carry no body; same serde_indexed workaround as
+            // credential_management above.
+            Ok(Ctap2LargeBlobsResponse::default())
         }
     }
 }

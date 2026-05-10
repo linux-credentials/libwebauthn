@@ -44,6 +44,8 @@ pub use credential_management::{
     Ctap2CredentialData, Ctap2CredentialManagementMetadata, Ctap2CredentialManagementRequest,
     Ctap2CredentialManagementResponse, Ctap2RPData,
 };
+mod large_blobs;
+pub use large_blobs::{Ctap2LargeBlobsRequest, Ctap2LargeBlobsResponse};
 
 #[derive(Debug, IntoPrimitive, TryFromPrimitive, Copy, Clone, PartialEq, Serialize_repr)]
 #[repr(u8)]
@@ -58,6 +60,7 @@ pub enum Ctap2CommandCode {
     AuthenticatorCredentialManagement = 0x0A,
     AuthenticatorCredentialManagementPreview = 0x41,
     AuthenticatorSelection = 0x0B,
+    AuthenticatorLargeBlobs = 0x0C,
     AuthenticatorConfig = 0x0D,
 }
 

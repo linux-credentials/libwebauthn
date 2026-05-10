@@ -32,6 +32,7 @@ pub use model::{
 pub use model::{
     Ctap2GetAssertionRequest, Ctap2GetAssertionResponse, Ctap2GetAssertionResponseExtensions,
 };
+pub use model::{Ctap2LargeBlobsRequest, Ctap2LargeBlobsResponse};
 pub use model::{
     Ctap2MakeCredentialRequest, Ctap2MakeCredentialResponse, Ctap2MakeCredentialsResponseExtensions,
 };
