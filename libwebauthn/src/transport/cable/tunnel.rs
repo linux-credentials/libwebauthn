@@ -61,11 +61,14 @@ impl CableTunnelMessage {
         }
     }
     pub fn from_slice(slice: &[u8]) -> Result<Self, Error> {
-        if slice.len() < 2 {
+        let (type_byte, payload) = slice
+            .split_first()
+            .ok_or(Error::Transport(TransportError::InvalidFraming))?;
+        if payload.is_empty() {
             return Err(Error::Transport(TransportError::InvalidFraming));
         }
 
-        let message_type = match slice[0] {
+        let message_type = match *type_byte {
             0 => CableTunnelMessageType::Shutdown,
             1 => CableTunnelMessageType::Ctap,
             2 => CableTunnelMessageType::Update,
@@ -76,7 +79,7 @@ impl CableTunnelMessage {
 
         Ok(Self {
             message_type,
-            payload: ByteBuf::from(slice[1..].to_vec()),
+            payload: ByteBuf::from(payload.to_vec()),
         })
     }
 
@@ -131,10 +134,9 @@ enum CableTunnelMessageType {
 
 pub fn decode_tunnel_server_domain(encoded: u16) -> Option<String> {
     if encoded < 256 {
-        if encoded as usize >= KNOWN_TUNNEL_DOMAINS.len() {
-            return None;
-        }
-        return Some(KNOWN_TUNNEL_DOMAINS[encoded as usize].to_string());
+        return KNOWN_TUNNEL_DOMAINS
+            .get(encoded as usize)
+            .map(|s| (*s).to_string());
     }
 
     let mut sha_input = SHA_INPUT.to_vec();
@@ -143,21 +145,22 @@ pub fn decode_tunnel_server_domain(encoded: u16) -> Option<String> {
     sha_input.push(0);
     let mut hasher = Sha256::default();
     hasher.update(&sha_input);
-    let digest = hasher.finalize();
-
-    let mut v = u64::from_le_bytes([
-        digest[0], digest[1], digest[2], digest[3], digest[4], digest[5], digest[6], digest[7],
-    ]);
-    let tld_index = v & 3;
+    // SHA-256 produces 32 bytes, so the first 8 bytes are always present.
+    let digest: [u8; 32] = hasher.finalize().into();
+    let mut digest_head = [0u8; 8];
+    digest_head.copy_from_slice(digest.get(..8)?);
+    let mut v = u64::from_le_bytes(digest_head);
+    let tld_index = (v & 3) as usize;
     v >>= 2;
 
     let mut ret = String::from("cable.");
     while v != 0 {
-        ret.push(BASE32_CHARS[(v & 31) as usize] as char);
+        let ch = *BASE32_CHARS.get((v & 31) as usize)?;
+        ret.push(ch as char);
         v >>= 5;
     }
 
-    ret.push_str(TLDS[tld_index as usize]);
+    ret.push_str(TLDS.get(tld_index)?);
     Some(ret)
 }
 
@@ -310,7 +313,10 @@ pub(crate) async fn do_handshake(
         }
     };
 
-    let initial_msg: Vec<u8> = initial_msg_buffer[..initial_msg_len].into();
+    let initial_msg: Vec<u8> = initial_msg_buffer
+        .get(..initial_msg_len)
+        .map(<[u8]>::to_vec)
+        .ok_or(TransportError::ConnectionFailed)?;
     trace!(
         { handshake = ?initial_msg },
         "Sending initial handshake message"
@@ -366,7 +372,7 @@ pub(crate) async fn do_handshake(
     };
 
     debug!(
-        { handshake = ?payload[..payload_len] },
+        { handshake = ?payload.get(..payload_len) },
         "Received handshake response"
     );
 
@@ -466,7 +472,9 @@ async fn connection_send(
 
     let mut padded_cbor_request = cbor_request.clone();
     padded_cbor_request.resize(padded_len, 0u8);
-    padded_cbor_request[padded_len - 1] = (extra_bytes - 1) as u8;
+    if let Some(last) = padded_cbor_request.last_mut() {
+        *last = (extra_bytes - 1) as u8;
+    }
 
     let frame = CableTunnelMessage::new(CableTunnelMessageType::Ctap, &padded_cbor_request);
     let frame_serialized = frame.to_vec();
