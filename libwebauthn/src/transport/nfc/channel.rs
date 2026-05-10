@@ -26,6 +26,15 @@ const SELECT_P2: u8 = 0x00;
 const FIDO2_AID: &[u8; 8] = b"\xa0\x00\x00\x06\x47\x2f\x00\x01";
 const SW1_MORE_DATA: u8 = 0x61;
 
+/// Returns true if `version` is a known FIDO2 version string returned by an
+/// authenticator's FIDO AID SELECT response. See CTAP 2.2 section 11.3.1.
+fn is_fido2_version(version: &[u8]) -> bool {
+    matches!(
+        version,
+        b"FIDO_2_0" | b"FIDO_2_1_PRE" | b"FIDO_2_1" | b"FIDO_2_2"
+    )
+}
+
 pub type CancelNfcOperation = ();
 
 #[derive(thiserror::Error)]
@@ -148,8 +157,9 @@ where
         let response = self.handle(self.ctx, command)?;
         let mut u2f = false;
         let mut fido2 = false;
-        if response == b"FIDO_2_0" {
+        if is_fido2_version(&response) {
             //     If the authenticator ONLY implements CTAP2, the device SHALL respond with "FIDO_2_0", or 0x4649444f5f325f30.
+            //     Stricter CTAP 2.1+ authenticators may instead return "FIDO_2_1_PRE", "FIDO_2_1", or "FIDO_2_2".
             fido2 = true;
             // NOTE: Yubikeys seem to ignore this part of the specification and always return U2F_V2, even if U2F-NFC is disabled.
         } else if response == b"U2F_V2" {
@@ -329,5 +339,35 @@ where
 
     fn clear_uv_auth_token_store(&mut self) {
         self.auth_token_data = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_fido2_version;
+
+    #[test]
+    fn fido2_versions_are_recognised() {
+        assert!(is_fido2_version(b"FIDO_2_0"));
+        assert!(is_fido2_version(b"FIDO_2_1_PRE"));
+        assert!(is_fido2_version(b"FIDO_2_1"));
+        assert!(is_fido2_version(b"FIDO_2_2"));
+    }
+
+    #[test]
+    fn u2f_v2_is_not_classified_as_fido2() {
+        // U2F_V2 is handled by a separate fallback path that probes via
+        // ctap2_get_info, so the version-string classifier must report false.
+        assert!(!is_fido2_version(b"U2F_V2"));
+    }
+
+    #[test]
+    fn unknown_versions_are_rejected() {
+        assert!(!is_fido2_version(b""));
+        assert!(!is_fido2_version(b"FIDO_2"));
+        assert!(!is_fido2_version(b"FIDO_2_3"));
+        assert!(!is_fido2_version(b"FIDO_3_0"));
+        assert!(!is_fido2_version(b"fido_2_0"));
+        assert!(!is_fido2_version(b"FIDO_2_0\0"));
     }
 }
