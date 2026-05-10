@@ -89,7 +89,18 @@ impl UpgradableResponse<MakeCredentialResponse, MakeCredentialRequest> for Regis
             y: y.into(),
         });
         let cose_encoded_public_key = cbor::to_vec(&cose_public_key)?;
-        assert!(cose_encoded_public_key.len() == 77);
+        // Canonical CBOR encoding of the COSE P-256 key is 77 bytes for the
+        // fields we set; return a typed error if a future encoder change
+        // produces a different length rather than `assert!`-panicking.
+        if cose_encoded_public_key.len() != 77 {
+            error!(
+                len = cose_encoded_public_key.len(),
+                "COSE-encoded P-256 public key is not 77 bytes"
+            );
+            return Err(Error::Platform(PlatformError::CryptoError(
+                "unexpected COSE-encoded public key length".into(),
+            )));
+        }
 
         // Let attestedCredData be a byte string with following structure:
         //
