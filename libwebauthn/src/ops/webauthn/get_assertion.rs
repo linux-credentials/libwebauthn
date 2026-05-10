@@ -856,8 +856,7 @@ mod tests {
             r#"{"appid":"http://www.example.org/u2f/origins.json"}"#,
         );
 
-        let res =
-            GetAssertionRequest::from_json(&request_origin, &MockPublicSuffixList, &req_json);
+        let res = GetAssertionRequest::from_json(&request_origin, &MockPublicSuffixList, &req_json);
         assert!(matches!(
             res,
             Err(GetAssertionRequestParsingError::InvalidAppId(_))

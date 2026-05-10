@@ -4,7 +4,7 @@ use libwebauthn::ops::webauthn::{
     GetAssertionRequest, GetAssertionResponse, MakeCredentialRequest, ResidentKeyRequirement,
     UserVerificationRequirement,
 };
-use libwebauthn::proto::ctap2::preflight::ctap2_preflight;
+use libwebauthn::proto::ctap2::preflight::{ctap2_preflight, ctap2_preflight_with_appid};
 use libwebauthn::proto::ctap2::{
     Ctap2CredentialType, Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialRpEntity,
     Ctap2PublicKeyCredentialType, Ctap2PublicKeyCredentialUserEntity,
@@ -37,11 +37,20 @@ async fn make_credential_call(
     user_id: &[u8],
     exclude_list: Option<Vec<Ctap2PublicKeyCredentialDescriptor>>,
 ) -> Result<(Ctap2PublicKeyCredentialDescriptor, [u8; 32]), Error> {
+    make_credential_call_with_rp(channel, user_id, exclude_list, "example.org").await
+}
+
+async fn make_credential_call_with_rp(
+    channel: &mut HidChannel<'_>,
+    user_id: &[u8],
+    exclude_list: Option<Vec<Ctap2PublicKeyCredentialDescriptor>>,
+    rp_id: &str,
+) -> Result<(Ctap2PublicKeyCredentialDescriptor, [u8; 32]), Error> {
     let challenge: [u8; 32] = thread_rng().gen();
     let make_credentials_request = MakeCredentialRequest {
-        origin: "example.org".to_owned(),
+        origin: rp_id.to_owned(),
         challenge: Vec::from(challenge),
-        relying_party: Ctap2PublicKeyCredentialRpEntity::new("example.org", "example.org"),
+        relying_party: Ctap2PublicKeyCredentialRpEntity::new(rp_id, rp_id),
         user: Ctap2PublicKeyCredentialUserEntity::new(user_id, "mario.rossi", "Mario Rossi"),
         resident_key: Some(ResidentKeyRequirement::Discouraged),
         user_verification: UserVerificationRequirement::Preferred,
@@ -237,6 +246,58 @@ async fn preflight_nonsense_allow_list() {
         &[UvUpdate::PresenceRequired, UvUpdate::PresenceRequired],
     )
     .await;
+}
+
+#[test(tokio::test)]
+async fn preflight_with_appid_exclude_finds_legacy_credential() {
+    // Register a credential under a "legacy" relying party id (standing
+    // in for a U2F AppID), then run preflight against a different rpId
+    // while passing the legacy rpId as `appid_exclude`. The credential
+    // should be detected, matching WebAuthn L3 §10.1.2 semantics.
+    let mut device = get_virtual_device();
+    let mut channel = device.channel().await.unwrap();
+
+    let user_id: [u8; 32] = thread_rng().gen();
+    let _state_recv = channel.get_ux_update_receiver();
+
+    // First, register the legacy credential.
+    let (legacy_credential, _) =
+        make_credential_call_with_rp(&mut channel, &user_id, None, "legacy.example.org")
+            .await
+            .expect("Failed to register legacy credential");
+
+    // Preflight under "example.org" without appid_exclude: legacy
+    // credential is not detected.
+    let hash: [u8; 32] = thread_rng().gen();
+    let filtered_no_appid = ctap2_preflight_with_appid(
+        &mut channel,
+        std::slice::from_ref(&legacy_credential),
+        &hash,
+        "example.org",
+        None,
+    )
+    .await;
+    assert!(
+        filtered_no_appid.is_empty(),
+        "Without appid_exclude, the legacy credential should not be detected"
+    );
+
+    // Preflight again, this time providing the legacy rpId as
+    // appid_exclude. The credential must be detected.
+    let filtered_with_appid = ctap2_preflight_with_appid(
+        &mut channel,
+        std::slice::from_ref(&legacy_credential),
+        &hash,
+        "example.org",
+        Some("legacy.example.org"),
+    )
+    .await;
+    assert_eq!(
+        filtered_with_appid.len(),
+        1,
+        "With appid_exclude set, the legacy credential should be detected"
+    );
+    assert_eq!(filtered_with_appid[0].id, legacy_credential.id);
 }
 
 #[test(tokio::test)]
