@@ -45,19 +45,26 @@ impl ApduResponse {
 impl TryFrom<&Vec<u8>> for ApduResponse {
     type Error = IOError;
     fn try_from(packet: &Vec<u8>) -> Result<Self, Self::Error> {
-        if packet.len() < 2 {
-            return Err(IOError::new(
+        let split_at = packet.len().checked_sub(2).ok_or_else(|| {
+            IOError::new(
                 IOErrorKind::InvalidData,
                 "Apdu response packets must contain at least 2 bytes.",
-            ));
-        }
+            )
+        })?;
+        let (body, status) = packet.split_at(split_at);
+        // `status` is guaranteed to have exactly 2 elements by construction above.
+        let sw1 = *status
+            .first()
+            .ok_or_else(|| IOError::new(IOErrorKind::InvalidData, "Missing APDU status byte 1"))?;
+        let sw2 = *status
+            .get(1)
+            .ok_or_else(|| IOError::new(IOErrorKind::InvalidData, "Missing APDU status byte 2"))?;
 
-        let data = if packet.len() > 2 {
-            Some(Vec::from(&packet[0..packet.len() - 2]))
-        } else {
+        let data = if body.is_empty() {
             None
+        } else {
+            Some(Vec::from(body))
         };
-        let (sw1, sw2) = (packet[packet.len() - 2], packet[packet.len() - 1]);
 
         Ok(Self { data, sw1, sw2 })
     }

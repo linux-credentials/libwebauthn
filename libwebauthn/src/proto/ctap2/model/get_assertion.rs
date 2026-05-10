@@ -332,8 +332,9 @@ impl Ctap2GetAssertionRequestExtensions {
 
             let mut hasher = Sha256::default();
             hasher.update(salt1_input);
-            let salt1_hash = hasher.finalize().to_vec();
-            input.salt1.copy_from_slice(&salt1_hash[..32]);
+            // SHA-256 produces a fixed 32-byte output, which lines up with salt1.
+            let salt1_hash: [u8; 32] = hasher.finalize().into();
+            input.salt1.copy_from_slice(&salt1_hash);
 
             // 5.2 If ev.second is present, let salt2 be the value of SHA-256(UTF8Encode("WebAuthn PRF") || 0x00 || ev.second).
             if let Some(second) = ev.second {
@@ -341,10 +342,8 @@ impl Ctap2GetAssertionRequestExtensions {
                 salt2_input.extend(second);
                 let mut hasher = Sha256::default();
                 hasher.update(salt2_input);
-                let salt2_hash = hasher.finalize().to_vec();
-                let mut salt2 = [0u8; 32];
-                salt2.copy_from_slice(&salt2_hash[..32]);
-                input.salt2 = Some(salt2);
+                let salt2_hash: [u8; 32] = hasher.finalize().into();
+                input.salt2 = Some(salt2_hash);
             };
 
             Ok(Some(input))
@@ -481,7 +480,7 @@ impl Ctap2GetAssertionResponse {
         // We always return it, for convenience.
         let credential_id = self.credential_id.or_else(|| {
             if request.allow.len() == 1 {
-                Some(request.allow[0].clone())
+                request.allow.first().cloned()
             } else {
                 None
             }

@@ -262,7 +262,14 @@ impl PinUvAuthProtocol for PinUvAuthProtocolOne {
     fn authenticate(&self, key: &[u8], message: &[u8]) -> Result<Vec<u8>, Error> {
         // Return the first 16 bytes of the result of computing HMAC-SHA-256 with the given key and message.
         let hmac = hmac_sha256(key, message)?;
-        Ok(Vec::from(&hmac[..16]))
+        // HMAC-SHA-256 produces 32 bytes, so this slice is always valid.
+        let truncated = hmac.get(..16).ok_or_else(|| {
+            error!(len = hmac.len(), "HMAC output shorter than 16 bytes");
+            Error::Platform(PlatformError::CryptoError(
+                "HMAC output shorter than 16 bytes".into(),
+            ))
+        })?;
+        Ok(Vec::from(truncated))
     }
 
     #[instrument(skip_all)]
@@ -438,8 +445,9 @@ impl PinUvAuthProtocol for PinUvAuthProtocolTwo {
 pub fn pin_hash(pin: &[u8]) -> Vec<u8> {
     let mut hasher = Sha256::default();
     hasher.update(pin);
-    let hashed = hasher.finalize().to_vec();
-    Vec::from(&hashed[..16])
+    let hashed = hasher.finalize();
+    // SHA-256 output is fixed at 32 bytes; keep only the first 16 per the spec.
+    hashed.into_iter().take(16).collect()
 }
 
 pub fn hmac_sha256(key: &[u8], message: &[u8]) -> Result<Vec<u8>, Error> {

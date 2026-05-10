@@ -249,7 +249,11 @@ impl<'de, T: DeserializeOwned> Deserialize<'de> for AuthenticatorData<T> {
                     };
 
                 // Check if we have trailing data
-                if !&data[cursor.position() as usize..].is_empty() {
+                let pos = cursor.position() as usize;
+                let trailing = data.get(pos..).ok_or_else(|| {
+                    DesError::custom("cursor advanced past end of authenticator data")
+                })?;
+                if !trailing.is_empty() {
                     return Err(DesError::invalid_length(data.len(), &"trailing data"));
                 }
 

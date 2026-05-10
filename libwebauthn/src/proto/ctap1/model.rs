@@ -142,7 +142,18 @@ impl TryFrom<ApduResponse> for Ctap1RegisterResponse {
             "Failed to parse X509 attestation data",
         )))?;
         let signature = Vec::from(signature);
-        let attestation = Vec::from(&remaining[0..remaining.len() - signature.len()]);
+        // `signature` is a suffix of `remaining` returned by `X509Certificate::from_der`,
+        // so the split index is always within bounds in practice; bound it explicitly.
+        let split_at = remaining
+            .len()
+            .checked_sub(signature.len())
+            .ok_or_else(|| {
+                IOError::new(
+                    IOErrorKind::InvalidData,
+                    "Signature longer than remaining U2F register response data",
+                )
+            })?;
+        let attestation = Vec::from(remaining.get(..split_at).unwrap_or(&[]));
 
         Ok(Ctap1RegisterResponse {
             version: Ctap1Version::U2fV2,
