@@ -362,7 +362,13 @@ impl PinUvAuthProtocol for PinUvAuthProtocolTwo {
 
     fn encrypt(&self, key: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, Error> {
         // Discard the first 32 bytes of key. (This selects the AES-key portion of the shared secret.)
-        let key = &key[32..];
+        let key = key.get(32..).ok_or_else(|| {
+            error!(
+                key_len = key.len(),
+                "key shorter than 32 bytes; cannot select AES-key portion"
+            );
+            Error::Ctap(CtapError::Other)
+        })?;
 
         // Let iv be a 16-byte, random bytestring.
         let iv: [u8; 16] = thread_rng().gen();
@@ -383,7 +389,13 @@ impl PinUvAuthProtocol for PinUvAuthProtocolTwo {
 
     fn decrypt(&self, key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, Error> {
         // Discard the first 32 bytes of key. (This selects the AES-key portion of the shared secret.)
-        let key = &key[32..];
+        let key = key.get(32..).ok_or_else(|| {
+            error!(
+                key_len = key.len(),
+                "key shorter than 32 bytes; cannot select AES-key portion"
+            );
+            Error::Ctap(CtapError::Other)
+        })?;
 
         // If demPlaintext is less than 16 bytes in length, return an error
         if ciphertext.len() < 16 {
@@ -409,7 +421,13 @@ impl PinUvAuthProtocol for PinUvAuthProtocolTwo {
     fn authenticate(&self, key: &[u8], message: &[u8]) -> Result<Vec<u8>, Error> {
         // If key is longer than 32 bytes, discard the excess. (This selects the HMAC-key portion of the shared secret.
         // When key is the pinUvAuthToken, it is exactly 32 bytes long and thus this step has no effect.)
-        let key = &key[..32];
+        let key = key.get(..32).ok_or_else(|| {
+            error!(
+                key_len = key.len(),
+                "key shorter than 32 bytes; cannot select HMAC-key portion"
+            );
+            Error::Ctap(CtapError::Other)
+        })?;
 
         // Return the result of computing HMAC-SHA-256 on key and message.
         hmac_sha256(key, message)
@@ -633,6 +651,39 @@ mod tests {
         let key = make_peer_key(&x, &y);
 
         let result = PinUvAuthProtocol::encapsulate(&proto, &key);
+        assert!(matches!(result, Err(Error::Ctap(CtapError::Other))));
+    }
+
+    #[test]
+    fn proto_two_authenticate_rejects_empty_key() {
+        let proto = PinUvAuthProtocolTwo::new();
+        let result = proto.authenticate(&[], b"clientDataHash");
+        assert!(matches!(result, Err(Error::Ctap(CtapError::Other))));
+    }
+
+    #[test]
+    fn proto_two_authenticate_rejects_short_key() {
+        let proto = PinUvAuthProtocolTwo::new();
+        let short_key = [0u8; 16];
+        let result = proto.authenticate(&short_key, b"hello");
+        assert!(matches!(result, Err(Error::Ctap(CtapError::Other))));
+    }
+
+    #[test]
+    fn proto_two_encrypt_rejects_short_key() {
+        let proto = PinUvAuthProtocolTwo::new();
+        let short_key = [0u8; 16];
+        let plaintext = [0u8; 16];
+        let result = proto.encrypt(&short_key, &plaintext);
+        assert!(matches!(result, Err(Error::Ctap(CtapError::Other))));
+    }
+
+    #[test]
+    fn proto_two_decrypt_rejects_short_key() {
+        let proto = PinUvAuthProtocolTwo::new();
+        let short_key = [0u8; 16];
+        let ct = [0u8; 32];
+        let result = proto.decrypt(&short_key, &ct);
         assert!(matches!(result, Err(Error::Ctap(CtapError::Other))));
     }
 }

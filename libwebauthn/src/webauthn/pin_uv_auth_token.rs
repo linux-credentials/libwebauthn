@@ -359,6 +359,22 @@ where
                 let uv_auth_token =
                     uv_proto.decrypt(&shared_secret, &encrypted_pin_uv_auth_token)?;
 
+                // pinUvAuthToken is 16 bytes for PUAP1 and 32 bytes for PUAP2.
+                // Reject a shorter token before it is used as a key downstream.
+                let min_token_len = match uv_proto.version() {
+                    Ctap2PinUvAuthProtocol::One => 16,
+                    Ctap2PinUvAuthProtocol::Two => 32,
+                };
+                if uv_auth_token.len() < min_token_len {
+                    error!(
+                        protocol = ?uv_proto.version(),
+                        token_len = uv_auth_token.len(),
+                        min_expected = min_token_len,
+                        "Decrypted pinUvAuthToken is shorter than required"
+                    );
+                    return Err(Error::Ctap(CtapError::Other));
+                }
+
                 let token_identifier = Ctap2AuthTokenPermission::new(
                     uv_proto.version(),
                     ctap2_request.permissions(),
@@ -838,7 +854,7 @@ mod test {
         .unwrap();
         // We do here what the device would need to do, i.e. generate a new random
         // pinUvAuthToken (here all 5's), then encrypt it using the shared_secret.
-        let token = [5; 32];
+        let token = [5; 16];
         let encrypted_token = pin_protocol.encrypt(&shared_secret, &token).unwrap();
         let pin_resp = CborResponse::new_success_from_slice(
             to_vec(&Ctap2ClientPinResponse {
@@ -1182,7 +1198,7 @@ mod test {
                 .unwrap();
             // We do here what the device would need to do, i.e. generate a new random
             // pinUvAuthToken (here all 5's), then encrypt it using the shared_secret.
-            let token = [5; 32];
+            let token = [5; 16];
             let encrypted_token = pin_protocol.encrypt(&shared_secret, &token).unwrap();
             let pin_resp = CborResponse::new_success_from_slice(
                 to_vec(&Ctap2ClientPinResponse {
@@ -1322,7 +1338,7 @@ mod test {
                 .unwrap();
             // We do here what the device would need to do, i.e. generate a new random
             // pinUvAuthToken (here all 5's), then encrypt it using the shared_secret.
-            let token = [5; 32];
+            let token = [5; 16];
             let encrypted_token = pin_protocol.encrypt(&shared_secret, &token).unwrap();
             let pin_resp = CborResponse::new_success_from_slice(
                 to_vec(&Ctap2ClientPinResponse {
