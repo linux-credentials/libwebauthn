@@ -26,11 +26,13 @@ pub fn derive(secret: &[u8], salt: Option<&[u8]>, purpose: KeyPurpose) -> Result
 }
 
 fn reserved_bits_are_zero(plaintext: &[u8]) -> bool {
-    plaintext[0] == 0
+    plaintext.first().copied() == Some(0)
 }
 
 #[instrument]
 pub fn trial_decrypt_advert(eid_key: &[u8], candidate_advert: &[u8]) -> Option<[u8; 16]> {
+    // Both lengths are checked up front so the subsequent slicing is in bounds;
+    // use `.get(..)` regardless so the clippy::indexing_slicing lint is satisfied.
     if candidate_advert.len() != 20 {
         warn!("candidate advert is not 20 bytes");
         return None;
@@ -41,15 +43,20 @@ pub fn trial_decrypt_advert(eid_key: &[u8], candidate_advert: &[u8]) -> Option<[
         return None;
     }
 
-    let expected_tag = hmac_sha256(&eid_key[32..], &candidate_advert[..16]).ok()?;
-    if expected_tag[..4] != candidate_advert[16..] {
-        warn!({ expected = ?expected_tag[..4], actual = ?candidate_advert[16..] },
+    let mac_key = eid_key.get(32..)?;
+    let advert_body = candidate_advert.get(..16)?;
+    let advert_tag = candidate_advert.get(16..)?;
+    let expected_tag = hmac_sha256(mac_key, advert_body).ok()?;
+    let expected_tag_truncated = expected_tag.get(..4)?;
+    if expected_tag_truncated != advert_tag {
+        warn!({ expected = ?expected_tag_truncated, actual = ?advert_tag },
               "candidate advert HMAC tag does not match");
         return None;
     }
 
-    let cipher = Aes256::new(GenericArray::from_slice(&eid_key[..32]));
-    let mut block = Block::clone_from_slice(&candidate_advert[..16]);
+    let aes_key = eid_key.get(..32)?;
+    let cipher = Aes256::new(GenericArray::from_slice(aes_key));
+    let mut block = Block::clone_from_slice(advert_body);
     cipher.decrypt_block(&mut block);
 
     if !reserved_bits_are_zero(&block) {
