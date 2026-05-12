@@ -2,7 +2,7 @@ use std::error::Error;
 use std::time::Duration;
 
 use libwebauthn::ops::webauthn::{
-    DatFilePublicSuffixList, GetAssertionRequest, JsonFormat, MakeCredentialRequest, RequestOrigin,
+    GetAssertionRequest, JsonFormat, MakeCredentialRequest, RequestOrigin, SystemPublicSuffixList,
     WebAuthnIDL as _, WebAuthnIDLResponse as _,
 };
 use libwebauthn::proto::ctap2::Ctap2PublicKeyCredentialDescriptor;
@@ -29,8 +29,8 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
 
         let request_origin: RequestOrigin =
             "https://example.org".try_into().expect("Invalid origin");
-        let psl = DatFilePublicSuffixList::from_system_file().expect(
-            "PSL not available; install the publicsuffix-list package or pass an explicit path",
+        let psl = SystemPublicSuffixList::auto().expect(
+            "PSL not available; install the publicsuffix-list (or publicsuffix-list-dafsa) package, or pass an explicit path",
         );
         let request_json = r#"
                 {
