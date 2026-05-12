@@ -656,4 +656,22 @@ mod tests {
             &psl(),
         ));
     }
+
+    #[test]
+    fn registrable_suffix_localhost_equal() {
+        assert!(is_registrable_domain_suffix_or_equal(
+            "localhost",
+            "localhost",
+            &psl(),
+        ));
+    }
+
+    #[test]
+    fn registrable_suffix_localhost_subdomain_accepted() {
+        assert!(is_registrable_domain_suffix_or_equal(
+            "localhost",
+            "sub.localhost",
+            &psl(),
+        ));
+    }
 }

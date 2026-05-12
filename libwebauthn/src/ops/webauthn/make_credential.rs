@@ -923,6 +923,38 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn test_request_from_json_http_localhost_accepted() {
+        let request_origin: RequestOrigin = "http://localhost".parse().unwrap();
+        let req_json = json_field_add(
+            REQUEST_BASE_JSON,
+            "rp",
+            r#"{"id": "localhost", "name": "localhost"}"#,
+        );
+
+        let req =
+            MakeCredentialRequest::from_json(&request_origin, &MockPublicSuffixList, &req_json)
+                .unwrap();
+        assert_eq!(req.relying_party.id, "localhost");
+        assert_eq!(req.origin, "http://localhost");
+    }
+
+    #[test]
+    fn test_request_from_json_http_localhost_with_port_accepted() {
+        let request_origin: RequestOrigin = "http://localhost:3000".parse().unwrap();
+        let req_json = json_field_add(
+            REQUEST_BASE_JSON,
+            "rp",
+            r#"{"id": "localhost", "name": "localhost"}"#,
+        );
+
+        let req =
+            MakeCredentialRequest::from_json(&request_origin, &MockPublicSuffixList, &req_json)
+                .unwrap();
+        assert_eq!(req.relying_party.id, "localhost");
+        assert_eq!(req.origin, "http://localhost:3000");
+    }
+
     // Tests for response JSON serialization
 
     fn create_test_response() -> MakeCredentialResponse {
