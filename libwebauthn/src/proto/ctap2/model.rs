@@ -164,7 +164,11 @@ pub struct Ctap2PublicKeyCredentialDescriptor {
     pub id: ByteBuf,
     pub r#type: Ctap2PublicKeyCredentialType,
 
-    #[serde(skip_serializing_if = "Option::is_none")]
+    // CTAP2 PublicKeyCredentialDescriptor only carries `id` and `type` on the wire.
+    // Strict authenticators reject extra fields with CTAP2_ERR_INVALID_CBOR (0x12).
+    // We keep `transports` in memory for U2F downgrade and accept it on deserialize
+    // (some authenticators include it in responses), but never serialize it.
+    #[serde(skip_serializing, default)]
     pub transports: Option<Vec<Ctap2Transport>>,
 }
 
@@ -245,7 +249,10 @@ mod tests {
     use crate::proto::ctap2::cbor;
     use crate::proto::ctap2::Ctap2PublicKeyCredentialDescriptor;
 
-    use super::{Ctap2COSEAlgorithmIdentifier, Ctap2CredentialType, Ctap2PublicKeyCredentialType};
+    use super::{
+        Ctap2COSEAlgorithmIdentifier, Ctap2CredentialType, Ctap2PublicKeyCredentialType,
+        Ctap2Transport,
+    };
     use hex;
     use serde_bytes::ByteBuf;
     use serde_cbor_2 as serde_cbor;
@@ -275,6 +282,36 @@ mod tests {
         // Known good, verified by hand with cbor.me playground
         let expected = hex::decode("a2626964414264747970656a7075626c69632d6b6579").unwrap();
         assert_eq!(serialized, expected);
+    }
+
+    #[test]
+    /// CTAP2 PublicKeyCredentialDescriptor is `{id, type}` only; `transports` is a
+    /// WebAuthn-level field that strict authenticators reject as InvalidCbor (#191).
+    pub fn credential_descriptor_serialization_strips_transports() {
+        let credential_descriptor = Ctap2PublicKeyCredentialDescriptor {
+            id: ByteBuf::from(vec![0x42]),
+            r#type: Ctap2PublicKeyCredentialType::PublicKey,
+            transports: Some(vec![Ctap2Transport::Usb]),
+        };
+        let serialized = cbor::to_vec(&credential_descriptor).unwrap();
+        let expected = hex::decode("a2626964414264747970656a7075626c69632d6b6579").unwrap();
+        assert_eq!(serialized, expected);
+    }
+
+    #[test]
+    /// Some authenticators include `transports` in CTAP2 responses even though the spec
+    /// doesn't list it; we must remain tolerant when deserializing.
+    pub fn credential_descriptor_deserialization_accepts_transports() {
+        // python $ cbor2.dumps({"id": bytes([0x42]), "type": "public-key", "transports": ["usb"]}).hex()
+        let serialized = hex::decode(
+            "a3626964414264747970656a7075626c69632d6b65796a7472616e73706f7274738163757362",
+        )
+        .unwrap();
+        let descriptor: Ctap2PublicKeyCredentialDescriptor =
+            serde_cbor::from_slice(&serialized).unwrap();
+        assert_eq!(descriptor.id, ByteBuf::from(vec![0x42]));
+        assert_eq!(descriptor.r#type, Ctap2PublicKeyCredentialType::PublicKey);
+        assert_eq!(descriptor.transports, Some(vec![Ctap2Transport::Usb]));
     }
 
     #[test]
