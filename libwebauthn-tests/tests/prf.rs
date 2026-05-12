@@ -67,6 +67,64 @@ async fn test_webauthn_prf_with_pin_set_forced_pin_protocol_two() {
     run_test_battery(&mut channel, true).await;
 }
 
+/// The Trussed virtual key advertises `hmac-secret` but not `hmac-secret-mc`.
+/// Requesting PRF.eval at create() must therefore degrade gracefully: the
+/// credential is still created with `hmac-secret: true` so PRF works via GA,
+/// no `hmac-secret-mc` is sent on the wire, and `prf.results` stays None.
+#[test(tokio::test)]
+async fn test_webauthn_prf_eval_at_create_degrades_when_unsupported() {
+    let mut device = get_virtual_device();
+    let mut channel = device.channel().await.unwrap();
+    let state_recv = channel.get_ux_update_receiver();
+    // PRF forces UV=required (webauthn#2337); no-PIN device drives PIN setup.
+    tokio::spawn(handle_updates(
+        state_recv,
+        vec![
+            UvUpdateShim::PinNotSet,
+            UvUpdateShim::PinRequired,
+            UvUpdateShim::PresenceRequired,
+        ],
+    ));
+
+    let user_id: [u8; 32] = thread_rng().gen();
+    let challenge: [u8; 32] = thread_rng().gen();
+    let extensions = MakeCredentialsRequestExtensions {
+        prf: Some(MakeCredentialPrfInput {
+            eval: Some(PrfInputValue {
+                first: vec![9; 32],
+                second: None,
+            }),
+        }),
+        ..Default::default()
+    };
+    let req = MakeCredentialRequest {
+        origin: "example.org".to_owned(),
+        challenge: Vec::from(challenge),
+        relying_party: Ctap2PublicKeyCredentialRpEntity::new("example.org", "example.org"),
+        user: Ctap2PublicKeyCredentialUserEntity::new(&user_id, "mario.rossi", "Mario Rossi"),
+        resident_key: Some(ResidentKeyRequirement::Discouraged),
+        user_verification: UserVerificationRequirement::Discouraged,
+        algorithms: vec![Ctap2CredentialType::default()],
+        exclude: None,
+        extensions: Some(extensions),
+        timeout: TIMEOUT,
+        top_origin: None,
+    };
+
+    let response = channel
+        .webauthn_make_credential(&req)
+        .await
+        .expect("MakeCredential should succeed");
+    assert_eq!(
+        response.unsigned_extensions_output.prf,
+        Some(MakeCredentialPrfOutput {
+            enabled: Some(true),
+            results: None,
+        }),
+        "device does not advertise hmac-secret-mc; results must stay None"
+    );
+}
+
 enum UvUpdateShim {
     PresenceRequired,
     PinRequired,
@@ -108,7 +166,7 @@ async fn run_test_battery(channel: &mut HidChannel<'_>, using_pin: bool) {
     let challenge: [u8; 32] = thread_rng().gen();
 
     let extensions = MakeCredentialsRequestExtensions {
-        prf: Some(MakeCredentialPrfInput { _eval: None }),
+        prf: Some(MakeCredentialPrfInput { eval: None }),
         ..Default::default()
     };
 
@@ -173,7 +231,8 @@ async fn run_test_battery(channel: &mut HidChannel<'_>, using_pin: bool) {
     assert_eq!(
         response.unsigned_extensions_output.prf,
         Some(MakeCredentialPrfOutput {
-            enabled: Some(true)
+            enabled: Some(true),
+            results: None,
         })
     );
 
@@ -615,7 +674,7 @@ async fn test_webauthn_prf_variable_length_input() {
         algorithms: vec![Ctap2CredentialType::default()],
         exclude: None,
         extensions: Some(MakeCredentialsRequestExtensions {
-            prf: Some(MakeCredentialPrfInput { _eval: None }),
+            prf: Some(MakeCredentialPrfInput { eval: None }),
             ..Default::default()
         }),
         timeout: TIMEOUT,
@@ -767,7 +826,7 @@ async fn test_webauthn_prf_upgrades_uv_at_registration() {
         &challenge,
         UserVerificationRequirement::Discouraged,
         Some(MakeCredentialsRequestExtensions {
-            prf: Some(MakeCredentialPrfInput { _eval: None }),
+            prf: Some(MakeCredentialPrfInput { eval: None }),
             ..Default::default()
         }),
     );
@@ -779,7 +838,8 @@ async fn test_webauthn_prf_upgrades_uv_at_registration() {
     assert_eq!(
         response.unsigned_extensions_output.prf,
         Some(MakeCredentialPrfOutput {
-            enabled: Some(true)
+            enabled: Some(true),
+            results: None,
         })
     );
 
@@ -837,7 +897,7 @@ async fn test_webauthn_prf_upgrades_uv_at_assertion() {
         &challenge,
         UserVerificationRequirement::Required,
         Some(MakeCredentialsRequestExtensions {
-            prf: Some(MakeCredentialPrfInput { _eval: None }),
+            prf: Some(MakeCredentialPrfInput { eval: None }),
             ..Default::default()
         }),
     );

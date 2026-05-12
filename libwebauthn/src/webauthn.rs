@@ -154,6 +154,13 @@ async fn make_credential_fido2<C: Channel>(
         )
         .await?;
 
+        // Encrypt hmac-secret-mc before PresenceRequired (mirrors GA below).
+        if let Some(auth_data) = channel.get_auth_data() {
+            if let Some(ext) = ctap2_request.extensions.as_mut() {
+                ext.calculate_hmac_secret_mc(auth_data)?;
+            }
+        }
+
         // We've already sent out this update, in case we used builtin UV
         // but in all other cases, we need to touch the device now.
         if uv_auth_used
@@ -174,7 +181,8 @@ async fn make_credential_fido2<C: Channel>(
             op.timeout
         )
     }?;
-    let make_cred = response.into_make_credential_output(op, Some(&get_info_response));
+    let make_cred =
+        response.into_make_credential_output(op, Some(&get_info_response), channel.get_auth_data());
     Ok(make_cred)
 }
 
