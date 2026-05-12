@@ -8,7 +8,7 @@ pub mod hid;
 /// A mock channel that can be used in tests to
 /// queue expected requests and responses in unittests
 pub mod mock;
-#[cfg(feature = "nfc")]
+#[cfg(any(feature = "nfc-backend-pcsc", feature = "nfc-backend-libnfc"))]
 pub mod nfc;
 
 mod channel;

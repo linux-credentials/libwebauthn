@@ -16,8 +16,8 @@ path = "src/lib.rs"
 [features]
 default = []
 nfc = ["apdu-core", "apdu"]
-pcsc = [ "nfc", "dep:pcsc" ]
-libnfc = [
+nfc-backend-pcsc = ["nfc", "dep:pcsc"]
+nfc-backend-libnfc = [
   "nfc",
   "nfc1-sys",
   "nfc1",

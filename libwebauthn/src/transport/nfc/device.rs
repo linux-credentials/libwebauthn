@@ -9,17 +9,17 @@ use crate::{
 };
 
 use super::channel::NfcChannel;
-#[cfg(feature = "libnfc")]
+#[cfg(feature = "nfc-backend-libnfc")]
 use super::libnfc;
-#[cfg(feature = "pcsc")]
+#[cfg(feature = "nfc-backend-pcsc")]
 use super::pcsc;
 use super::{Context, Nfc};
 
 #[derive(Clone, Debug)]
 enum DeviceInfo {
-    #[cfg(feature = "libnfc")]
+    #[cfg(feature = "nfc-backend-libnfc")]
     LibNfc(libnfc::Info),
-    #[cfg(feature = "pcsc")]
+    #[cfg(feature = "nfc-backend-pcsc")]
     Pcsc(pcsc::Info),
 }
 
@@ -31,9 +31,9 @@ pub struct NfcDevice {
 impl fmt::Display for DeviceInfo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self {
-            #[cfg(feature = "libnfc")]
+            #[cfg(feature = "nfc-backend-libnfc")]
             DeviceInfo::LibNfc(info) => write!(f, "{}", info),
-            #[cfg(feature = "pcsc")]
+            #[cfg(feature = "nfc-backend-pcsc")]
             DeviceInfo::Pcsc(info) => write!(f, "{}", info),
         }
     }
@@ -46,14 +46,14 @@ impl fmt::Display for NfcDevice {
 }
 
 impl NfcDevice {
-    #[cfg(feature = "libnfc")]
+    #[cfg(feature = "nfc-backend-libnfc")]
     pub fn new_libnfc(info: libnfc::Info) -> Self {
         NfcDevice {
             info: DeviceInfo::LibNfc(info),
         }
     }
 
-    #[cfg(feature = "pcsc")]
+    #[cfg(feature = "nfc-backend-pcsc")]
     pub fn new_pcsc(info: pcsc::Info) -> Self {
         NfcDevice {
             info: DeviceInfo::Pcsc(info),
@@ -63,9 +63,9 @@ impl NfcDevice {
     async fn channel_sync(&self) -> Result<NfcChannel<Context>, Error> {
         trace!("nfc channel {:?}", self);
         let mut channel: NfcChannel<Context> = match &self.info {
-            #[cfg(feature = "libnfc")]
+            #[cfg(feature = "nfc-backend-libnfc")]
             DeviceInfo::LibNfc(info) => info.channel(),
-            #[cfg(feature = "pcsc")]
+            #[cfg(feature = "nfc-backend-pcsc")]
             DeviceInfo::Pcsc(info) => info.channel(),
         }?;
 
@@ -101,9 +101,9 @@ pub async fn get_nfc_device() -> Result<Option<NfcDevice>, Error> {
     // we'll potentially have the same device discovered by
     // both backends and thus added multiple times to the list.
     let list_devices_fns = [
-        #[cfg(feature = "libnfc")]
+        #[cfg(feature = "nfc-backend-libnfc")]
         libnfc::list_devices,
-        #[cfg(feature = "pcsc")]
+        #[cfg(feature = "nfc-backend-pcsc")]
         pcsc::list_devices,
     ];
 
@@ -121,11 +121,11 @@ pub async fn get_nfc_device() -> Result<Option<NfcDevice>, Error> {
 #[instrument]
 pub fn is_nfc_available() -> bool {
     let mut available = false;
-    #[cfg(feature = "libnfc")]
+    #[cfg(feature = "nfc-backend-libnfc")]
     {
         available |= libnfc::is_nfc_available();
     }
-    #[cfg(feature = "pcsc")]
+    #[cfg(feature = "nfc-backend-pcsc")]
     {
         available |= pcsc::is_nfc_available();
     }
