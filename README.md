@@ -54,34 +54,43 @@ Validating the relying party ID against the calling origin requires the [Public 
 
 ## Example programs
 
-After cloning, you can try out [one of the libwebauthn examples](libwebauthn/examples):
+Examples live in [`libwebauthn/examples/`](libwebauthn/examples) and are grouped by purpose:
+`ceremony/` for register and authenticate flows, `features/` for per-feature demos
+(extensions, preflight, PRF, device selection), and `management/` for CTAP2 admin
+operations. All examples share helpers from `examples/common/`.
 
 ```
 $ cd libwebauthn
 $ git submodule update --init
 ```
 
-| Transport             | FIDO U2F                                                                                                                       | WebAuthn (FIDO2)                                                                                                                           |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| **USB (HID)**         | `cargo run --example u2f_hid`                                                                                                  | `cargo run --example webauthn_hid`<br>`cargo run --example webauthn_json_hid`                                                              |
-| **Bluetooth (BLE)**   | `cargo run --example u2f_ble`                                                                                                  | —                                                                                                                                          |
-| **NFC** [^nfc]        | `cargo run --features nfc-backend-pcsc --example u2f_nfc`<br>`cargo run --features nfc-backend-libnfc --example u2f_nfc`       | `cargo run --features nfc-backend-pcsc --example webauthn_nfc`<br>`cargo run --features nfc-backend-libnfc --example webauthn_nfc`         |
-| **Hybrid (caBLE v2)** | —                                                                                                                              | `cargo run --example webauthn_cable`                                                                                                       |
+The basic ceremony examples (register + authenticate) cover all transports. The
+WebAuthn examples consume and emit JSON per the [WebAuthn IDL][webauthn].
+
+| Transport             | FIDO U2F                                                                                                                 | WebAuthn (FIDO2)                                                                                                                   |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
+| **USB (HID)**         | `cargo run --example u2f_hid`                                                                                            | `cargo run --example webauthn_hid`                                                                                                 |
+| **Bluetooth (BLE)**   | `cargo run --example u2f_ble`                                                                                            | —                                                                                                                                  |
+| **NFC** [^nfc]        | `cargo run --features nfc-backend-pcsc --example u2f_nfc`<br>`cargo run --features nfc-backend-libnfc --example u2f_nfc` | `cargo run --features nfc-backend-pcsc --example webauthn_nfc`<br>`cargo run --features nfc-backend-libnfc --example webauthn_nfc` |
+| **Hybrid (caBLE v2)** | —                                                                                                                        | `cargo run --example webauthn_cable`                                                                                               |
 
 [^nfc]: `nfc-backend-pcsc` is pure userspace and recommended on most systems. `nfc-backend-libnfc` requires the `libnfc` system library. Both can be enabled together; the first FIDO device found by either backend is used.
 
 Additional HID-only examples cover specific FIDO2 features and authenticator management:
 
 ```
+# WebAuthn extension and preflight demos
 $ cargo run --example webauthn_extensions_hid
 $ cargo run --example webauthn_preflight_hid
 $ cargo run --example webauthn_prf_hid
-$ cargo run --example prf_test
-$ cargo run --example hid_device_selection
+$ cargo run --example prf_replay -- CREDENTIAL_ID FIRST_PRF_INPUT
+$ cargo run --example device_selection_hid
+
+# CTAP2 authenticator management
 $ cargo run --example change_pin_hid
 $ cargo run --example bio_enrollment_hid
 $ cargo run --example authenticator_config_hid
-$ cargo run --example cred_management
+$ cargo run --example cred_management_hid
 ```
 
 ## Contributing
