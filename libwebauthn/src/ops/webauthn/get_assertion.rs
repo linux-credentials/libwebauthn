@@ -31,7 +31,9 @@ use crate::{
 };
 
 use super::timeout::DEFAULT_TIMEOUT;
-use super::{DowngradableRequest, RelyingPartyId, SignRequest, UserVerificationRequirement};
+use super::{
+    DowngradableRequest, RelyingPartyId, RequestOrigin, SignRequest, UserVerificationRequirement,
+};
 
 #[derive(Debug, Default, Clone, Serialize, PartialEq)]
 pub struct PRFValue {
@@ -46,7 +48,9 @@ pub struct GetAssertionRequest {
     pub relying_party_id: String,
     pub challenge: Vec<u8>,
     pub origin: String,
-    pub cross_origin: Option<bool>,
+    /// The top-level origin if the request was made from a cross-origin
+    /// nested browsing context. None for same-origin requests.
+    pub top_origin: Option<String>,
     pub allow: Vec<Ctap2PublicKeyCredentialDescriptor>,
     pub extensions: Option<GetAssertionRequestExtensions>,
     pub user_verification: UserVerificationRequirement,
@@ -59,8 +63,7 @@ impl GetAssertionRequest {
             operation: Operation::GetAssertion,
             challenge: self.challenge.clone(),
             origin: self.origin.clone(),
-            cross_origin: self.cross_origin,
-            top_origin: None,
+            top_origin: self.top_origin.clone(),
         }
     }
 
@@ -111,18 +114,19 @@ impl FromIdlModel<PublicKeyCredentialRequestOptionsJSON, GetAssertionRequestPars
     for GetAssertionRequest
 {
     fn from_idl_model(
-        rpid: &RelyingPartyId,
+        request_origin: &RequestOrigin,
         inner: PublicKeyCredentialRequestOptionsJSON,
     ) -> Result<Self, GetAssertionRequestParsingError> {
+        let effective_rp_id = request_origin.origin.host.as_str();
         if let Some(relying_party_id) = inner.relying_party_id.as_deref() {
             let parsed = RelyingPartyId::try_from(relying_party_id).map_err(|err| {
                 GetAssertionRequestParsingError::InvalidRelyingPartyId(err.to_string())
             })?;
             // TODO(#160): Add support for related origin per WebAuthn Level 3.
-            if parsed.0 != rpid.0 {
+            if parsed.0 != effective_rp_id {
                 return Err(GetAssertionRequestParsingError::MismatchingRelyingPartyId(
                     parsed.0,
-                    rpid.0.to_string(),
+                    effective_rp_id.to_string(),
                 ));
             }
         }
@@ -154,10 +158,10 @@ impl FromIdlModel<PublicKeyCredentialRequestOptionsJSON, GetAssertionRequestPars
             .unwrap_or(DEFAULT_TIMEOUT);
 
         Ok(GetAssertionRequest {
-            relying_party_id: rpid.to_string(),
+            relying_party_id: effective_rp_id.to_string(),
             challenge: inner.challenge.to_vec(),
-            origin: rpid.to_string(),
-            cross_origin: None,
+            origin: request_origin.origin.to_string(),
+            top_origin: request_origin.top_origin.as_ref().map(|o| o.to_string()),
             allow: inner
                 .allow_credentials
                 .into_iter()
@@ -571,8 +575,7 @@ mod tests {
 
     use serde_bytes::ByteBuf;
 
-    use crate::ops::webauthn::GetAssertionRequest;
-    use crate::ops::webauthn::RelyingPartyId;
+    use crate::ops::webauthn::{GetAssertionRequest, RequestOrigin};
     use crate::proto::ctap2::Ctap2PublicKeyCredentialType;
 
     use super::*;
@@ -596,8 +599,8 @@ mod tests {
         GetAssertionRequest {
             relying_party_id: "example.org".to_owned(),
             challenge: base64_url::decode("Y3JlZGVudGlhbHMtZm9yLWxpbnV4L2xpYndlYmF1dGhu").unwrap(),
-            origin: "example.org".to_string(),
-            cross_origin: None,
+            origin: "https://example.org".to_string(),
+            top_origin: None,
             allow: vec![Ctap2PublicKeyCredentialDescriptor {
                 r#type: Ctap2PublicKeyCredentialType::PublicKey,
                 id: ByteBuf::from(base64_url::decode("bXktY3JlZGVudGlhbC1pZA").unwrap()),
@@ -625,27 +628,28 @@ mod tests {
 
     #[test]
     fn test_request_from_json_base() {
-        let rpid = RelyingPartyId::try_from("example.org").unwrap();
+        let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
         let req: GetAssertionRequest =
-            GetAssertionRequest::from_json(&rpid, REQUEST_BASE_JSON).unwrap();
+            GetAssertionRequest::from_json(&request_origin, REQUEST_BASE_JSON).unwrap();
         assert_eq!(req, request_base());
     }
 
     #[test]
     fn test_request_from_json_ignore_missing_rp_id() {
-        let rpid = RelyingPartyId::try_from("example.org").unwrap();
+        let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
         let req_json = json_field_rm(REQUEST_BASE_JSON, "rpId");
 
-        let req: GetAssertionRequest = GetAssertionRequest::from_json(&rpid, &req_json).unwrap();
+        let req: GetAssertionRequest =
+            GetAssertionRequest::from_json(&request_origin, &req_json).unwrap();
         assert_eq!(req, request_base());
     }
 
     #[test]
     fn test_request_from_json_invalid_rp_id() {
-        let rpid = RelyingPartyId::try_from("example.org").unwrap();
+        let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
         let req_json = json_field_add(REQUEST_BASE_JSON, "rpId", r#""example.org.""#);
 
-        let result = GetAssertionRequest::from_json(&rpid, &req_json);
+        let result = GetAssertionRequest::from_json(&request_origin, &req_json);
         assert!(matches!(
             result,
             Err(GetAssertionRequestParsingError::InvalidRelyingPartyId(_))
@@ -654,10 +658,10 @@ mod tests {
 
     #[test]
     fn test_request_from_json_mismatching_rp_id() {
-        let rpid = RelyingPartyId::try_from("example.org").unwrap();
+        let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
         let req_json = json_field_add(REQUEST_BASE_JSON, "rpId", r#""other.example.org""#);
 
-        let result = GetAssertionRequest::from_json(&rpid, &req_json);
+        let result = GetAssertionRequest::from_json(&request_origin, &req_json);
         assert!(matches!(
             result,
             Err(GetAssertionRequestParsingError::MismatchingRelyingPartyId(
@@ -669,10 +673,11 @@ mod tests {
 
     #[test]
     fn test_request_from_json_ignore_missing_allow_credentials() {
-        let rpid = RelyingPartyId::try_from("example.org").unwrap();
+        let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
         let req_json = json_field_rm(REQUEST_BASE_JSON, "allowCredentials");
 
-        let req: GetAssertionRequest = GetAssertionRequest::from_json(&rpid, &req_json).unwrap();
+        let req: GetAssertionRequest =
+            GetAssertionRequest::from_json(&request_origin, &req_json).unwrap();
         assert_eq!(
             req,
             GetAssertionRequest {
@@ -684,10 +689,11 @@ mod tests {
 
     #[test]
     fn test_request_from_json_default_timeout() {
-        let rpid = RelyingPartyId::try_from("example.org").unwrap();
+        let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
         let req_json = json_field_rm(REQUEST_BASE_JSON, "timeout");
 
-        let req: GetAssertionRequest = GetAssertionRequest::from_json(&rpid, &req_json).unwrap();
+        let req: GetAssertionRequest =
+            GetAssertionRequest::from_json(&request_origin, &req_json).unwrap();
         assert_eq!(req.timeout, DEFAULT_TIMEOUT);
     }
 
@@ -696,10 +702,11 @@ mod tests {
         // Test that "extensions": {} results in Some(default) not None
         // This is important for strict portals that distinguish between
         // no extensions key vs empty extensions object
-        let rpid = RelyingPartyId::try_from("example.org").unwrap();
+        let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
         let req_json = json_field_add(REQUEST_BASE_JSON, "extensions", r#"{}"#);
 
-        let req: GetAssertionRequest = GetAssertionRequest::from_json(&rpid, &req_json).unwrap();
+        let req: GetAssertionRequest =
+            GetAssertionRequest::from_json(&request_origin, &req_json).unwrap();
         assert_eq!(
             req.extensions,
             Some(GetAssertionRequestExtensions::default())
@@ -709,14 +716,15 @@ mod tests {
     #[test]
     #[ignore] // FIXME(#134) allow arbitrary size input
     fn test_request_from_json_prf_extension() {
-        let rpid = RelyingPartyId::try_from("example.org").unwrap();
+        let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
         let req_json = json_field_add(
             REQUEST_BASE_JSON,
             "extensions",
             r#"{"prf":{"eval":{"first": "second"}}}"#,
         );
 
-        let req: GetAssertionRequest = GetAssertionRequest::from_json(&rpid, &req_json).unwrap();
+        let req: GetAssertionRequest =
+            GetAssertionRequest::from_json(&request_origin, &req_json).unwrap();
         if let Some(GetAssertionRequestExtensions {
             prf:
                 Some(PrfInput {
@@ -772,7 +780,7 @@ mod tests {
             relying_party_id: "example.org".to_owned(),
             challenge: b"DEADCODE_challenge".to_vec(),
             origin: "example.org".to_string(),
-            cross_origin: None,
+            top_origin: None,
             allow: vec![],
             extensions: None,
             user_verification: UserVerificationRequirement::Preferred,

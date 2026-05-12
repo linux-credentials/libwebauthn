@@ -15,7 +15,9 @@ pub use get_assertion::{
     HMACGetSecretOutput, PRFValue, PrfInput,
 };
 pub use idl::{
-    rpid::RelyingPartyId, AuthenticationExtensionsClientOutputsJSON, AuthenticationResponseJSON,
+    origin::{HostParseError, Origin, OriginHost, OriginParseError, RequestOrigin, Scheme},
+    rpid::RelyingPartyId,
+    AuthenticationExtensionsClientOutputsJSON, AuthenticationResponseJSON,
     AuthenticatorAssertionResponseJSON, AuthenticatorAttestationResponseJSON, Base64UrlString,
     JsonFormat, RegistrationResponseJSON, ResponseSerializationError, WebAuthnIDL,
     WebAuthnIDLResponse,

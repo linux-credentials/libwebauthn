@@ -1,6 +1,7 @@
 mod base64url;
 pub mod create;
 pub mod get;
+pub mod origin;
 pub mod response;
 pub mod rpid;
 
@@ -13,7 +14,7 @@ pub use response::{
     WebAuthnIDLResponse,
 };
 
-use rpid::RelyingPartyId;
+use origin::RequestOrigin;
 
 use serde::de::DeserializeOwned;
 use serde_json;
@@ -32,9 +33,9 @@ where
     /// The JSON model that this IDL can deserialize from.
     type IdlModel: DeserializeOwned;
 
-    fn from_json(rpid: &RelyingPartyId, json: &str) -> Result<Self, Self::Error> {
+    fn from_json(request_origin: &RequestOrigin, json: &str) -> Result<Self, Self::Error> {
         let idl_model: Self::IdlModel = serde_json::from_str(json)?;
-        Self::from_idl_model(rpid, idl_model).map_err(From::from)
+        Self::from_idl_model(request_origin, idl_model).map_err(From::from)
     }
 }
 
@@ -43,5 +44,5 @@ where
     T: DeserializeOwned,
     E: std::error::Error,
 {
-    fn from_idl_model(rpid: &RelyingPartyId, model: T) -> Result<Self, E>;
+    fn from_idl_model(request_origin: &RequestOrigin, model: T) -> Result<Self, E>;
 }
