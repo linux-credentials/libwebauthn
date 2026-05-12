@@ -123,7 +123,7 @@ fn parse_header(bytes: &[u8]) -> Result<Vec<u8>, DafsaFileLoadError> {
         return Err(DafsaFileLoadError::BadMagic);
     }
     let version: u32 = std::str::from_utf8(&version_field[..digit_count])
-        .expect("ascii digits are valid utf-8")
+        .map_err(|_| DafsaFileLoadError::BadMagic)?
         .parse()
         .map_err(|_| DafsaFileLoadError::BadMagic)?;
     if version != 0 {
@@ -257,7 +257,8 @@ mod tests {
         0x0a, // header
         0x05, 0x03, 0x0a, 0x07, 0x87, // root offset list
         0x6b, 0x77, 0x86, // kw, flag 6 = WILDCARD | ICANN
-        0x67, 0x69, 0x74, 0x68, 0x75, 0x62, 0x2e, 0x69, 0x6f, 0x88, // github.io, flag 8 = PRIVATE
+        0x67, 0x69, 0x74, 0x68, 0x75, 0x62, 0x2e, 0x69, 0x6f,
+        0x88, // github.io, flag 8 = PRIVATE
         0x66, 0x6f, 0x6f, 0x2e, 0x6b, 0x77, 0x85, // foo.kw, flag 5 = EXCEPTION | ICANN
         0x63, 0xef, // c + end_char 'o'
         0x02, 0x82, // offsets for "com" and "co.uk" branches
@@ -317,7 +318,10 @@ mod tests {
     #[test]
     fn public_suffix_wildcard_synthesis() {
         let psl = loaded();
-        assert_eq!(psl.public_suffix("anything.kw").as_deref(), Some("anything.kw"));
+        assert_eq!(
+            psl.public_suffix("anything.kw").as_deref(),
+            Some("anything.kw")
+        );
         assert_eq!(psl.public_suffix("a.b.kw").as_deref(), Some("b.kw"));
     }
 
@@ -383,7 +387,10 @@ mod tests {
     fn parse_header_rejects_bad_magic() {
         let mut bad = FIXTURE.to_vec();
         bad[0] = b'X';
-        assert!(matches!(parse_header(&bad), Err(DafsaFileLoadError::BadMagic)));
+        assert!(matches!(
+            parse_header(&bad),
+            Err(DafsaFileLoadError::BadMagic)
+        ));
     }
 
     #[test]
@@ -400,6 +407,9 @@ mod tests {
     fn parse_header_rejects_missing_newline() {
         let mut bad = FIXTURE.to_vec();
         bad[HEADER_LEN - 1] = b' ';
-        assert!(matches!(parse_header(&bad), Err(DafsaFileLoadError::BadMagic)));
+        assert!(matches!(
+            parse_header(&bad),
+            Err(DafsaFileLoadError::BadMagic)
+        ));
     }
 }
