@@ -757,7 +757,7 @@ mod tests {
             relying_party_id: "example.com".into(),
             challenge: vec![0u8; 32],
             origin: "example.com".into(),
-            cross_origin: None,
+            top_origin: None,
             allow: vec![],
             extensions: Some(GetAssertionRequestExtensions {
                 cred_blob: false,
@@ -794,7 +794,7 @@ mod tests {
             relying_party_id: "example.com".into(),
             challenge: vec![0u8; 32],
             origin: "example.com".into(),
-            cross_origin: None,
+            top_origin: None,
             allow: vec![],
             extensions: Some(GetAssertionRequestExtensions {
                 cred_blob: false,

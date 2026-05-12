@@ -2,6 +2,7 @@ pub mod error;
 pub mod pin_uv_auth_token;
 
 use async_trait::async_trait;
+use serde_bytes::ByteBuf;
 use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::fido::FidoProtocol;
@@ -232,11 +233,16 @@ where
             )
         }?;
         let count = response.credentials_count.unwrap_or(1);
+        // Keep the per-response largeBlobKey alongside the assertion so we can
+        // run authenticatorLargeBlobs(get) below without leaking the key into
+        // the WebAuthn-level `Assertion` struct (see PR #198).
+        let mut large_blob_keys: Vec<Option<ByteBuf>> = vec![response.large_blob_key.clone()];
         let mut assertions = vec![response.into_assertion_output(op, self.get_auth_data())];
         for i in 1..count {
             debug!({ i }, "Fetching additional credential");
             // GetNextAssertion doesn't use PinUVAuthToken, so we don't need to check uv_auth_used here
             let response = self.ctap2_get_next_assertion(op.timeout).await?;
+            large_blob_keys.push(response.large_blob_key.clone());
             assertions.push(response.into_assertion_output(op, self.get_auth_data()));
         }
 
@@ -246,8 +252,8 @@ where
         let large_blob_read_requested = op.extensions.as_ref().and_then(|e| e.large_blob.as_ref())
             == Some(&GetAssertionLargeBlobExtension::Read);
         if large_blob_read_requested {
-            for assertion in assertions.iter_mut() {
-                let Some(key_vec) = assertion.large_blob_key.as_ref() else {
+            for (assertion, key_opt) in assertions.iter_mut().zip(large_blob_keys.iter()) {
+                let Some(key_vec) = key_opt.as_ref() else {
                     continue;
                 };
                 let Ok(key) = <[u8; 32]>::try_from(key_vec.as_slice()) else {
