@@ -493,7 +493,6 @@ impl Ctap2GetAssertionResponse {
             user: self.user,
             credentials_count: self.credentials_count,
             user_selected: self.user_selected,
-            large_blob_key: self.large_blob_key.map(ByteBuf::into_vec),
             unsigned_extensions_output,
             enterprise_attestation: self.enterprise_attestation,
             attestation_statement: self.attestation_statement,
@@ -680,9 +679,5 @@ mod tests {
             .expect("largeBlob extension output present");
 
         assert!(large_blob.blob.is_none());
-        assert_eq!(
-            assertion.large_blob_key.as_deref(),
-            Some(&device_returned_key[..])
-        );
     }
 }
