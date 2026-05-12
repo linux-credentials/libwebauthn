@@ -1,17 +1,17 @@
 use std::time::Duration;
 
-use crate::ops::webauthn::{GetAssertionRequest, GetAssertionRequestExtensions};
-use crate::proto::ctap2::Ctap2PublicKeyCredentialDescriptor;
-use crate::transport::hid::get_virtual_device;
-use crate::transport::{Channel, Device};
-use crate::webauthn::WebAuthn;
-use crate::UvUpdate;
-use crate::{
+use libwebauthn::ops::webauthn::{GetAssertionRequest, GetAssertionRequestExtensions};
+use libwebauthn::proto::ctap2::Ctap2PublicKeyCredentialDescriptor;
+use libwebauthn::transport::{Channel, Device};
+use libwebauthn::webauthn::WebAuthn;
+use libwebauthn::UvUpdate;
+use libwebauthn::{
     ops::webauthn::{MakeCredentialRequest, ResidentKeyRequirement, UserVerificationRequirement},
     proto::ctap2::{
         Ctap2CredentialType, Ctap2PublicKeyCredentialRpEntity, Ctap2PublicKeyCredentialUserEntity,
     },
 };
+use libwebauthn_tests::virt::get_virtual_device;
 use rand::{thread_rng, Rng};
 use test_log::test;
 use tokio::sync::broadcast::Receiver;

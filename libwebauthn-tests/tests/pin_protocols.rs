@@ -1,10 +1,10 @@
 use std::time::Duration;
 
-use crate::pin::PinManagement;
-use crate::proto::ctap2::Ctap2PinUvAuthProtocol;
-use crate::transport::hid::get_virtual_device;
-use crate::transport::{Channel, Device};
-use crate::UvUpdate;
+use libwebauthn::pin::PinManagement;
+use libwebauthn::proto::ctap2::Ctap2PinUvAuthProtocol;
+use libwebauthn::transport::{Channel, Device};
+use libwebauthn::UvUpdate;
+use libwebauthn_tests::virt::get_virtual_device;
 use test_log::test;
 use tokio::sync::broadcast::error::TryRecvError;
 use tokio::sync::broadcast::Receiver;

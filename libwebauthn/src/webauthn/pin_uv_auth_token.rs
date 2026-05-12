@@ -30,10 +30,10 @@ pub(crate) enum UsedPinUvAuthToken {
 }
 
 pub(crate) async fn select_uv_proto(
-    #[cfg(test)] override_protocol: Option<Ctap2PinUvAuthProtocol>,
+    #[cfg(feature = "virt")] override_protocol: Option<Ctap2PinUvAuthProtocol>,
     get_info_response: &Ctap2GetInfoResponse,
 ) -> Option<Box<dyn PinUvAuthProtocol>> {
-    #[cfg(test)]
+    #[cfg(feature = "virt")]
     if let Some(proto) = override_protocol {
         return Some(proto.create_protocol_object());
     }
@@ -63,7 +63,7 @@ where
     let mut get_info_response = channel.ctap2_get_info().await?;
     ctap2_request.handle_legacy_preview(&get_info_response);
     let maybe_uv_proto = select_uv_proto(
-        #[cfg(test)]
+        #[cfg(feature = "virt")]
         channel.get_forced_pin_protocol(),
         &get_info_response,
     )
@@ -185,7 +185,7 @@ where
         }
 
         let Some(uv_proto) = select_uv_proto(
-            #[cfg(test)]
+            #[cfg(feature = "virt")]
             channel.get_forced_pin_protocol(),
             get_info_response,
         )

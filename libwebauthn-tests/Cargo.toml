@@ -1,0 +1,30 @@
+[package]
+name = "libwebauthn-tests"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license-file = "../COPYING"
+
+[dependencies]
+libwebauthn = { path = "../libwebauthn", features = ["virt"] }
+
+cosey = "0.3.2"
+ctaphid = { version = "0.3.1", default-features = false }
+ctaphid-dispatch = "0.3"
+delog = { version = "0.1", features = ["std-log"] }
+fido-authenticator = { git = "https://github.com/Nitrokey/fido-authenticator.git", tag = "v0.1.1-nitrokey.27", features = ["dispatch", "log-all"] }
+interchange = "0.3.0"
+littlefs2 = "0.6.0"
+num_enum = "0.7.1"
+rand = "0.8.5"
+tracing = "0.1.29"
+trussed = { version = "0.1", features = ["virt"] }
+trussed-staging = { version = "0.3.0", features = ["chunked", "hkdf", "virt", "fs-info"] }
+
+[dev-dependencies]
+base64-url = "3.0.0"
+serde_bytes = "0.11.5"
+tempfile = "3.21"
+test-log = "0.2"
+tokio = { version = "1.45", features = ["full"] }
+tracing-subscriber = { version = "0.3.3", features = ["env-filter"] }

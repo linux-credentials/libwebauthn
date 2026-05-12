@@ -1,10 +1,10 @@
 use std::time::Duration;
 
-use crate::ops::u2f::{RegisterRequest, SignRequest};
-use crate::transport::hid::get_virtual_device;
-use crate::transport::{Channel, Device};
-use crate::u2f::U2F;
-use crate::UvUpdate;
+use libwebauthn::ops::u2f::{RegisterRequest, SignRequest};
+use libwebauthn::transport::{Channel, Device};
+use libwebauthn::u2f::U2F;
+use libwebauthn::UvUpdate;
+use libwebauthn_tests::virt::get_virtual_device;
 use tokio::sync::broadcast::Receiver;
 
 const TIMEOUT: Duration = Duration::from_secs(10);

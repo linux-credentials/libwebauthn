@@ -5,9 +5,9 @@ pub mod device;
 pub mod framing;
 pub mod init;
 
-#[cfg(test)]
-pub use device::get_virtual_device;
 pub use device::{list_devices, HidDevice};
+#[cfg(feature = "virt")]
+pub use device::{virtual_device, HidPipeBackend};
 
 use super::Transport;
 

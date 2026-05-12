@@ -9,10 +9,10 @@
 // - Robin Krahl <robin@nitrokey.com>
 // - Sosthène Guédon <sosthene@nitrokey.com>
 
-use crate::proto::CtapError;
 use cosey::Bytes;
 use ctaphid_dispatch::{app::Command, Requester};
 use interchange;
+use libwebauthn::proto::CtapError;
 use std::collections::VecDeque;
 use tracing::{error, info};
 

@@ -471,7 +471,7 @@ pub(crate) mod internal {
             }
 
             let Some(uv_proto) = select_uv_proto(
-                #[cfg(test)]
+                #[cfg(feature = "virt")]
                 self.get_forced_pin_protocol(),
                 get_info_response,
             )

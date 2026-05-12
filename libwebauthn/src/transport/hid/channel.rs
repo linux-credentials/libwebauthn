@@ -18,18 +18,18 @@ use tracing::{debug, info, instrument, trace, warn, Level};
 use crate::proto::ctap1::apdu::{ApduRequest, ApduResponse};
 use crate::proto::ctap1::{Ctap1, Ctap1RegisterRequest};
 use crate::proto::ctap2::cbor::{CborRequest, CborResponse};
-#[cfg(test)]
+#[cfg(feature = "virt")]
 use crate::proto::ctap2::Ctap2PinUvAuthProtocol;
 use crate::proto::ctap2::{Ctap2, Ctap2MakeCredentialRequest};
 use crate::proto::CtapError;
 use crate::transport::channel::{AuthTokenData, Channel, ChannelStatus, Ctap2AuthTokenStore};
 use crate::transport::device::SupportedProtocols;
 use crate::transport::error::TransportError;
+#[cfg(feature = "virt")]
+use crate::transport::hid::device::HidPipeBackend;
 use crate::transport::hid::framing::{
     HidCommand, HidMessage, HidMessageParser, HidMessageParserState,
 };
-#[cfg(test)]
-use crate::transport::virt;
 use crate::webauthn::error::{Error, PlatformError};
 use crate::UvUpdate;
 
@@ -51,8 +51,8 @@ const WINK_MIN_WAIT: Duration = Duration::from_secs(2);
 pub type CancelHidOperation = ();
 enum OpenHidDevice {
     HidApiDevice(Arc<Mutex<(HidApiDevice, mpsc::Receiver<CancelHidOperation>)>>),
-    #[cfg(test)]
-    VirtualDevice(Arc<Mutex<virt::VirtHidDevice>>),
+    #[cfg(feature = "virt")]
+    VirtualDevice(Arc<Mutex<dyn HidPipeBackend>>),
 }
 
 #[derive(Debug, Clone)]
@@ -74,7 +74,7 @@ pub struct HidChannel<'d> {
     auth_token_data: Option<AuthTokenData>,
     ux_update_sender: broadcast::Sender<UvUpdate>,
     handle: HidChannelHandle,
-    #[cfg(test)]
+    #[cfg(feature = "virt")]
     pin_protocol_override: Option<Ctap2PinUvAuthProtocol>,
 }
 
@@ -87,21 +87,21 @@ impl<'d> HidChannel<'d> {
         let mut channel = Self {
             status: ChannelStatus::Ready,
             device,
-            open_device: match device.backend {
+            open_device: match &device.backend {
                 HidBackendDevice::HidApiDevice(_) => {
                     let hidapi_device = Self::hid_open(device)?;
                     OpenHidDevice::HidApiDevice(Arc::new(Mutex::new((hidapi_device, handle_rx))))
                 }
-                #[cfg(test)]
-                HidBackendDevice::VirtualDevice => {
-                    OpenHidDevice::VirtualDevice(Arc::new(Mutex::new(virt::VirtHidDevice::new())))
+                #[cfg(feature = "virt")]
+                HidBackendDevice::VirtualDevice(backend) => {
+                    OpenHidDevice::VirtualDevice(backend.clone())
                 }
             },
             init: InitResponse::default(),
             auth_token_data: None,
             ux_update_sender,
             handle,
-            #[cfg(test)]
+            #[cfg(feature = "virt")]
             pin_protocol_override: None,
         };
         channel.init = channel.init(INIT_TIMEOUT).await?;
@@ -232,8 +232,8 @@ impl<'d> HidChannel<'d> {
             HidBackendDevice::HidApiDevice(device) => Ok(device
                 .open_device(&hidapi)
                 .or(Err(Error::Transport(TransportError::ConnectionFailed)))?),
-            #[cfg(test)]
-            HidBackendDevice::VirtualDevice => unreachable!(),
+            #[cfg(feature = "virt")]
+            HidBackendDevice::VirtualDevice(_) => unreachable!(),
         }
     }
 
@@ -305,13 +305,13 @@ impl<'d> HidChannel<'d> {
                 }
                 response
             }
-            #[cfg(test)]
-            OpenHidDevice::VirtualDevice(virt_device) => {
-                let Ok(mut guard) = virt_device.lock() else {
+            #[cfg(feature = "virt")]
+            OpenHidDevice::VirtualDevice(backend) => {
+                let Ok(mut guard) = backend.lock() else {
                     panic!("Poisoned lock on Virtual HID device");
                 };
-                let device = guard.deref_mut();
-                device.virt_send(msg)
+                guard.send(msg);
+                Ok(())
             }
         }
     }
@@ -366,13 +366,12 @@ impl<'d> HidChannel<'d> {
                         Error::Transport(TransportError::ConnectionLost)
                     })?
                 }
-                #[cfg(test)]
-                OpenHidDevice::VirtualDevice(virt_device) => {
-                    let Ok(mut guard) = virt_device.lock() else {
+                #[cfg(feature = "virt")]
+                OpenHidDevice::VirtualDevice(backend) => {
+                    let Ok(mut guard) = backend.lock() else {
                         panic!("Poisoned lock on Virtual HID device");
                     };
-                    let device = guard.deref_mut();
-                    device.virt_recv()
+                    Ok(guard.recv())
                 }
             };
 
@@ -430,8 +429,8 @@ impl<'d> HidChannel<'d> {
 impl Drop for HidChannel<'_> {
     #[instrument(level = Level::DEBUG, skip_all, fields(dev = %self.device))]
     fn drop(&mut self) {
-        #[cfg(test)]
-        if matches!(self.device.backend, HidBackendDevice::VirtualDevice) {
+        #[cfg(feature = "virt")]
+        if matches!(self.device.backend, HidBackendDevice::VirtualDevice(_)) {
             return;
         }
 
@@ -523,12 +522,12 @@ impl Channel for HidChannel<'_> {
         &self.ux_update_sender
     }
 
-    #[cfg(test)]
+    #[cfg(feature = "virt")]
     fn set_forced_pin_protocol(&mut self, protocols: Ctap2PinUvAuthProtocol) {
         self.pin_protocol_override = Some(protocols);
     }
 
-    #[cfg(test)]
+    #[cfg(feature = "virt")]
     fn get_forced_pin_protocol(&mut self) -> Option<Ctap2PinUvAuthProtocol> {
         self.pin_protocol_override
     }

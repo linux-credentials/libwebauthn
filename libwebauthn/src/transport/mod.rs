@@ -10,10 +10,6 @@ pub mod hid;
 pub mod mock;
 #[cfg(feature = "nfc")]
 pub mod nfc;
-#[cfg(test)]
-/// Fully fledged virtual device based on trussed
-/// for end2end tests
-pub mod virt;
 
 mod channel;
 #[allow(clippy::module_inception)]
