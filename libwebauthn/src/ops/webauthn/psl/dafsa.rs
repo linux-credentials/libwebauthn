@@ -3,8 +3,18 @@
 //! Format reference: <https://github.com/rockdaboot/libpsl/blob/master/src/psl-make-dafsa>
 //! (writer) and <https://github.com/rockdaboot/libpsl/blob/master/src/lookup_string_in_fixed_set.c>
 //! (reader). The on-disk file is a 16-byte ASCII header (`.DAFSA@PSL_<ver>` padded
-//! to 16 bytes with spaces and terminated by LF) followed by a byte-coded DAFSA.
-//! Only version 0 exists today.
+//! to 16 bytes with spaces and terminated by LF) followed by a byte-coded DAFSA,
+//! optionally with a trailing `0x01` byte in UTF-8 mode. Only version 0 exists today.
+//!
+//! Deviations from libpsl `psl_is_public_suffix`:
+//!
+//! * No prevailing `*` rule for unknown single-label TLDs. libpsl treats any
+//!   single-label host as a public suffix; this reader returns `None`, so
+//!   `localhost` can be used as a relying-party id against itself.
+//! * Multibyte (UTF-8) keys are not supported. WebAuthn rp.ids and origin
+//!   hosts are always IDN-ASCII (punycode) by the time they reach the PSL,
+//!   and the DAFSA stores IDN rules in punycode form regardless of its
+//!   internal encoding mode, so ASCII queries match correctly.
 
 use std::path::{Path, PathBuf};
 
@@ -180,6 +190,7 @@ fn lookup(graph: &[u8], key: &[u8]) -> Option<u8> {
         }
         offset += 1;
         key_pos += 1;
+        // Dive into the child node.
         pos = offset;
     }
     None
@@ -328,14 +339,15 @@ mod tests {
     #[test]
     fn public_suffix_exception_overrides_wildcard() {
         let psl = loaded();
-        // foo.kw has the exception flag, so it is NOT a public suffix even
-        // though *.kw would otherwise make it one. The longest suffix that
-        // applies is `kw` itself (which is a suffix because *.kw implicitly
-        // makes the parent a public suffix per the libpsl/PSL algorithm).
+        // foo.kw has the EXCEPTION flag so direct lookup returns "not a
+        // suffix"; the search then strips a label to "kw", which is in the
+        // DAFSA with the WILDCARD flag (no EXCEPTION), so kw itself is the
+        // public suffix.
         assert_eq!(psl.public_suffix("foo.kw").as_deref(), Some("kw"));
-        // The exception rule matches sub.foo.kw too (its rightmost two
-        // labels are foo.kw), so the prevailing rule is the exception with
-        // its leftmost label stripped, giving "kw".
+        // For sub.foo.kw: exact lookup misses; parent foo.kw is found but
+        // has no WILDCARD bit, so the wildcard-fallback rejects it; the
+        // search then strips down to foo.kw (still excepted) and finally to
+        // kw (wildcard, suffix).
         assert_eq!(psl.public_suffix("sub.foo.kw").as_deref(), Some("kw"));
     }
 
