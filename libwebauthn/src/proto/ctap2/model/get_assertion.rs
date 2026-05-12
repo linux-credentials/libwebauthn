@@ -493,7 +493,6 @@ impl Ctap2GetAssertionResponse {
             user: self.user,
             credentials_count: self.credentials_count,
             user_selected: self.user_selected,
-            large_blob_key: self.large_blob_key.map(ByteBuf::into_vec),
             unsigned_extensions_output,
             enterprise_attestation: self.enterprise_attestation,
             attestation_statement: self.attestation_statement,
@@ -521,7 +520,7 @@ impl Ctap2GetAssertionResponseExtensions {
     pub(crate) fn to_unsigned_extensions(
         &self,
         request: &GetAssertionRequest,
-        response: &Ctap2GetAssertionResponse,
+        _response: &Ctap2GetAssertionResponse,
         auth_data: Option<&AuthTokenData>,
     ) -> GetAssertionResponseUnsignedExtensions {
         let decrypted_hmac = self.hmac_secret.as_ref().and_then(|x| {
@@ -548,19 +547,14 @@ impl Ctap2GetAssertionResponseExtensions {
                 })
         });
 
-        // LargeBlobs was requested
+        // `blob` stays `None` until `authenticatorLargeBlobs` is wired up; returning
+        // the raw `largeBlobKey` here would disclose the per-credential AES key to
+        // the RP instead of the decrypted blob payload.
         let large_blob = request
             .extensions
             .as_ref()
             .and_then(|ext| ext.large_blob.as_ref())
-            .map(|_| GetAssertionLargeBlobExtensionOutput {
-                blob: response
-                    .large_blob_key
-                    .as_ref()
-                    .map(|x| x.clone().into_vec()),
-                // Not yet supported
-                // written: None,
-            });
+            .map(|_| GetAssertionLargeBlobExtensionOutput { blob: None });
 
         GetAssertionResponseUnsignedExtensions {
             hmac_get_secret: None,
@@ -657,5 +651,33 @@ mod tests {
 
         let assertion = response.into_assertion_output(&request, None);
         assert_eq!(assertion.credential_id, None);
+    }
+
+    #[test]
+    fn large_blob_read_does_not_leak_key_into_webauthn_response() {
+        let cred = make_credential(b"cred-1");
+        let device_returned_key = vec![0xAAu8; 32];
+        let mut response = make_response(Some(cred.clone()));
+        response.large_blob_key = Some(ByteBuf::from(device_returned_key.clone()));
+        response.authenticator_data.extensions = Some(Ctap2GetAssertionResponseExtensions {
+            cred_blob: None,
+            hmac_secret: None,
+        });
+
+        let mut request = make_request(vec![cred]);
+        request.extensions = Some(GetAssertionRequestExtensions {
+            cred_blob: false,
+            prf: None,
+            large_blob: Some(GetAssertionLargeBlobExtension::Read),
+        });
+
+        let assertion = response.into_assertion_output(&request, None);
+        let large_blob = assertion
+            .unsigned_extensions_output
+            .expect("unsigned extensions present")
+            .large_blob
+            .expect("largeBlob extension output present");
+
+        assert!(large_blob.blob.is_none());
     }
 }
