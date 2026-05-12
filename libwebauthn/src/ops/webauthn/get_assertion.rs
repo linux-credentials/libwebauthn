@@ -778,6 +778,17 @@ mod tests {
     }
 
     #[test]
+    fn test_prf_input_short_via_json() {
+        // Regression test for #209: a sub-32-byte salt encoded in the JSON IDL
+        // must round-trip through GetAssertionRequest::from_json into a
+        // PrfInputValue with the expected bytes.
+        let prf = parse_prf(r#"{"prf":{"eval":{"first":"aGk"}}}"#); // base64url "aGk" -> b"hi"
+        let eval = prf.eval.expect("eval");
+        assert_eq!(eval.first, b"hi");
+        assert!(eval.second.is_none());
+    }
+
+    #[test]
     fn test_prf_input_empty_allowed() {
         // §10.1.4 says "of any length" with no lower bound; empty must parse.
         let prf = parse_prf(r#"{"prf":{"eval":{"first":""}}}"#);
