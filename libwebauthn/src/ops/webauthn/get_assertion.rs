@@ -37,8 +37,20 @@ use super::{
     DowngradableRequest, RelyingPartyId, RequestOrigin, SignRequest, UserVerificationRequirement,
 };
 
-#[derive(Debug, Default, Clone, Serialize, PartialEq)]
-pub struct PRFValue {
+/// PRF extension input salts. Per W3C WebAuthn L3 §10.1.4, these are
+/// `BufferSource`s "of any length"; the client hashes them via
+/// `SHA-256(UTF8Encode("WebAuthn PRF") || 0x00 || input)` before feeding the
+/// resulting 32 bytes to CTAP2 hmac-secret.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct PrfInputValue {
+    pub first: Vec<u8>,
+    pub second: Option<Vec<u8>>,
+}
+
+/// PRF extension output values. Per CTAP2.1 §6.5.6 hmac-secret, each slot is
+/// exactly 32 bytes.
+#[derive(Debug, Default, Clone, Serialize, PartialEq, Eq)]
+pub struct PrfOutputValue {
     #[serde(with = "serde_bytes")]
     pub first: [u8; 32],
     #[serde(skip_serializing_if = "Option::is_none", with = "serde_bytes")]
@@ -189,64 +201,36 @@ pub enum GetAssertionHmacOrPrfInput {
     Prf(PrfInput),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrfInput {
-    pub eval: Option<PRFValue>,
-    pub eval_by_credential: HashMap<String, PRFValue>,
+    pub eval: Option<PrfInputValue>,
+    pub eval_by_credential: HashMap<String, PrfInputValue>,
 }
 
 impl TryFrom<PrfInputJson> for PrfInput {
     type Error = GetAssertionRequestParsingError;
 
     fn try_from(value: PrfInputJson) -> Result<Self, Self::Error> {
-        let eval = match value.eval {
-            Some(value) => Some(PRFValue {
-                first: value.first.as_slice().try_into().map_err(|_| {
-                    GetAssertionRequestParsingError::UnexpectedLengthError(
-                        "extensions.prf.eval.first".to_string(),
-                        value.first.as_slice().len(),
-                    )
-                })?,
-                second: match value.second {
-                    Some(s) => Some(s.as_slice().try_into().map_err(|_| {
-                        GetAssertionRequestParsingError::UnexpectedLengthError(
-                            "extensions.prf.eval.second".to_string(),
-                            s.as_slice().len(),
-                        )
-                    })?),
-                    None => None,
-                },
-            }),
-            None => None,
-        };
-        let eval_by_credential = match value.eval_by_credential {
-            Some(map) => map
-                .into_iter()
-                .map(|(k, v)| {
-                    Ok((
-                        k,
-                        PRFValue {
-                            first: v.first.as_slice().try_into().map_err(|_| {
-                                GetAssertionRequestParsingError::UnexpectedLengthError(
-                                    "extensions.prf.eval_by_credential[i].first".to_string(),
-                                    v.first.as_slice().len(),
-                                )
-                            })?,
-                            second: match v.second {
-                                Some(s) => Some(s.as_slice().try_into().map_err(|_| {
-                                    GetAssertionRequestParsingError::UnexpectedLengthError(
-                                        "extensions.prf.eval_by_credential[i].second".to_string(),
-                                        s.as_slice().len(),
-                                    )
-                                })?),
-                                None => None,
+        let eval = value.eval.map(|v| PrfInputValue {
+            first: v.first.into(),
+            second: v.second.map(Into::into),
+        });
+        let eval_by_credential = value
+            .eval_by_credential
+            .map(|map| {
+                map.into_iter()
+                    .map(|(k, v)| {
+                        (
+                            k,
+                            PrfInputValue {
+                                first: v.first.into(),
+                                second: v.second.map(Into::into),
                             },
-                        },
-                    ))
-                })
-                .collect::<Result<HashMap<String, PRFValue>, GetAssertionRequestParsingError>>()?,
-            None => HashMap::new(),
-        };
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
 
         Ok(PrfInput {
             eval,
@@ -258,7 +242,7 @@ impl TryFrom<PrfInputJson> for PrfInput {
 #[derive(Debug, Default, Clone, Serialize)]
 pub struct GetAssertionPrfOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub results: Option<PRFValue>,
+    pub results: Option<PrfOutputValue>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -758,36 +742,61 @@ mod tests {
         );
     }
 
-    #[test]
-    #[ignore] // FIXME(#134) allow arbitrary size input
-    fn test_request_from_json_prf_extension() {
+    fn parse_prf(extensions_json: &str) -> PrfInput {
         let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
-        let req_json = json_field_add(
-            REQUEST_BASE_JSON,
-            "extensions",
-            r#"{"prf":{"eval":{"first": "second"}}}"#,
-        );
+        let req_json = json_field_add(REQUEST_BASE_JSON, "extensions", extensions_json);
+        let req = GetAssertionRequest::from_json(&request_origin, &MockPublicSuffixList, &req_json)
+            .expect("request should parse");
+        req.extensions
+            .expect("extensions")
+            .prf
+            .expect("prf extension")
+    }
 
-        let req: GetAssertionRequest =
-            GetAssertionRequest::from_json(&request_origin, &MockPublicSuffixList, &req_json)
-                .unwrap();
-        if let Some(GetAssertionRequestExtensions {
-            prf:
-                Some(PrfInput {
-                    eval: Some(ref prf_value),
-                    ..
-                }),
-            ..
-        }) = &req.extensions
-        {
-            assert_eq!(&prf_value.first[..], b"first");
-            assert_eq!(
-                prf_value.second.as_ref().map(|s| &s[..]),
-                Some(&b"second"[..])
-            );
-        } else {
-            panic!("Expected PRF extension with correct values");
+    #[test]
+    fn test_request_from_json_prf_extension() {
+        // Non-32-byte inputs must now parse (W3C WebAuthn L3 §10.1.4). "AQID"
+        // decodes to 0x010203, "BAUG" to 0x040506.
+        let prf = parse_prf(r#"{"prf":{"eval":{"first":"AQID","second":"BAUG"}}}"#);
+        let eval = prf.eval.expect("eval");
+        assert_eq!(eval.first, vec![0x01, 0x02, 0x03]);
+        assert_eq!(eval.second.as_deref(), Some(&[0x04u8, 0x05, 0x06][..]));
+    }
+
+    #[test]
+    fn test_prf_input_variable_length() {
+        // W3C WebAuthn L3 §10.1.4: PRF inputs are BufferSources of any length.
+        for len in [1usize, 16, 31, 33, 64, 256] {
+            let bytes = vec![0xABu8; len];
+            let b64 = base64_url::encode(&bytes);
+            let prf = parse_prf(&format!(r#"{{"prf":{{"eval":{{"first":"{b64}"}}}}}}"#));
+            let eval = prf.eval.unwrap();
+            assert_eq!(eval.first.len(), len, "len {len}");
+            assert_eq!(eval.first, bytes, "len {len}");
+            assert!(eval.second.is_none());
         }
+    }
+
+    #[test]
+    fn test_prf_input_empty_allowed() {
+        // §10.1.4 says "of any length" with no lower bound; empty must parse.
+        let prf = parse_prf(r#"{"prf":{"eval":{"first":""}}}"#);
+        let eval = prf.eval.unwrap();
+        assert!(eval.first.is_empty());
+        assert!(eval.second.is_none());
+    }
+
+    #[test]
+    fn test_prf_eval_by_credential_variable_length() {
+        // NOTE: the IDL field is currently deserialized as `eval_by_credential`
+        // rather than the spec name `evalByCredential` — separate concern from
+        // #209. Use the field name the deserializer accepts.
+        let prf = parse_prf(
+            r#"{"prf":{"eval_by_credential":{"Y3JlZDE":{"first":"AQ","second":"AgIC"}}}}"#,
+        );
+        let v = prf.eval_by_credential.get("Y3JlZDE").expect("entry");
+        assert_eq!(v.first, vec![0x01]);
+        assert_eq!(v.second.as_deref(), Some(&[0x02u8, 0x02, 0x02][..]));
     }
 
     // Tests for response JSON serialization
@@ -904,7 +913,7 @@ mod tests {
             hmac_get_secret: None,
             large_blob: None,
             prf: Some(GetAssertionPrfOutput {
-                results: Some(PRFValue {
+                results: Some(PrfOutputValue {
                     first: [0x01u8; 32],
                     second: None,
                 }),

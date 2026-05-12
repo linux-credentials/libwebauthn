@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::convert::TryInto;
 use std::error::Error;
 use std::time::Duration;
 
@@ -8,7 +7,7 @@ use rand::{thread_rng, Rng};
 use serde_bytes::ByteBuf;
 
 use libwebauthn::ops::webauthn::{
-    GetAssertionRequest, GetAssertionRequestExtensions, PRFValue, PrfInput,
+    GetAssertionRequest, GetAssertionRequestExtensions, PrfInput, PrfInputValue,
     UserVerificationRequirement,
 };
 use libwebauthn::proto::ctap2::{Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialType};
@@ -30,9 +29,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         println!("Usage: cargo run --example prf_replay -- CREDENTIAL_ID FIRST_PRF_INPUT");
         println!();
         println!("CREDENTIAL_ID:   Credential ID to be used to sign against, as a hexstring (like 5830c80ae90f7865c631626573f1fdc7..)");
-        println!(
-            "FIRST_PRF_INPUT: PRF input to be used as a hexstring. Needs to be 32 bytes long!"
-        );
+        println!("FIRST_PRF_INPUT: PRF input as a hexstring (any length, per WebAuthn L3 §10.1.4)");
         println!();
         println!("How to use:");
         println!("1. Go to https://demo.yubico.com/webauthn-developers");
@@ -44,10 +41,8 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
     }
     let credential_id =
         hex::decode(argv[1].clone()).expect("CREDENTIAL_ID is not a valid hex code");
-    let first_prf_input = hex::decode(argv[2].clone())
-        .expect("FIRST_PRF_INPUT is not a valid hex code")
-        .try_into()
-        .expect("FIRST_PRF_INPUT is not exactly 32 bytes long");
+    let first_prf_input =
+        hex::decode(argv[2].clone()).expect("FIRST_PRF_INPUT is not a valid hex code");
 
     let devices = list_devices().await.unwrap();
     println!("Devices found: {:?}", devices);
@@ -69,8 +64,8 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         };
 
         let prf = PrfInput {
-            eval: Some(PRFValue {
-                first: first_prf_input,
+            eval: Some(PrfInputValue {
+                first: first_prf_input.clone(),
                 second: None,
             }),
             eval_by_credential: HashMap::new(),

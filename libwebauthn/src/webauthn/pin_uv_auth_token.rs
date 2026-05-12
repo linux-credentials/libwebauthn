@@ -550,7 +550,7 @@ mod test {
 
     use crate::{
         ops::webauthn::{
-            GetAssertionRequest, GetAssertionRequestExtensions, PRFValue, PrfInput,
+            GetAssertionRequest, GetAssertionRequestExtensions, PrfInput, PrfInputValue,
             UserVerificationRequirement,
         },
         pin::{pin_hash, PinNotSetReason, PinUvAuthProtocol, PinUvAuthProtocolOne},
@@ -973,8 +973,8 @@ mod test {
                 UserVerificationRequirement::Discouraged,
                 Some(GetAssertionRequestExtensions {
                     prf: Some(PrfInput {
-                        eval: Some(PRFValue {
-                            first: [0; 32],
+                        eval: Some(PrfInputValue {
+                            first: vec![0; 32],
                             second: None,
                         }),
                         eval_by_credential: HashMap::new(),
@@ -1019,8 +1019,8 @@ mod test {
                 UserVerificationRequirement::Preferred,
                 Some(GetAssertionRequestExtensions {
                     prf: Some(PrfInput {
-                        eval: Some(PRFValue {
-                            first: [0; 32],
+                        eval: Some(PrfInputValue {
+                            first: vec![0; 32],
                             second: None,
                         }),
                         eval_by_credential: HashMap::new(),
@@ -1091,8 +1091,8 @@ mod test {
         for (info_options, uv_requirement) in testcases {
             let extensions = Some(GetAssertionRequestExtensions {
                 prf: Some(PrfInput {
-                    eval: Some(PRFValue {
-                        first: [0; 32],
+                    eval: Some(PrfInputValue {
+                        first: vec![0; 32],
                         second: None,
                     }),
                     eval_by_credential: HashMap::new(),
@@ -1162,8 +1162,8 @@ mod test {
         for (info_options, uv_requirement) in testcases {
             let extensions = Some(GetAssertionRequestExtensions {
                 prf: Some(PrfInput {
-                    eval: Some(PRFValue {
-                        first: [0; 32],
+                    eval: Some(PrfInputValue {
+                        first: vec![0; 32],
                         second: None,
                     }),
                     eval_by_credential: HashMap::new(),
@@ -1282,8 +1282,8 @@ mod test {
         for (info_options, uv_requirement) in testcases {
             let extensions = Some(GetAssertionRequestExtensions {
                 prf: Some(PrfInput {
-                    eval: Some(PRFValue {
-                        first: [0; 32],
+                    eval: Some(PrfInputValue {
+                        first: vec![0; 32],
                         second: None,
                     }),
                     eval_by_credential: HashMap::new(),

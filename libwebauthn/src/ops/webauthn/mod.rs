@@ -13,7 +13,7 @@ pub use get_assertion::{
     GetAssertionLargeBlobExtension, GetAssertionLargeBlobExtensionOutput, GetAssertionPrfOutput,
     GetAssertionRequest, GetAssertionRequestExtensions, GetAssertionResponse,
     GetAssertionResponseExtensions, GetAssertionResponseUnsignedExtensions, HMACGetSecretInput,
-    HMACGetSecretOutput, PRFValue, PrfInput,
+    HMACGetSecretOutput, PrfInput, PrfInputValue, PrfOutputValue,
 };
 pub use idl::{
     origin::{HostParseError, Origin, OriginHost, OriginParseError, RequestOrigin, Scheme},

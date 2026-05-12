@@ -8,7 +8,7 @@ use rand::{thread_rng, Rng};
 
 use libwebauthn::ops::webauthn::{
     GetAssertionRequest, GetAssertionRequestExtensions, MakeCredentialPrfInput,
-    MakeCredentialRequest, MakeCredentialsRequestExtensions, PRFValue, PrfInput,
+    MakeCredentialRequest, MakeCredentialsRequestExtensions, PrfInput, PrfInputValue,
     ResidentKeyRequirement, UserVerificationRequirement,
 };
 use libwebauthn::proto::ctap2::{
@@ -77,8 +77,8 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         let mut eval_by_credential = HashMap::new();
         eval_by_credential.insert(
             base64_url::encode(&credential.id),
-            PRFValue {
-                first: [1; 32],
+            PrfInputValue {
+                first: vec![1; 32],
                 second: None,
             },
         );
@@ -98,8 +98,8 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         let mut eval_by_credential = HashMap::new();
         eval_by_credential.insert(
             base64_url::encode(&credential.id),
-            PRFValue {
-                first: [1; 32],
+            PrfInputValue {
+                first: vec![1; 32],
                 second: None,
             },
         );
@@ -108,8 +108,8 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             &credential,
             &challenge,
             PrfInput {
-                eval: Some(PRFValue {
-                    first: [2; 32],
+                eval: Some(PrfInputValue {
+                    first: vec![2; 32],
                     second: None,
                 }),
                 eval_by_credential,
@@ -124,8 +124,8 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             &credential,
             &challenge,
             PrfInput {
-                eval: Some(PRFValue {
-                    first: [1; 32],
+                eval: Some(PrfInputValue {
+                    first: vec![1; 32],
                     second: None,
                 }),
                 eval_by_credential: HashMap::new(),
@@ -138,29 +138,29 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         let mut eval_by_credential = HashMap::new();
         eval_by_credential.insert(
             base64_url::encode(&[5; 54]),
-            PRFValue {
-                first: [5; 32],
+            PrfInputValue {
+                first: vec![5; 32],
                 second: None,
             },
         );
         eval_by_credential.insert(
             base64_url::encode(&[7; 54]),
-            PRFValue {
-                first: [7; 32],
-                second: Some([7; 32]),
+            PrfInputValue {
+                first: vec![7; 32],
+                second: Some(vec![7; 32]),
             },
         );
         eval_by_credential.insert(
             base64_url::encode(&[8; 54]),
-            PRFValue {
-                first: [8; 32],
-                second: Some([8; 32]),
+            PrfInputValue {
+                first: vec![8; 32],
+                second: Some(vec![8; 32]),
             },
         );
         eval_by_credential.insert(
             base64_url::encode(&credential.id),
-            PRFValue {
-                first: [1; 32],
+            PrfInputValue {
+                first: vec![1; 32],
                 second: None,
             },
         );
@@ -169,8 +169,8 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             &credential,
             &challenge,
             PrfInput {
-                eval: Some(PRFValue {
-                    first: [2; 32],
+                eval: Some(PrfInputValue {
+                    first: vec![2; 32],
                     second: None,
                 }),
                 eval_by_credential,
@@ -183,23 +183,23 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         let mut eval_by_credential = HashMap::new();
         eval_by_credential.insert(
             base64_url::encode(&[5; 54]),
-            PRFValue {
-                first: [5; 32],
+            PrfInputValue {
+                first: vec![5; 32],
                 second: None,
             },
         );
         eval_by_credential.insert(
             base64_url::encode(&[7; 54]),
-            PRFValue {
-                first: [7; 32],
-                second: Some([7; 32]),
+            PrfInputValue {
+                first: vec![7; 32],
+                second: Some(vec![7; 32]),
             },
         );
         eval_by_credential.insert(
             base64_url::encode(&[8; 54]),
-            PRFValue {
-                first: [8; 32],
-                second: Some([8; 32]),
+            PrfInputValue {
+                first: vec![8; 32],
+                second: Some(vec![8; 32]),
             },
         );
         run_success_test(
@@ -207,8 +207,8 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             &credential,
             &challenge,
             PrfInput {
-                eval: Some(PRFValue {
-                    first: [1; 32],
+                eval: Some(PrfInputValue {
+                    first: vec![1; 32],
                     second: None,
                 }),
                 eval_by_credential,
@@ -221,23 +221,23 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         let mut eval_by_credential = HashMap::new();
         eval_by_credential.insert(
             base64_url::encode(&[5; 54]),
-            PRFValue {
-                first: [5; 32],
+            PrfInputValue {
+                first: vec![5; 32],
                 second: None,
             },
         );
         eval_by_credential.insert(
             base64_url::encode(&[7; 54]),
-            PRFValue {
-                first: [7; 32],
-                second: Some([7; 32]),
+            PrfInputValue {
+                first: vec![7; 32],
+                second: Some(vec![7; 32]),
             },
         );
         eval_by_credential.insert(
             base64_url::encode(&[8; 54]),
-            PRFValue {
-                first: [8; 32],
-                second: Some([8; 32]),
+            PrfInputValue {
+                first: vec![8; 32],
+                second: Some(vec![8; 32]),
             },
         );
         run_success_test(
@@ -256,8 +256,8 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         let mut eval_by_credential = HashMap::new();
         eval_by_credential.insert(
             String::from("ÄöoLfwekldß^"),
-            PRFValue {
-                first: [1; 32],
+            PrfInputValue {
+                first: vec![1; 32],
                 second: None,
             },
         );
@@ -266,8 +266,8 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             Some(&credential),
             &challenge,
             PrfInput {
-                eval: Some(PRFValue {
-                    first: [2; 32],
+                eval: Some(PrfInputValue {
+                    first: vec![2; 32],
                     second: None,
                 }),
                 eval_by_credential,
@@ -281,8 +281,8 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         let mut eval_by_credential = HashMap::new();
         eval_by_credential.insert(
             String::new(),
-            PRFValue {
-                first: [1; 32],
+            PrfInputValue {
+                first: vec![1; 32],
                 second: None,
             },
         );
@@ -303,8 +303,8 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         let mut eval_by_credential = HashMap::new();
         eval_by_credential.insert(
             String::new(),
-            PRFValue {
-                first: [1; 32],
+            PrfInputValue {
+                first: vec![1; 32],
                 second: None,
             },
         );

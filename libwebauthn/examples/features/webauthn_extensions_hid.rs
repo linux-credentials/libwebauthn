@@ -7,7 +7,7 @@ use rand::{thread_rng, Rng};
 use libwebauthn::ops::webauthn::{
     CredentialProtectionExtension, CredentialProtectionPolicy, GetAssertionRequest,
     GetAssertionRequestExtensions, MakeCredentialRequest, MakeCredentialsRequestExtensions,
-    PRFValue, PrfInput, ResidentKeyRequirement, UserVerificationRequirement,
+    PrfInput, PrfInputValue, ResidentKeyRequirement, UserVerificationRequirement,
 };
 use libwebauthn::proto::ctap2::{
     Ctap2CredentialType, Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialRpEntity,
@@ -87,8 +87,8 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             extensions: Some(GetAssertionRequestExtensions {
                 cred_blob: true,
                 prf: Some(PrfInput {
-                    eval: Some(PRFValue {
-                        first: [1; 32],
+                    eval: Some(PrfInputValue {
+                        first: vec![1; 32],
                         second: None,
                     }),
                     eval_by_credential: std::collections::HashMap::new(),
