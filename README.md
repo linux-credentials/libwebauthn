@@ -40,7 +40,7 @@ _Looking for the D-Bus API proposal?_ Check out [credentialsd][credentialsd].
 
 ## Runtime requirements
 
-Validating the relying party ID against the calling origin requires the [Public Suffix List][psl]. The built-in loader reads it from the standard system path. The `publicsuffix` package on Debian/Ubuntu or `publicsuffix-list` on Fedora and Arch installs it there, but these are not always present on minimal installs. Install explicitly if needed. Callers wiring their own list don't need a system package.
+Validating the relying party ID against the calling origin requires the [Public Suffix List][psl]. The built-in `SystemPublicSuffixList::auto()` loader reads it from the standard system path, probing the binary `.dafsa` format first and falling back to the text `.dat` format. The `publicsuffix` package on Debian/Ubuntu ships both. On Fedora the binary `.dafsa` file is shipped by `publicsuffix-list-dafsa` (a transitive dependency of `libpsl`, so usually already installed), while the text `.dat` file requires the optional `publicsuffix-list` package. On Arch only the text `.dat` format is packaged. Callers wiring their own list don't need a system package.
 
 ## Transports
 
