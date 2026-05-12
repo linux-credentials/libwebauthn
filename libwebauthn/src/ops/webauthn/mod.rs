@@ -31,7 +31,11 @@ pub use make_credential::{
     MakeCredentialsResponseExtensions, MakeCredentialsResponseUnsignedExtensions,
     ResidentKeyRequirement,
 };
-pub use psl::{DatFileLoadError, DatFilePublicSuffixList, PublicSuffixList, SYSTEM_PSL_PATH};
+pub use psl::{
+    DafsaFileLoadError, DafsaFilePublicSuffixList, DatFileLoadError, DatFilePublicSuffixList,
+    PublicSuffixList, SystemLoadError, SystemPublicSuffixList, SYSTEM_PSL_DAFSA_PATH,
+    SYSTEM_PSL_PATH,
+};
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq)]
