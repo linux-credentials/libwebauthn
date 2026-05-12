@@ -91,11 +91,72 @@ qrcode = "0.14.1"
 # For turning on logging in unittests
 test-log = { version = "0.2" }
 
-# Only compile NFC-examples, if NFC-features are used
+# Examples live in three subdirectories under examples/, grouped by purpose.
+# Cargo does not auto-discover examples in subdirectories, so each one is
+# listed here explicitly.
+#
+# ceremony/ - register and authenticate, one per transport
+# features/ - per-feature demos (extensions, preflight, prf, replay, device selection)
+# management/ - CTAP2 admin (PIN, biometrics, config, credential management)
+
+[[example]]
+name = "u2f_hid"
+path = "examples/ceremony/u2f_hid.rs"
+
+[[example]]
+name = "u2f_ble"
+path = "examples/ceremony/u2f_ble.rs"
+
 [[example]]
 name = "u2f_nfc"
+path = "examples/ceremony/u2f_nfc.rs"
 required-features = ["nfc"]
 
 [[example]]
+name = "webauthn_hid"
+path = "examples/ceremony/webauthn_hid.rs"
+
+[[example]]
 name = "webauthn_nfc"
+path = "examples/ceremony/webauthn_nfc.rs"
 required-features = ["nfc"]
+
+[[example]]
+name = "webauthn_cable"
+path = "examples/ceremony/webauthn_cable.rs"
+
+[[example]]
+name = "webauthn_extensions_hid"
+path = "examples/features/webauthn_extensions_hid.rs"
+
+[[example]]
+name = "webauthn_preflight_hid"
+path = "examples/features/webauthn_preflight_hid.rs"
+
+[[example]]
+name = "webauthn_prf_hid"
+path = "examples/features/webauthn_prf_hid.rs"
+
+[[example]]
+name = "prf_replay"
+path = "examples/features/prf_replay.rs"
+
+[[example]]
+name = "device_selection_hid"
+path = "examples/features/device_selection_hid.rs"
+
+[[example]]
+name = "change_pin_hid"
+path = "examples/management/change_pin_hid.rs"
+
+[[example]]
+name = "bio_enrollment_hid"
+path = "examples/management/bio_enrollment_hid.rs"
+
+[[example]]
+name = "authenticator_config_hid"
+path = "examples/management/authenticator_config_hid.rs"
+
+[[example]]
+name = "cred_management_hid"
+path = "examples/management/cred_management_hid.rs"

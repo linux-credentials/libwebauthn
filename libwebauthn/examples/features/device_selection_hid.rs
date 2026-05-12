@@ -1,23 +1,17 @@
+use std::collections::HashMap;
 use std::error::Error;
+use std::time::Duration;
+
+use libwebauthn::transport::hid::channel::HidChannelHandle;
+use libwebauthn::transport::hid::{list_devices, HidDevice};
+use libwebauthn::transport::Device;
+
+#[path = "../common/mod.rs"]
+mod common;
 
 #[tokio::main]
 pub async fn main() -> Result<(), Box<dyn Error>> {
-    use std::collections::HashMap;
-    use std::time::Duration;
-
-    use libwebauthn::transport::hid::channel::HidChannelHandle;
-    use tracing_subscriber::{self, EnvFilter};
-
-    use libwebauthn::transport::hid::{list_devices, HidDevice};
-    use libwebauthn::transport::Device;
-
-    fn setup_logging() {
-        tracing_subscriber::fmt()
-            .with_env_filter(EnvFilter::from_default_env())
-            .without_time()
-            .init();
-    }
-    setup_logging();
+    common::setup_logging();
 
     let devices = list_devices().await.unwrap();
     let mut expected_answers = devices.len();
