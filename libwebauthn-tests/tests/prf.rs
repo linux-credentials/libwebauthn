@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use libwebauthn::ops::webauthn::{
     GetAssertionRequest, GetAssertionRequestExtensions, MakeCredentialPrfInput,
-    MakeCredentialPrfOutput, MakeCredentialsRequestExtensions, PRFValue, PrfInput,
+    MakeCredentialPrfOutput, MakeCredentialsRequestExtensions, PrfInput, PrfInputValue,
 };
 use libwebauthn::pin::PinManagement;
 use libwebauthn::proto::ctap2::{Ctap2PinUvAuthProtocol, Ctap2PublicKeyCredentialDescriptor};
@@ -189,8 +189,8 @@ async fn run_test_battery(channel: &mut HidChannel<'_>, using_pin: bool) {
     let mut eval_by_credential = HashMap::new();
     eval_by_credential.insert(
         base64_url::encode(&credential.id),
-        PRFValue {
-            first: [1; 32],
+        PrfInputValue {
+            first: vec![1; 32],
             second: None,
         },
     );
@@ -210,16 +210,16 @@ async fn run_test_battery(channel: &mut HidChannel<'_>, using_pin: bool) {
     .await;
 
     // Test 2: eval and eval_with_credential with cred_id we got
-    let eval = Some(PRFValue {
-        first: [2; 32],
+    let eval = Some(PrfInputValue {
+        first: vec![2; 32],
         second: None,
     });
 
     let mut eval_by_credential = HashMap::new();
     eval_by_credential.insert(
         base64_url::encode(&credential.id),
-        PRFValue {
-            first: [1; 32],
+        PrfInputValue {
+            first: vec![1; 32],
             second: None,
         },
     );
@@ -239,8 +239,8 @@ async fn run_test_battery(channel: &mut HidChannel<'_>, using_pin: bool) {
     .await;
 
     // Test 3: eval only
-    let eval = Some(PRFValue {
-        first: [1; 32],
+    let eval = Some(PrfInputValue {
+        first: vec![1; 32],
         second: None,
     });
 
@@ -261,38 +261,38 @@ async fn run_test_battery(channel: &mut HidChannel<'_>, using_pin: bool) {
     .await;
 
     // Test 4: eval and a full list of eval_by_credential
-    let eval = Some(PRFValue {
-        first: [2; 32],
+    let eval = Some(PrfInputValue {
+        first: vec![2; 32],
         second: None,
     });
 
     let mut eval_by_credential = HashMap::new();
     eval_by_credential.insert(
         base64_url::encode(&[5; 54]),
-        PRFValue {
-            first: [5; 32],
+        PrfInputValue {
+            first: vec![5; 32],
             second: None,
         },
     );
     eval_by_credential.insert(
         base64_url::encode(&[7; 54]),
-        PRFValue {
-            first: [7; 32],
-            second: Some([7; 32]),
+        PrfInputValue {
+            first: vec![7; 32],
+            second: Some(vec![7; 32]),
         },
     );
     eval_by_credential.insert(
         base64_url::encode(&[8; 54]),
-        PRFValue {
-            first: [8; 32],
-            second: Some([8; 32]),
+        PrfInputValue {
+            first: vec![8; 32],
+            second: Some(vec![8; 32]),
         },
     );
     eval_by_credential.insert(
         base64_url::encode(&credential.id),
-        PRFValue {
-            first: [1; 32],
-            second: Some([7; 32]),
+        PrfInputValue {
+            first: vec![1; 32],
+            second: Some(vec![7; 32]),
         },
     );
     let prf = PrfInput {
@@ -311,31 +311,31 @@ async fn run_test_battery(channel: &mut HidChannel<'_>, using_pin: bool) {
     .await;
 
     // Test 5: eval and non-fitting list of eval_by_credential
-    let eval = Some(PRFValue {
-        first: [1; 32],
+    let eval = Some(PrfInputValue {
+        first: vec![1; 32],
         second: None,
     });
 
     let mut eval_by_credential = HashMap::new();
     eval_by_credential.insert(
         base64_url::encode(&[5; 54]),
-        PRFValue {
-            first: [5; 32],
+        PrfInputValue {
+            first: vec![5; 32],
             second: None,
         },
     );
     eval_by_credential.insert(
         base64_url::encode(&[7; 54]),
-        PRFValue {
-            first: [7; 32],
-            second: Some([7; 32]),
+        PrfInputValue {
+            first: vec![7; 32],
+            second: Some(vec![7; 32]),
         },
     );
     eval_by_credential.insert(
         base64_url::encode(&[8; 54]),
-        PRFValue {
-            first: [8; 32],
-            second: Some([8; 32]),
+        PrfInputValue {
+            first: vec![8; 32],
+            second: Some(vec![8; 32]),
         },
     );
     let prf = PrfInput {
@@ -359,23 +359,23 @@ async fn run_test_battery(channel: &mut HidChannel<'_>, using_pin: bool) {
     let mut eval_by_credential = HashMap::new();
     eval_by_credential.insert(
         base64_url::encode(&[5; 54]),
-        PRFValue {
-            first: [5; 32],
+        PrfInputValue {
+            first: vec![5; 32],
             second: None,
         },
     );
     eval_by_credential.insert(
         base64_url::encode(&[7; 54]),
-        PRFValue {
-            first: [7; 32],
-            second: Some([7; 32]),
+        PrfInputValue {
+            first: vec![7; 32],
+            second: Some(vec![7; 32]),
         },
     );
     eval_by_credential.insert(
         base64_url::encode(&[8; 54]),
-        PRFValue {
-            first: [8; 32],
-            second: Some([8; 32]),
+        PrfInputValue {
+            first: vec![8; 32],
+            second: Some(vec![8; 32]),
         },
     );
     let prf = PrfInput {
@@ -394,16 +394,16 @@ async fn run_test_battery(channel: &mut HidChannel<'_>, using_pin: bool) {
     .await;
 
     // Test 7: Wrongly encoded credential_id
-    let eval = Some(PRFValue {
-        first: [2; 32],
+    let eval = Some(PrfInputValue {
+        first: vec![2; 32],
         second: None,
     });
 
     let mut eval_by_credential = HashMap::new();
     eval_by_credential.insert(
         String::from("ÄöoLfwekldß^"),
-        PRFValue {
-            first: [1; 32],
+        PrfInputValue {
+            first: vec![1; 32],
             second: None,
         },
     );
@@ -426,8 +426,8 @@ async fn run_test_battery(channel: &mut HidChannel<'_>, using_pin: bool) {
     let mut eval_by_credential = HashMap::new();
     eval_by_credential.insert(
         String::new(),
-        PRFValue {
-            first: [1; 32],
+        PrfInputValue {
+            first: vec![1; 32],
             second: None,
         },
     );
@@ -450,8 +450,8 @@ async fn run_test_battery(channel: &mut HidChannel<'_>, using_pin: bool) {
     let mut eval_by_credential = HashMap::new();
     eval_by_credential.insert(
         String::new(),
-        PRFValue {
-            first: [1; 32],
+        PrfInputValue {
+            first: vec![1; 32],
             second: None,
         },
     );
@@ -580,4 +580,131 @@ async fn run_failed_test(
 
     assert_eq!(response, Err(expected_error), "{printoutput}:");
     println!("Success for test: {printoutput}")
+}
+
+/// W3C WebAuthn L3 §10.1.4: PRF salt inputs are `BufferSource`s of any length.
+/// Regression test for #209: end-to-end PRF assertion succeeds for empty,
+/// sub-32-byte, and super-32-byte salts, and is deterministic.
+#[test(tokio::test)]
+async fn test_webauthn_prf_variable_length_input() {
+    let mut device = get_virtual_device();
+    let mut channel = device.channel().await.unwrap();
+
+    let user_id: [u8; 32] = thread_rng().gen();
+    let challenge: [u8; 32] = thread_rng().gen();
+
+    let make_credentials_request = MakeCredentialRequest {
+        origin: "example.org".to_owned(),
+        challenge: Vec::from(challenge),
+        relying_party: Ctap2PublicKeyCredentialRpEntity::new("example.org", "example.org"),
+        user: Ctap2PublicKeyCredentialUserEntity::new(&user_id, "mario.rossi", "Mario Rossi"),
+        resident_key: Some(ResidentKeyRequirement::Discouraged),
+        user_verification: UserVerificationRequirement::Preferred,
+        algorithms: vec![Ctap2CredentialType::default()],
+        exclude: None,
+        extensions: Some(MakeCredentialsRequestExtensions {
+            prf: Some(MakeCredentialPrfInput { _eval: None }),
+            ..Default::default()
+        }),
+        timeout: TIMEOUT,
+        top_origin: None,
+    };
+
+    let state_recv = channel.get_ux_update_receiver();
+    let expected_updates = vec![
+        UvUpdateShim::PresenceRequired, // MakeCredential
+        UvUpdateShim::PresenceRequired, // assert empty
+        UvUpdateShim::PresenceRequired, // assert 7 bytes
+        UvUpdateShim::PresenceRequired, // assert 100 bytes
+        UvUpdateShim::PresenceRequired, // determinism re-check (same 7 bytes)
+    ];
+    let uv_handle = tokio::spawn(handle_updates(state_recv, expected_updates));
+
+    let response = channel
+        .webauthn_make_credential(&make_credentials_request)
+        .await
+        .expect("Failed to register credential");
+    let credential: Ctap2PublicKeyCredentialDescriptor =
+        (&response.authenticator_data).try_into().unwrap();
+
+    async fn assert_prf(
+        channel: &mut HidChannel<'_>,
+        credential: &Ctap2PublicKeyCredentialDescriptor,
+        challenge: &[u8; 32],
+        first: Vec<u8>,
+        label: &str,
+    ) -> [u8; 32] {
+        let get_assertion = GetAssertionRequest {
+            relying_party_id: "example.org".to_owned(),
+            origin: "example.org".to_owned(),
+            challenge: Vec::from(challenge.as_slice()),
+            allow: vec![credential.clone()],
+            user_verification: UserVerificationRequirement::Preferred,
+            extensions: Some(GetAssertionRequestExtensions {
+                prf: Some(PrfInput {
+                    eval: Some(PrfInputValue {
+                        first,
+                        second: None,
+                    }),
+                    eval_by_credential: HashMap::new(),
+                }),
+                ..Default::default()
+            }),
+            timeout: TIMEOUT,
+            top_origin: None,
+        };
+        let response = channel
+            .webauthn_get_assertion(&get_assertion)
+            .await
+            .unwrap_or_else(|_| panic!("get_assertion failed: {label}"));
+        let results = response.assertions[0]
+            .unsigned_extensions_output
+            .as_ref()
+            .unwrap_or_else(|| panic!("no unsigned ext: {label}"))
+            .prf
+            .as_ref()
+            .unwrap_or_else(|| panic!("no prf: {label}"))
+            .results
+            .as_ref()
+            .unwrap_or_else(|| panic!("no results: {label}"));
+        assert_ne!(results.first, [0u8; 32], "{label}");
+        assert!(results.second.is_none(), "{label}");
+        results.first
+    }
+
+    let empty = assert_prf(&mut channel, &credential, &challenge, vec![], "empty").await;
+    let short = assert_prf(
+        &mut channel,
+        &credential,
+        &challenge,
+        vec![0xAB; 7],
+        "7 bytes",
+    )
+    .await;
+    let long = assert_prf(
+        &mut channel,
+        &credential,
+        &challenge,
+        vec![0xCD; 100],
+        "100 bytes",
+    )
+    .await;
+    let short_again = assert_prf(
+        &mut channel,
+        &credential,
+        &challenge,
+        vec![0xAB; 7],
+        "7 bytes (repeat)",
+    )
+    .await;
+
+    // Different inputs hash to different salts and therefore yield distinct outputs.
+    assert_ne!(empty, short);
+    assert_ne!(short, long);
+    assert_ne!(empty, long);
+    // Same input → same output: PRF is deterministic per (credential, salt).
+    assert_eq!(short, short_again);
+
+    let mut state_recv = uv_handle.await.unwrap();
+    assert_eq!(state_recv.try_recv(), Err(TryRecvError::Empty));
 }

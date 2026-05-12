@@ -4,7 +4,7 @@ use crate::{
         Assertion, Ctap2HMACGetSecretOutput, GetAssertionHmacOrPrfInput,
         GetAssertionLargeBlobExtension, GetAssertionLargeBlobExtensionOutput,
         GetAssertionPrfOutput, GetAssertionRequest, GetAssertionRequestExtensions,
-        GetAssertionResponseUnsignedExtensions, HMACGetSecretInput, PRFValue,
+        GetAssertionResponseUnsignedExtensions, HMACGetSecretInput, PrfInputValue, PrfOutputValue,
     },
     pin::PinUvAuthProtocol,
     proto::ctap2::cbor::Value,
@@ -285,8 +285,8 @@ impl Ctap2GetAssertionRequestExtensions {
     }
 
     fn prf_to_hmac_input(
-        eval: &Option<PRFValue>,
-        eval_by_credential: &HashMap<String, PRFValue>,
+        eval: &Option<PrfInputValue>,
+        eval_by_credential: &HashMap<String, PrfInputValue>,
         allow_list: &[Ctap2PublicKeyCredentialDescriptor],
     ) -> Result<Option<HMACGetSecretInput>, Error> {
         // https://w3c.github.io/webauthn/#prf
@@ -328,7 +328,7 @@ impl Ctap2GetAssertionRequestExtensions {
             let mut input = HMACGetSecretInput::default();
             // 5.1 Let salt1 be the value of SHA-256(UTF8Encode("WebAuthn PRF") || 0x00 || ev.first).
             let mut salt1_input = prefix.clone();
-            salt1_input.extend(ev.first);
+            salt1_input.extend_from_slice(&ev.first);
 
             let mut hasher = Sha256::default();
             hasher.update(salt1_input);
@@ -337,9 +337,9 @@ impl Ctap2GetAssertionRequestExtensions {
             input.salt1.copy_from_slice(&salt1_hash);
 
             // 5.2 If ev.second is present, let salt2 be the value of SHA-256(UTF8Encode("WebAuthn PRF") || 0x00 || ev.second).
-            if let Some(second) = ev.second {
+            if let Some(second) = ev.second.as_ref() {
                 let mut salt2_input = prefix.clone();
-                salt2_input.extend(second);
+                salt2_input.extend_from_slice(second);
                 let mut hasher = Sha256::default();
                 hasher.update(salt2_input);
                 let salt2_hash: [u8; 32] = hasher.finalize().into();
@@ -539,7 +539,7 @@ impl Ctap2GetAssertionResponseExtensions {
                 .as_ref()
                 .and_then(|ext| ext.prf.as_ref())
                 .map(|_| GetAssertionPrfOutput {
-                    results: Some(PRFValue {
+                    results: Some(PrfOutputValue {
                         first: decrypted.output1,
                         second: decrypted.output2,
                     }),
