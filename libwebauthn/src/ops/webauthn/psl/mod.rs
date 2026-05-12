@@ -7,13 +7,20 @@
 //!
 //! Rather than bundle a snapshot of the PSL inside the crate (which would go
 //! stale with each release), libwebauthn defines a [`PublicSuffixList`] trait
-//! and lets callers plug in an implementation. A simple
-//! [`DatFilePublicSuffixList`] is provided that reads the standard `.dat`
-//! file shipped by the `publicsuffix-list` distribution package, kept fresh
-//! by the system package manager.
+//! and lets callers plug in an implementation. Two built-in loaders are
+//! provided that read system-managed Public Suffix List files kept fresh by
+//! the package manager:
+//!
+//! * [`DatFilePublicSuffixList`] reads the text `.dat` format (shipped on
+//!   Debian/Ubuntu, Arch, and Fedora's `publicsuffix-list` package).
+//! * [`DafsaFilePublicSuffixList`] reads libpsl's binary `.dafsa` format
+//!   (shipped on Debian/Ubuntu, and on Fedora as `publicsuffix-list-dafsa`,
+//!   which is required by `libpsl` and thus present on most installs).
 
+pub mod dafsa;
 pub mod dat;
 
+pub use dafsa::{DafsaFileLoadError, DafsaFilePublicSuffixList, SYSTEM_PSL_DAFSA_PATH};
 pub use dat::{DatFileLoadError, DatFilePublicSuffixList, SYSTEM_PSL_PATH};
 
 /// Public Suffix List lookup interface.
