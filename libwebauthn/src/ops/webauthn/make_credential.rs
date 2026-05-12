@@ -1,8 +1,7 @@
 use std::time::Duration;
 
 use ctap_types::ctap2::credential_management::CredentialProtectionPolicy as Ctap2CredentialProtectionPolicy;
-use serde::{Deserialize, Serialize};
-use serde_json::{self, Value as JsonValue};
+use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 use tracing::{debug, instrument, trace};
 
@@ -12,16 +11,17 @@ use crate::{
         client_data::ClientData,
         idl::{
             create::PublicKeyCredentialCreationOptionsJSON,
+            get::PrfValuesJson,
             origin::is_registrable_domain_suffix_or_equal,
             response::{
                 AuthenticationExtensionsClientOutputsJSON, AuthenticatorAttestationResponseJSON,
-                CredentialPropertiesOutputJSON, LargeBlobOutputJSON, PRFOutputJSON,
+                CredentialPropertiesOutputJSON, LargeBlobOutputJSON, PRFOutputJSON, PRFValuesJSON,
                 RegistrationResponseJSON, ResponseSerializationError, WebAuthnIDLResponse,
             },
             Base64UrlString, FromIdlModel, JsonError, WebAuthnIDL,
         },
         psl::PublicSuffixList,
-        Operation, RelyingPartyId, RequestOrigin,
+        Operation, PrfInputValue, PrfOutputValue, RelyingPartyId, RequestOrigin,
     },
     proto::{
         ctap1::{Ctap1RegisteredKey, Ctap1Version},
@@ -32,6 +32,7 @@ use crate::{
             Ctap2PublicKeyCredentialUserEntity,
         },
     },
+    transport::AuthTokenData,
 };
 
 use super::timeout::DEFAULT_TIMEOUT;
@@ -176,11 +177,16 @@ impl MakeCredentialResponse {
             });
         }
 
-        // PRF extension
         if let Some(prf) = &unsigned_ext.prf {
             results.prf = Some(PRFOutputJSON {
                 enabled: prf.enabled,
-                results: None,
+                results: prf.results.as_ref().map(|v| PRFValuesJSON {
+                    first: Base64UrlString::from(v.first.as_slice()),
+                    second: v
+                        .second
+                        .as_ref()
+                        .map(|s| Base64UrlString::from(s.as_slice())),
+                }),
             });
         }
 
@@ -216,19 +222,31 @@ impl MakeCredentialsResponseUnsignedExtensions {
         signed_extensions: &Option<Ctap2MakeCredentialsResponseExtensions>,
         request: &MakeCredentialRequest,
         info: Option<&Ctap2GetInfoResponse>,
+        auth_data: Option<&AuthTokenData>,
     ) -> MakeCredentialsResponseUnsignedExtensions {
         let mut hmac_create_secret = None;
         let mut prf = None;
         if let Some(signed_extensions) = signed_extensions {
             if let Some(incoming_ext) = &request.extensions {
-                // hmacCreateSecret and prf can both be requested and returned independently.
-                // Both map to the same underlying CTAP2 hmac-secret extension.
                 if incoming_ext.hmac_create_secret.is_some() {
                     hmac_create_secret = signed_extensions.hmac_secret;
                 }
                 if incoming_ext.prf.is_some() {
+                    let results = signed_extensions
+                        .hmac_secret_mc
+                        .as_ref()
+                        .zip(auth_data)
+                        .and_then(|(out, auth)| {
+                            let uv_proto = auth.protocol_version.create_protocol_object();
+                            out.decrypt_output(&auth.shared_secret, uv_proto.as_ref())
+                        })
+                        .map(|decrypted| PrfOutputValue {
+                            first: decrypted.output1,
+                            second: decrypted.output2,
+                        });
                     prf = Some(MakeCredentialPrfOutput {
                         enabled: signed_extensions.hmac_secret,
+                        results,
                     });
                 }
             }
@@ -448,19 +466,32 @@ impl WebAuthnIDL<MakeCredentialRequestParsingError> for MakeCredentialRequest {
     type IdlModel = PublicKeyCredentialCreationOptionsJSON;
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Default, Clone, Deserialize, PartialEq)]
 pub struct MakeCredentialPrfInput {
-    /// The `eval` field is parsed but not used during credential creation.
-    /// PRF evaluation only occurs during assertion (getAssertion), not registration.
-    /// We parse it here to accept valid WebAuthn JSON input without errors.
-    #[serde(rename = "eval")]
-    pub _eval: Option<JsonValue>,
+    #[serde(default, deserialize_with = "deserialize_prf_eval")]
+    pub eval: Option<PrfInputValue>,
+}
+
+fn deserialize_prf_eval<'de, D>(deserializer: D) -> Result<Option<PrfInputValue>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let Some(json) = Option::<PrfValuesJson>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+    // WebAuthn L3 §10.1.4: PRF salt inputs are BufferSources of any length.
+    Ok(Some(PrfInputValue {
+        first: json.first.as_slice().to_vec(),
+        second: json.second.map(|s| s.as_slice().to_vec()),
+    }))
 }
 
 #[derive(Debug, Default, Clone, Serialize, PartialEq)]
 pub struct MakeCredentialPrfOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub results: Option<PrfOutputValue>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -798,19 +829,55 @@ mod tests {
     #[test]
     fn test_request_from_json_prf_extension() {
         let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
-        let req_json = json_field_add(
-            REQUEST_BASE_JSON,
-            "extensions",
-            r#"{"prf": {"eval": {"first": "second"}}}"#,
-        );
+        let first = base64_url::encode(&[1u8; 32]);
+        let second = base64_url::encode(&[2u8; 32]);
+        let ext = format!(r#"{{"prf": {{"eval": {{"first": "{first}", "second": "{second}"}}}}}}"#);
+        let req_json = json_field_add(REQUEST_BASE_JSON, "extensions", &ext);
 
         let req: MakeCredentialRequest =
             MakeCredentialRequest::from_json(&request_origin, &MockPublicSuffixList, &req_json)
                 .unwrap();
-        assert!(matches!(
-            req.extensions,
-            Some(MakeCredentialsRequestExtensions { prf: Some(_), .. })
-        ));
+        let prf = req
+            .extensions
+            .as_ref()
+            .and_then(|e| e.prf.as_ref())
+            .and_then(|p| p.eval.as_ref())
+            .expect("prf.eval parsed");
+        assert_eq!(prf.first, vec![1u8; 32]);
+        assert_eq!(prf.second, Some(vec![2u8; 32]));
+    }
+
+    #[test]
+    fn test_request_from_json_prf_extension_empty() {
+        let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
+        let req_json = json_field_add(REQUEST_BASE_JSON, "extensions", r#"{"prf": {}}"#);
+
+        let req: MakeCredentialRequest =
+            MakeCredentialRequest::from_json(&request_origin, &MockPublicSuffixList, &req_json)
+                .unwrap();
+        let prf = req.extensions.unwrap().prf.unwrap();
+        assert!(prf.eval.is_none());
+    }
+
+    #[test]
+    fn test_request_from_json_prf_extension_short_input() {
+        // WebAuthn L3 §10.1.4: PRF salt inputs are BufferSources of any length.
+        let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
+        let short = base64_url::encode(&[0u8; 16]);
+        let ext = format!(r#"{{"prf": {{"eval": {{"first": "{short}"}}}}}}"#);
+        let req_json = json_field_add(REQUEST_BASE_JSON, "extensions", &ext);
+
+        let req: MakeCredentialRequest =
+            MakeCredentialRequest::from_json(&request_origin, &MockPublicSuffixList, &req_json)
+                .unwrap();
+        let prf = req
+            .extensions
+            .as_ref()
+            .and_then(|e| e.prf.as_ref())
+            .and_then(|p| p.eval.as_ref())
+            .expect("prf.eval parsed");
+        assert_eq!(prf.first, vec![0u8; 16]);
+        assert!(prf.second.is_none());
     }
 
     #[test]
@@ -1131,6 +1198,7 @@ mod tests {
             large_blob: None,
             prf: Some(MakeCredentialPrfOutput {
                 enabled: Some(true),
+                results: None,
             }),
         };
 

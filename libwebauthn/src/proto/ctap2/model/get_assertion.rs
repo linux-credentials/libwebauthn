@@ -21,7 +21,6 @@ use cosey::PublicKey;
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 use serde_indexed::{DeserializeIndexed, SerializeIndexed};
-use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
 use tracing::error;
 
@@ -319,38 +318,8 @@ impl Ctap2GetAssertionRequestExtensions {
             ev = eval.as_ref();
         }
 
-        // 5. If ev is not null:
-        if let Some(ev) = ev {
-            // SHA-256(UTF8Encode("WebAuthn PRF") || 0x00 || ev.first).
-            let mut prefix = String::from("WebAuthn PRF").into_bytes();
-            prefix.push(0x00);
-
-            let mut input = HMACGetSecretInput::default();
-            // 5.1 Let salt1 be the value of SHA-256(UTF8Encode("WebAuthn PRF") || 0x00 || ev.first).
-            let mut salt1_input = prefix.clone();
-            salt1_input.extend_from_slice(&ev.first);
-
-            let mut hasher = Sha256::default();
-            hasher.update(salt1_input);
-            // SHA-256 produces a fixed 32-byte output, which lines up with salt1.
-            let salt1_hash: [u8; 32] = hasher.finalize().into();
-            input.salt1.copy_from_slice(&salt1_hash);
-
-            // 5.2 If ev.second is present, let salt2 be the value of SHA-256(UTF8Encode("WebAuthn PRF") || 0x00 || ev.second).
-            if let Some(second) = ev.second.as_ref() {
-                let mut salt2_input = prefix.clone();
-                salt2_input.extend_from_slice(second);
-                let mut hasher = Sha256::default();
-                hasher.update(salt2_input);
-                let salt2_hash: [u8; 32] = hasher.finalize().into();
-                input.salt2 = Some(salt2_hash);
-            };
-
-            Ok(Some(input))
-        } else {
-            // We don't have a usable PRF, so we don't do any HMAC
-            Ok(None)
-        }
+        // 5. If ev is not null, derive salt1/salt2 per WebAuthn L3.
+        Ok(ev.map(PrfInputValue::to_hmac_secret_input))
     }
 }
 

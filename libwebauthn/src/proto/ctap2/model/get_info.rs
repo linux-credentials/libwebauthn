@@ -178,6 +178,12 @@ impl Ctap2GetInfoResponse {
         self.versions.iter().any(|v| v == "FIDO_2_1")
     }
 
+    pub fn supports_extension(&self, name: &str) -> bool {
+        self.extensions
+            .as_ref()
+            .is_some_and(|exts| exts.iter().any(|e| e == name))
+    }
+
     pub fn supports_credential_management(&self) -> bool {
         self.option_enabled("credMgmt") || self.option_enabled("credentialMgmtPreview")
     }
