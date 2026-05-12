@@ -2,7 +2,7 @@ use std::convert::TryFrom;
 use std::fmt::{self, Display};
 use std::str::FromStr;
 
-use url::Host;
+use url::{Host, ParseError, Url};
 
 #[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
 pub enum HostParseError {
@@ -16,8 +16,10 @@ pub enum HostParseError {
 
 #[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
 pub enum OriginParseError {
-    #[error("invalid scheme (only https is supported)")]
+    #[error("invalid scheme (only https, or http with localhost, is supported)")]
     InvalidScheme,
+    #[error("http scheme is only allowed for localhost, got {0}")]
+    InsecureHttpHost(String),
     #[error("missing host")]
     MissingHost,
     #[error("invalid host: {0}")]
@@ -26,6 +28,8 @@ pub enum OriginParseError {
     InvalidPort(String),
     #[error("unexpected path or fragment: {0}")]
     UnexpectedPath(String),
+    #[error("origin must not contain userinfo")]
+    UnexpectedUserinfo,
 }
 
 /// Validated host component of an HTTPS origin.
@@ -49,18 +53,14 @@ impl FromStr for OriginHost {
         if s.is_empty() {
             return Err(HostParseError::Empty);
         }
-        match Host::parse(s) {
-            Ok(h) => Ok(OriginHost(h.to_string())),
-            Err(err) => {
-                let msg = err.to_string();
-                let lower = msg.to_lowercase();
-                if lower.contains("ipv4") || lower.contains("ipv6") {
-                    Err(HostParseError::InvalidIp(msg))
-                } else {
-                    Err(HostParseError::InvalidDomain(msg))
+        Host::parse(s)
+            .map(|h| OriginHost(h.to_string()))
+            .map_err(|err| match err {
+                ParseError::InvalidIpv4Address | ParseError::InvalidIpv6Address => {
+                    HostParseError::InvalidIp(err.to_string())
                 }
-            }
-        }
+                _ => HostParseError::InvalidDomain(err.to_string()),
+            })
     }
 }
 
@@ -78,27 +78,56 @@ impl Display for OriginHost {
     }
 }
 
-/// An HTTPS origin: scheme is implicit, port optional.
+/// Scheme of a WebAuthn origin.
 ///
-/// Note: an enum variant for `https` is intentionally not used here since we
-/// only support a single scheme. If we ever need additional schemes (e.g.
-/// `app:` for AppId-style origins) this can become an enum without breaking
-/// the field-access pattern at call sites.
+/// `Https` is the standard case. `Http` is permitted only with the literal
+/// `localhost` host, because Web specs (Secure Contexts) treat
+/// `http://localhost` as a secure context for development purposes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scheme {
+    Https,
+    Http,
+}
+
+impl Scheme {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Scheme::Https => "https",
+            Scheme::Http => "http",
+        }
+    }
+}
+
+impl Display for Scheme {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// A WebAuthn origin. The scheme is `https`, or `http` only when the host is
+/// the literal `localhost`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Origin {
+    pub scheme: Scheme,
     pub host: OriginHost,
     pub port: Option<u16>,
 }
 
 impl Origin {
+    /// Constructs an HTTPS origin. Use [`Origin::from_str`] to parse an
+    /// arbitrary origin string (which will also accept `http://localhost`).
     pub fn new(host: OriginHost, port: Option<u16>) -> Self {
-        Self { host, port }
+        Self {
+            scheme: Scheme::Https,
+            host,
+            port,
+        }
     }
 }
 
 impl Display for Origin {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "https://{}", self.host)?;
+        write!(f, "{}://{}", self.scheme, self.host)?;
         if let Some(port) = self.port {
             write!(f, ":{port}")?;
         }
@@ -106,33 +135,74 @@ impl Display for Origin {
     }
 }
 
+/// Returns true iff `host` qualifies for the `http://` scheme. The W3C Secure
+/// Contexts spec considers a broader set of hosts trustworthy (`localhost`,
+/// `*.localhost`, `127.0.0.0/8`, `[::1]`). We intentionally restrict to the
+/// literal `localhost` here as the minimum dev affordance; this can be
+/// widened later without breaking existing callers.
+///
+/// Case comparison is safe: [`url::Host::parse`] ASCII-lowercases the domain
+/// during parsing, so `LOCALHOST` and `localhost` both compare equal here.
+fn host_allows_http(host: &OriginHost) -> bool {
+    host.as_str() == "localhost"
+}
+
 impl FromStr for Origin {
     type Err = OriginParseError;
 
+    /// Parses a WebAuthn origin from a string. Delegates to [`url::Url`] for
+    /// scheme, host (including IDNA / IPv4 / IPv6), and port parsing, then
+    /// applies WebAuthn-specific rules:
+    ///
+    /// * scheme must be `https`, or `http` when the host is the literal
+    ///   `localhost`
+    /// * no userinfo (`user:pw@host`)
+    /// * no path beyond `/`, no query, no fragment
+    ///
+    /// Per the WHATWG URL Standard, default ports (e.g. `:443` for https)
+    /// are dropped during parsing, matching the canonical origin form used
+    /// in `clientDataJSON.origin`.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let rest = s
-            .strip_prefix("https://")
-            .ok_or(OriginParseError::InvalidScheme)?;
+        let url = Url::parse(s).map_err(map_url_parse_error)?;
 
-        if rest.is_empty() {
-            return Err(OriginParseError::MissingHost);
+        let scheme = match url.scheme() {
+            "https" => Scheme::Https,
+            "http" => Scheme::Http,
+            _ => return Err(OriginParseError::InvalidScheme),
+        };
+
+        if !url.username().is_empty() || url.password().is_some() {
+            return Err(OriginParseError::UnexpectedUserinfo);
+        }
+        if !matches!(url.path(), "" | "/") {
+            return Err(OriginParseError::UnexpectedPath(url.path().to_string()));
+        }
+        if let Some(q) = url.query() {
+            return Err(OriginParseError::UnexpectedPath(format!("?{q}")));
+        }
+        if let Some(f) = url.fragment() {
+            return Err(OriginParseError::UnexpectedPath(format!("#{f}")));
         }
 
-        let (authority, tail_marker) = rest
-            .find(['/', '?', '#'])
-            .map(|idx| (&rest[..idx], Some(&rest[idx..])))
-            .unwrap_or((rest, None));
+        let host = match url.host() {
+            Some(Host::Domain(d)) => OriginHost(d.to_string()),
+            Some(Host::Ipv4(ip)) => OriginHost(ip.to_string()),
+            // Restore the brackets that `url::Url` strips off internally.
+            Some(Host::Ipv6(ip)) => OriginHost(format!("[{ip}]")),
+            None => return Err(OriginParseError::MissingHost),
+        };
 
-        if let Some(tail) = tail_marker {
-            // Allow a trailing slash with nothing after it; reject anything more.
-            if tail != "/" {
-                return Err(OriginParseError::UnexpectedPath(tail.to_string()));
-            }
+        if matches!(scheme, Scheme::Http) && !host_allows_http(&host) {
+            return Err(OriginParseError::InsecureHttpHost(
+                host.as_str().to_string(),
+            ));
         }
 
-        let (host_str, port) = split_host_and_port(authority)?;
-        let host = OriginHost::from_str(host_str)?;
-        Ok(Origin { host, port })
+        Ok(Origin {
+            scheme,
+            host,
+            port: url.port(),
+        })
     }
 }
 
@@ -144,35 +214,18 @@ impl TryFrom<&str> for Origin {
     }
 }
 
-fn split_host_and_port(s: &str) -> Result<(&str, Option<u16>), OriginParseError> {
-    // IPv6 literals are bracketed. Find the matching `]` first if present so
-    // we don't confuse `:` inside the address with the host/port separator.
-    if let Some(stripped) = s.strip_prefix('[') {
-        let end = stripped.find(']').ok_or_else(|| {
-            OriginParseError::InvalidHost(HostParseError::InvalidIp(s.to_string()))
-        })?;
-        let host = &s[..end + 2]; // include the brackets
-        let after = &s[end + 2..];
-        if after.is_empty() {
-            return Ok((host, None));
+fn map_url_parse_error(err: ParseError) -> OriginParseError {
+    match err {
+        ParseError::EmptyHost => OriginParseError::MissingHost,
+        ParseError::InvalidIpv4Address | ParseError::InvalidIpv6Address => {
+            OriginParseError::InvalidHost(HostParseError::InvalidIp(err.to_string()))
         }
-        let port_str = after
-            .strip_prefix(':')
-            .ok_or_else(|| OriginParseError::InvalidPort(after.to_string()))?;
-        let port = port_str
-            .parse::<u16>()
-            .map_err(|_| OriginParseError::InvalidPort(port_str.to_string()))?;
-        return Ok((host, Some(port)));
-    }
-
-    match s.rsplit_once(':') {
-        Some((host, port_str)) => {
-            let port = port_str
-                .parse::<u16>()
-                .map_err(|_| OriginParseError::InvalidPort(port_str.to_string()))?;
-            Ok((host, Some(port)))
+        ParseError::InvalidPort => OriginParseError::InvalidPort(err.to_string()),
+        ParseError::RelativeUrlWithoutBase => OriginParseError::InvalidScheme,
+        ParseError::IdnaError => {
+            OriginParseError::InvalidHost(HostParseError::InvalidDomain(err.to_string()))
         }
-        None => Ok((s, None)),
+        _ => OriginParseError::InvalidHost(HostParseError::InvalidDomain(err.to_string())),
     }
 }
 
@@ -301,10 +354,58 @@ mod tests {
     }
 
     #[test]
-    fn origin_rejects_non_https() {
+    fn origin_rejects_unknown_scheme() {
+        assert!(matches!(
+            "ftp://example.org".parse::<Origin>(),
+            Err(OriginParseError::InvalidScheme)
+        ));
+    }
+
+    #[test]
+    fn origin_rejects_http_for_non_localhost() {
         assert!(matches!(
             "http://example.org".parse::<Origin>(),
-            Err(OriginParseError::InvalidScheme)
+            Err(OriginParseError::InsecureHttpHost(_))
+        ));
+    }
+
+    #[test]
+    fn origin_accepts_http_localhost() {
+        let o: Origin = "http://localhost".parse().unwrap();
+        assert_eq!(o.scheme, Scheme::Http);
+        assert_eq!(o.host.as_str(), "localhost");
+        assert_eq!(o.port, None);
+        assert_eq!(o.to_string(), "http://localhost");
+    }
+
+    #[test]
+    fn origin_accepts_http_localhost_with_port() {
+        let o: Origin = "http://localhost:3000".parse().unwrap();
+        assert_eq!(o.scheme, Scheme::Http);
+        assert_eq!(o.host.as_str(), "localhost");
+        assert_eq!(o.port, Some(3000));
+        assert_eq!(o.to_string(), "http://localhost:3000");
+    }
+
+    #[test]
+    fn origin_accepts_https_localhost() {
+        let o: Origin = "https://localhost:8443".parse().unwrap();
+        assert_eq!(o.scheme, Scheme::Https);
+        assert_eq!(o.host.as_str(), "localhost");
+        assert_eq!(o.port, Some(8443));
+    }
+
+    #[test]
+    fn origin_rejects_http_loopback_ip() {
+        // Loopback IPs are not covered by this narrow allowance; only the
+        // literal "localhost" host qualifies for http://.
+        assert!(matches!(
+            "http://127.0.0.1".parse::<Origin>(),
+            Err(OriginParseError::InsecureHttpHost(_))
+        ));
+        assert!(matches!(
+            "http://[::1]".parse::<Origin>(),
+            Err(OriginParseError::InsecureHttpHost(_))
         ));
     }
 
@@ -351,8 +452,59 @@ mod tests {
 
     #[test]
     fn request_origin_try_from_string() {
+        // Default ports are stripped during parsing (WHATWG URL Standard), so
+        // `:443` on an https origin normalises to `port = None`.
         let r = RequestOrigin::try_from("https://example.org:443".to_string()).unwrap();
         assert_eq!(r.origin.host.as_str(), "example.org");
-        assert_eq!(r.origin.port, Some(443));
+        assert_eq!(r.origin.port, None);
+        assert_eq!(r.origin.to_string(), "https://example.org");
+    }
+
+    #[test]
+    fn origin_strips_default_http_port() {
+        let o: Origin = "http://localhost:80".parse().unwrap();
+        assert_eq!(o.port, None);
+        assert_eq!(o.to_string(), "http://localhost");
+    }
+
+    #[test]
+    fn origin_rejects_userinfo() {
+        assert!(matches!(
+            "https://user:pw@example.org".parse::<Origin>(),
+            Err(OriginParseError::UnexpectedUserinfo)
+        ));
+    }
+
+    #[test]
+    fn origin_normalises_uppercase_scheme_and_host() {
+        let o: Origin = "HTTPS://Example.ORG".parse().unwrap();
+        assert_eq!(o.scheme, Scheme::Https);
+        assert_eq!(o.host.as_str(), "example.org");
+        assert_eq!(o.to_string(), "https://example.org");
+    }
+
+    #[test]
+    fn origin_accepts_port_boundaries() {
+        let o: Origin = "https://example.org:1".parse().unwrap();
+        assert_eq!(o.port, Some(1));
+        let o: Origin = "https://example.org:65535".parse().unwrap();
+        assert_eq!(o.port, Some(65535));
+    }
+
+    #[test]
+    fn origin_accepts_port_zero() {
+        // Port 0 is syntactically valid per the WHATWG URL Standard, even
+        // though it is not a usable network port. Pin current behavior so a
+        // future change is visible.
+        let o: Origin = "https://example.org:0".parse().unwrap();
+        assert_eq!(o.port, Some(0));
+    }
+
+    #[test]
+    fn origin_new_defaults_to_https() {
+        let host: OriginHost = "example.org".parse().unwrap();
+        let origin = Origin::new(host, Some(8443));
+        assert_eq!(origin.scheme, Scheme::Https);
+        assert_eq!(origin.to_string(), "https://example.org:8443");
     }
 }
