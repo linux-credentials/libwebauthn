@@ -16,6 +16,8 @@ pub use response::{
 
 use origin::RequestOrigin;
 
+use super::psl::PublicSuffixList;
+
 use serde::de::DeserializeOwned;
 use serde_json;
 
@@ -33,9 +35,13 @@ where
     /// The JSON model that this IDL can deserialize from.
     type IdlModel: DeserializeOwned;
 
-    fn from_json(request_origin: &RequestOrigin, json: &str) -> Result<Self, Self::Error> {
+    fn from_json(
+        request_origin: &RequestOrigin,
+        psl: &dyn PublicSuffixList,
+        json: &str,
+    ) -> Result<Self, Self::Error> {
         let idl_model: Self::IdlModel = serde_json::from_str(json)?;
-        Self::from_idl_model(request_origin, idl_model).map_err(From::from)
+        Self::from_idl_model(request_origin, psl, idl_model).map_err(From::from)
     }
 }
 
@@ -44,5 +50,9 @@ where
     T: DeserializeOwned,
     E: std::error::Error,
 {
-    fn from_idl_model(request_origin: &RequestOrigin, model: T) -> Result<Self, E>;
+    fn from_idl_model(
+        request_origin: &RequestOrigin,
+        psl: &dyn PublicSuffixList,
+        model: T,
+    ) -> Result<Self, E>;
 }

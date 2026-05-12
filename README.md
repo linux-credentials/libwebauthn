@@ -38,6 +38,10 @@ _Looking for the D-Bus API proposal?_ Check out [credentialsd][credentialsd].
   - 🟢 Hybrid transport (caBLE v2): QR-initiated transactions
   - 🟢 Hybrid transport (caBLE v2): State-assisted transactions (remember this phone)
 
+## Runtime requirements
+
+Validating the relying party ID against the calling origin requires the [Public Suffix List][psl]. The built-in loader reads it from the standard system path. The `publicsuffix` package on Debian/Ubuntu or `publicsuffix-list` on Fedora and Arch installs it there, but these are not always present on minimal installs. Install explicitly if needed. Callers wiring their own list don't need a system package.
+
 ## Transports
 
 |                              | FIDO U2F              | WebAuthn (FIDO2)      |
@@ -79,3 +83,4 @@ If you don't know where to start, check out the _Issues_ tab.
 [#17]: https://github.com/linux-credentials/libwebauthn/issues/17
 [#18]: https://github.com/linux-credentials/libwebauthn/issues/18
 [#31]: https://github.com/linux-credentials/libwebauthn/issues/31
+[psl]: https://publicsuffix.org/

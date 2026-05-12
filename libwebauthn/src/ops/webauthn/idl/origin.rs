@@ -4,6 +4,8 @@ use std::str::FromStr;
 
 use url::{Host, ParseError, Url};
 
+use super::super::psl::PublicSuffixList;
+
 #[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
 pub enum HostParseError {
     #[error("empty host")]
@@ -287,6 +289,54 @@ impl TryFrom<String> for RequestOrigin {
     }
 }
 
+/// Returns true iff `rp_id` is a registrable domain suffix of, or equal to,
+/// `effective_domain`, per HTML §6.5 ("is a registrable domain suffix of or
+/// is equal to") which WebAuthn L3 §5.1.3 step 7 / §5.1.7 step 9 reference.
+///
+/// Public-suffix knowledge is supplied by the caller via the
+/// [`PublicSuffixList`] trait. Validation rejects bare public suffixes (e.g.
+/// `co.uk`) on either side of the comparison so they cannot be claimed as an
+/// rp.id.
+pub(crate) fn is_registrable_domain_suffix_or_equal(
+    rp_id: &str,
+    effective_domain: &str,
+    psl: &dyn PublicSuffixList,
+) -> bool {
+    if rp_id.is_empty() {
+        return false;
+    }
+    if rp_id == effective_domain {
+        return true;
+    }
+
+    // `rp_id`, prefixed by U+002E (.), must match the end of `effective_domain`.
+    // This enforces label alignment and excludes the equality case (handled above).
+    if effective_domain.len() <= rp_id.len() {
+        return false;
+    }
+    let boundary = effective_domain.len() - rp_id.len() - 1;
+    if effective_domain.as_bytes()[boundary] != b'.' {
+        return false;
+    }
+    if &effective_domain[boundary + 1..] != rp_id {
+        return false;
+    }
+
+    // `rp_id` must not be `effective_domain`'s public suffix (otherwise an
+    // attacker on a sibling registrable could claim the eTLD).
+    if psl.public_suffix(effective_domain).as_deref() == Some(rp_id) {
+        return false;
+    }
+
+    // `rp_id` must not itself be a public suffix (cannot register a credential
+    // against a bare eTLD like `co.uk`).
+    if psl.public_suffix(rp_id).as_deref() == Some(rp_id) {
+        return false;
+    }
+
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -506,5 +556,122 @@ mod tests {
         let origin = Origin::new(host, Some(8443));
         assert_eq!(origin.scheme, Scheme::Https);
         assert_eq!(origin.to_string(), "https://example.org:8443");
+    }
+
+    fn psl() -> super::super::super::psl::MockPublicSuffixList {
+        super::super::super::psl::MockPublicSuffixList
+    }
+
+    #[test]
+    fn registrable_suffix_equality() {
+        assert!(is_registrable_domain_suffix_or_equal(
+            "example.com",
+            "example.com",
+            &psl(),
+        ));
+    }
+
+    #[test]
+    fn registrable_suffix_parent_domain() {
+        assert!(is_registrable_domain_suffix_or_equal(
+            "example.com",
+            "login.example.com",
+            &psl(),
+        ));
+        assert!(is_registrable_domain_suffix_or_equal(
+            "example.com",
+            "a.b.c.example.com",
+            &psl(),
+        ));
+    }
+
+    #[test]
+    fn registrable_suffix_cousin_domains_rejected() {
+        assert!(!is_registrable_domain_suffix_or_equal(
+            "other.com",
+            "login.example.com",
+            &psl(),
+        ));
+    }
+
+    #[test]
+    fn registrable_suffix_longer_than_effective_rejected() {
+        assert!(!is_registrable_domain_suffix_or_equal(
+            "login.example.com",
+            "example.com",
+            &psl(),
+        ));
+    }
+
+    #[test]
+    fn registrable_suffix_label_alignment_required() {
+        assert!(!is_registrable_domain_suffix_or_equal(
+            "ample.com",
+            "example.com",
+            &psl(),
+        ));
+    }
+
+    #[test]
+    fn registrable_suffix_etld_rejected() {
+        assert!(!is_registrable_domain_suffix_or_equal(
+            "com",
+            "example.com",
+            &psl(),
+        ));
+    }
+
+    #[test]
+    fn registrable_suffix_multilabel_etld_rejected() {
+        assert!(!is_registrable_domain_suffix_or_equal(
+            "co.uk",
+            "example.co.uk",
+            &psl(),
+        ));
+    }
+
+    #[test]
+    fn registrable_suffix_under_multilabel_etld_accepted() {
+        assert!(is_registrable_domain_suffix_or_equal(
+            "example.co.uk",
+            "login.example.co.uk",
+            &psl(),
+        ));
+    }
+
+    #[test]
+    fn registrable_suffix_skip_intermediate_labels_accepted() {
+        assert!(is_registrable_domain_suffix_or_equal(
+            "bar.example.com",
+            "foo.bar.example.com",
+            &psl(),
+        ));
+    }
+
+    #[test]
+    fn registrable_suffix_empty_rejected() {
+        assert!(!is_registrable_domain_suffix_or_equal(
+            "",
+            "example.com",
+            &psl(),
+        ));
+    }
+
+    #[test]
+    fn registrable_suffix_localhost_equal() {
+        assert!(is_registrable_domain_suffix_or_equal(
+            "localhost",
+            "localhost",
+            &psl(),
+        ));
+    }
+
+    #[test]
+    fn registrable_suffix_localhost_subdomain_accepted() {
+        assert!(is_registrable_domain_suffix_or_equal(
+            "localhost",
+            "sub.localhost",
+            &psl(),
+        ));
     }
 }
