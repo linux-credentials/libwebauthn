@@ -8,7 +8,7 @@ use libwebauthn::ops::webauthn::{
 use libwebauthn::pin::PinManagement;
 use libwebauthn::proto::ctap2::{Ctap2PinUvAuthProtocol, Ctap2PublicKeyCredentialDescriptor};
 use libwebauthn::transport::hid::channel::HidChannel;
-use libwebauthn::transport::{Channel, Device};
+use libwebauthn::transport::{Channel, Ctap2AuthTokenStore, Device};
 use libwebauthn::webauthn::{Error as WebAuthnError, PlatformError, WebAuthn};
 use libwebauthn::UvUpdate;
 use libwebauthn::{
@@ -70,6 +70,7 @@ async fn test_webauthn_prf_with_pin_set_forced_pin_protocol_two() {
 enum UvUpdateShim {
     PresenceRequired,
     PinRequired,
+    PinNotSet,
 }
 
 async fn handle_updates(
@@ -88,6 +89,13 @@ async fn handle_updates(
                     let _ = update.send_pin("1234");
                 } else {
                     panic!("Did not get PinRequired-update as expected!");
+                }
+            }
+            UvUpdateShim::PinNotSet => {
+                if let UvUpdate::PinNotSet(update) = update {
+                    let _ = update.set_pin("1234");
+                } else {
+                    panic!("Did not get PinNotSet-update as expected!");
                 }
             }
         }
@@ -122,8 +130,12 @@ async fn run_test_battery(channel: &mut HidChannel<'_>, using_pin: bool) {
     let state_recv = channel.get_ux_update_receiver();
 
     let mut expected_updates = Vec::new();
-    // First make cred
+    // First make cred: PRF forces userVerification=required (W3C webauthn#2337),
+    // so without a PIN we must drive the interactive PIN setup flow.
     if using_pin {
+        expected_updates.push(UvUpdateShim::PinRequired);
+    } else {
+        expected_updates.push(UvUpdateShim::PinNotSet);
         expected_updates.push(UvUpdateShim::PinRequired);
     }
     expected_updates.push(UvUpdateShim::PresenceRequired); // First MakeCredential
@@ -612,8 +624,11 @@ async fn test_webauthn_prf_variable_length_input() {
 
     let state_recv = channel.get_ux_update_receiver();
     let expected_updates = vec![
+        // PRF forces UV=required (webauthn#2337); no-PIN device drives PIN setup.
+        UvUpdateShim::PinNotSet,        // MakeCredential: set PIN
+        UvUpdateShim::PinRequired,      // MakeCredential: auth with new PIN
         UvUpdateShim::PresenceRequired, // MakeCredential
-        UvUpdateShim::PresenceRequired, // assert empty
+        UvUpdateShim::PresenceRequired, // assert empty (cached pinUvAuthToken)
         UvUpdateShim::PresenceRequired, // assert 7 bytes
         UvUpdateShim::PresenceRequired, // assert 100 bytes
         UvUpdateShim::PresenceRequired, // determinism re-check (same 7 bytes)
@@ -706,5 +721,179 @@ async fn test_webauthn_prf_variable_length_input() {
     assert_eq!(short, short_again);
 
     let mut state_recv = uv_handle.await.unwrap();
+    assert_eq!(state_recv.try_recv(), Err(TryRecvError::Empty));
+}
+
+fn basic_make_credential_request(
+    user_id: &[u8; 32],
+    challenge: &[u8; 32],
+    user_verification: UserVerificationRequirement,
+    extensions: Option<MakeCredentialsRequestExtensions>,
+) -> MakeCredentialRequest {
+    MakeCredentialRequest {
+        origin: "example.org".to_owned(),
+        challenge: Vec::from(challenge.as_slice()),
+        relying_party: Ctap2PublicKeyCredentialRpEntity::new("example.org", "example.org"),
+        user: Ctap2PublicKeyCredentialUserEntity::new(user_id, "mario.rossi", "Mario Rossi"),
+        resident_key: Some(ResidentKeyRequirement::Discouraged),
+        user_verification,
+        algorithms: vec![Ctap2CredentialType::default()],
+        exclude: None,
+        extensions,
+        timeout: TIMEOUT,
+        top_origin: None,
+    }
+}
+
+// W3C webauthn#2337: PRF presence forces userVerification=required. With a PIN
+// already set, Discouraged + PRF must now trigger the PIN auth flow (PinRequired)
+// instead of being skipped as it would have been pre-upgrade.
+#[test(tokio::test)]
+async fn test_webauthn_prf_upgrades_uv_at_registration() {
+    let mut device = get_virtual_device();
+    let mut channel = device.channel().await.unwrap();
+    channel.change_pin("1234".into(), TIMEOUT).await.unwrap();
+
+    let state_recv = channel.get_ux_update_receiver();
+    let updates = tokio::spawn(handle_updates(
+        state_recv,
+        vec![UvUpdateShim::PinRequired, UvUpdateShim::PresenceRequired],
+    ));
+
+    let user_id: [u8; 32] = thread_rng().gen();
+    let challenge: [u8; 32] = thread_rng().gen();
+    let request = basic_make_credential_request(
+        &user_id,
+        &challenge,
+        UserVerificationRequirement::Discouraged,
+        Some(MakeCredentialsRequestExtensions {
+            prf: Some(MakeCredentialPrfInput { _eval: None }),
+            ..Default::default()
+        }),
+    );
+
+    let response = channel
+        .webauthn_make_credential(&request)
+        .await
+        .expect("Failed to register credential");
+    assert_eq!(
+        response.unsigned_extensions_output.prf,
+        Some(MakeCredentialPrfOutput {
+            enabled: Some(true)
+        })
+    );
+
+    let mut state_recv = updates.await.unwrap();
+    assert_eq!(state_recv.try_recv(), Err(TryRecvError::Empty));
+}
+
+// Negative: without PRF, Discouraged + PIN-set device must NOT trigger the PIN
+// flow. Guards against the upgrade leaking into non-PRF requests.
+#[test(tokio::test)]
+async fn test_webauthn_no_prf_no_upgrade() {
+    let mut device = get_virtual_device();
+    let mut channel = device.channel().await.unwrap();
+    channel.change_pin("1234".into(), TIMEOUT).await.unwrap();
+
+    let state_recv = channel.get_ux_update_receiver();
+    let updates = tokio::spawn(handle_updates(
+        state_recv,
+        vec![UvUpdateShim::PresenceRequired],
+    ));
+
+    let user_id: [u8; 32] = thread_rng().gen();
+    let challenge: [u8; 32] = thread_rng().gen();
+    let request = basic_make_credential_request(
+        &user_id,
+        &challenge,
+        UserVerificationRequirement::Discouraged,
+        None,
+    );
+
+    channel
+        .webauthn_make_credential(&request)
+        .await
+        .expect("Failed to register credential");
+
+    let mut state_recv = updates.await.unwrap();
+    assert_eq!(state_recv.try_recv(), Err(TryRecvError::Empty));
+}
+
+// W3C webauthn#2337: same upgrade applies at assertion time. We clear the
+// cached PinUvAuthToken between registration and assertion so the assertion
+// must obtain fresh UV; without the clear, the cached (mc|ga, rpid) token
+// would cover the assertion regardless of whether the upgrade engaged.
+#[test(tokio::test)]
+async fn test_webauthn_prf_upgrades_uv_at_assertion() {
+    let mut device = get_virtual_device();
+    let mut channel = device.channel().await.unwrap();
+    channel.change_pin("1234".into(), TIMEOUT).await.unwrap();
+
+    let user_id: [u8; 32] = thread_rng().gen();
+    let challenge: [u8; 32] = thread_rng().gen();
+
+    let registration = basic_make_credential_request(
+        &user_id,
+        &challenge,
+        UserVerificationRequirement::Required,
+        Some(MakeCredentialsRequestExtensions {
+            prf: Some(MakeCredentialPrfInput { _eval: None }),
+            ..Default::default()
+        }),
+    );
+    let state_recv = channel.get_ux_update_receiver();
+    let setup_updates = tokio::spawn(handle_updates(
+        state_recv,
+        vec![UvUpdateShim::PinRequired, UvUpdateShim::PresenceRequired],
+    ));
+    let response = channel
+        .webauthn_make_credential(&registration)
+        .await
+        .expect("Failed to register credential");
+    let state_recv = setup_updates.await.unwrap();
+
+    let credential: Ctap2PublicKeyCredentialDescriptor =
+        (&response.authenticator_data).try_into().unwrap();
+
+    channel.clear_uv_auth_token_store();
+
+    let prf = PrfInput {
+        eval: Some(PrfInputValue {
+            first: vec![1; 32],
+            second: None,
+        }),
+        eval_by_credential: HashMap::new(),
+    };
+    let get_assertion = GetAssertionRequest {
+        relying_party_id: "example.org".to_owned(),
+        origin: "example.org".to_owned(),
+        challenge: Vec::from(challenge),
+        allow: vec![credential],
+        user_verification: UserVerificationRequirement::Discouraged,
+        extensions: Some(GetAssertionRequestExtensions {
+            prf: Some(prf),
+            ..Default::default()
+        }),
+        timeout: TIMEOUT,
+        top_origin: None,
+    };
+    let assertion_updates = tokio::spawn(handle_updates(
+        state_recv,
+        vec![UvUpdateShim::PinRequired, UvUpdateShim::PresenceRequired],
+    ));
+    let assertion = channel
+        .webauthn_get_assertion(&get_assertion)
+        .await
+        .expect("Failed to get assertion");
+    let prf_output = assertion.assertions[0]
+        .unsigned_extensions_output
+        .as_ref()
+        .expect("Missing unsigned_extensions_output")
+        .prf
+        .as_ref()
+        .expect("Missing PRF output");
+    assert!(prf_output.results.is_some());
+
+    let mut state_recv = assertion_updates.await.unwrap();
     assert_eq!(state_recv.try_recv(), Err(TryRecvError::Empty));
 }

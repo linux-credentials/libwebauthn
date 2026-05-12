@@ -6,7 +6,9 @@ use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::fido::FidoProtocol;
 use crate::ops::u2f::{RegisterRequest, SignRequest, UpgradableResponse};
-use crate::ops::webauthn::{DowngradableRequest, GetAssertionRequest, GetAssertionResponse};
+use crate::ops::webauthn::{
+    DowngradableRequest, GetAssertionRequest, GetAssertionResponse, UserVerificationRequirement,
+};
 use crate::ops::webauthn::{MakeCredentialRequest, MakeCredentialResponse};
 use crate::proto::ctap1::Ctap1;
 use crate::proto::ctap2::preflight::ctap2_preflight;
@@ -20,6 +22,11 @@ pub use crate::webauthn::error::{CtapError, Error, PlatformError};
 use crate::UvUpdate;
 
 use pin_uv_auth_token::{user_verification, UsedPinUvAuthToken};
+
+// See W3C webauthn#2337.
+fn prf_forces_uv_upgrade(prf_present: bool, uv: UserVerificationRequirement) -> bool {
+    prf_present && !uv.is_required()
+}
 
 macro_rules! handle_errors {
     ($channel: expr, $resp: expr, $uv_auth_used: expr, $timeout: expr) => {
@@ -73,6 +80,18 @@ where
         &mut self,
         op: &MakeCredentialRequest,
     ) -> Result<MakeCredentialResponse, Error> {
+        let upgraded;
+        let prf_present = op.extensions.as_ref().is_some_and(|e| e.prf.is_some());
+        let op = if prf_forces_uv_upgrade(prf_present, op.user_verification) {
+            debug!("PRF requested: forcing userVerification=required (W3C webauthn#2337)");
+            upgraded = MakeCredentialRequest {
+                user_verification: UserVerificationRequirement::Required,
+                ..op.clone()
+            };
+            &upgraded
+        } else {
+            op
+        };
         trace!(?op, "WebAuthn MakeCredential request");
         let protocol = negotiate_protocol(self, op.is_downgradable()).await?;
         match protocol {
@@ -86,6 +105,18 @@ where
         &mut self,
         op: &GetAssertionRequest,
     ) -> Result<GetAssertionResponse, Error> {
+        let upgraded;
+        let prf_present = op.extensions.as_ref().is_some_and(|e| e.prf.is_some());
+        let op = if prf_forces_uv_upgrade(prf_present, op.user_verification) {
+            debug!("PRF requested: forcing userVerification=required (W3C webauthn#2337)");
+            upgraded = GetAssertionRequest {
+                user_verification: UserVerificationRequirement::Required,
+                ..op.clone()
+            };
+            &upgraded
+        } else {
+            op
+        };
         trace!(?op, "WebAuthn GetAssertion request");
         let protocol = negotiate_protocol(self, op.is_downgradable()).await?;
         match protocol {
@@ -298,4 +329,45 @@ async fn negotiate_protocol<C: Channel>(
         debug!("Selected protocol: {:?}", fido_protocol);
     }
     Ok(fido_protocol)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prf_absent_no_upgrade() {
+        assert!(!prf_forces_uv_upgrade(
+            false,
+            UserVerificationRequirement::Discouraged
+        ));
+        assert!(!prf_forces_uv_upgrade(
+            false,
+            UserVerificationRequirement::Preferred
+        ));
+        assert!(!prf_forces_uv_upgrade(
+            false,
+            UserVerificationRequirement::Required
+        ));
+    }
+
+    #[test]
+    fn prf_present_upgrades_when_not_required() {
+        assert!(prf_forces_uv_upgrade(
+            true,
+            UserVerificationRequirement::Discouraged
+        ));
+        assert!(prf_forces_uv_upgrade(
+            true,
+            UserVerificationRequirement::Preferred
+        ));
+    }
+
+    #[test]
+    fn prf_present_no_change_when_already_required() {
+        assert!(!prf_forces_uv_upgrade(
+            true,
+            UserVerificationRequirement::Required
+        ));
+    }
 }
