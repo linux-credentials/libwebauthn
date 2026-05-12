@@ -14,6 +14,8 @@
 
 use std::path::{Path, PathBuf};
 
+use publicsuffix::{List, Psl};
+
 /// Public Suffix List lookup interface.
 ///
 /// Implementations decide where the PSL data lives (system file, embedded
@@ -42,7 +44,7 @@ pub const SYSTEM_PSL_PATH: &str = "/usr/share/publicsuffix/public_suffix_list.da
 /// `PublicSuffixList` implementation backed by a Public Suffix List `.dat`
 /// file loaded from disk at construction time.
 pub struct DatFilePublicSuffixList {
-    list: publicsuffix::List,
+    list: List,
     source: PathBuf,
 }
 
@@ -59,8 +61,9 @@ impl DatFilePublicSuffixList {
     pub fn from_path(path: impl AsRef<Path>) -> Result<Self, DatFileLoadError> {
         let path = path.as_ref();
         let data = std::fs::read_to_string(path)?;
-        let list = publicsuffix::List::from_str(&data)
-            .map_err(|e| DatFileLoadError::Parse(e.to_string()))?;
+        let list: List = data
+            .parse()
+            .map_err(|e: publicsuffix::Error| DatFileLoadError::Parse(e.to_string()))?;
         Ok(Self {
             list,
             source: path.to_path_buf(),
@@ -74,14 +77,27 @@ impl DatFilePublicSuffixList {
 }
 
 impl PublicSuffixList for DatFilePublicSuffixList {
+    // `is_known()` filter drops `publicsuffix`'s implicit-wildcard match for
+    // unlisted TLDs (e.g. `localhost`), so bare `localhost` stays a valid rp.id.
     fn registrable_domain(&self, host: &str) -> Option<String> {
-        let domain = self.list.parse_domain(host).ok()?;
-        domain.root().map(|s| s.to_string())
+        let suffix = self.list.suffix(host.as_bytes())?;
+        if !suffix.is_known() {
+            return None;
+        }
+        let domain = self.list.domain(host.as_bytes())?;
+        std::str::from_utf8(domain.as_bytes())
+            .ok()
+            .map(String::from)
     }
 
     fn public_suffix(&self, host: &str) -> Option<String> {
-        let domain = self.list.parse_domain(host).ok()?;
-        domain.suffix().map(|s| s.to_string())
+        let suffix = self.list.suffix(host.as_bytes())?;
+        if !suffix.is_known() {
+            return None;
+        }
+        std::str::from_utf8(suffix.as_bytes())
+            .ok()
+            .map(String::from)
     }
 }
 
