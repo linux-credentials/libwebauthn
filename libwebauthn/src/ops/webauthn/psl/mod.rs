@@ -16,12 +16,17 @@
 //! * [`DafsaFilePublicSuffixList`] reads libpsl's binary `.dafsa` format
 //!   (shipped on Debian/Ubuntu, and on Fedora as `publicsuffix-list-dafsa`,
 //!   which is required by `libpsl` and thus present on most installs).
+//!
+//! Most callers should use [`SystemPublicSuffixList::auto`], which probes
+//! the standard system paths for whichever format is available.
 
 pub mod dafsa;
 pub mod dat;
+mod system;
 
 pub use dafsa::{DafsaFileLoadError, DafsaFilePublicSuffixList, SYSTEM_PSL_DAFSA_PATH};
 pub use dat::{DatFileLoadError, DatFilePublicSuffixList, SYSTEM_PSL_PATH};
+pub use system::{SystemLoadError, SystemPublicSuffixList};
 
 /// Public Suffix List lookup interface.
 ///
