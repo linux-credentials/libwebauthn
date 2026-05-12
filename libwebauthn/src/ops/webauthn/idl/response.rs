@@ -190,6 +190,7 @@ pub struct AuthenticatorAssertionResponseJSON {
 ///
 /// Client extension outputs, with any ArrayBuffer values encoded as Base64URL.
 /// Extensions are optional and may include:
+/// - appid: bool (authentication only, whether the FIDO AppID was used)
 /// - credBlob: bool
 /// - largeBlob: { blob: Base64URLString, written: bool }
 /// - prf: { results: { first: Base64URLString, second: Base64URLString } }
@@ -198,6 +199,13 @@ pub struct AuthenticatorAssertionResponseJSON {
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AuthenticationExtensionsClientOutputsJSON {
+    /// FIDO AppID extension output (for authentication, WebAuthn L3 §10.1.1):
+    /// `Some(true)` when the assertion was matched under the legacy AppID,
+    /// `Some(false)` when the AppID was requested but not used,
+    /// `None` when the extension was not requested.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub appid: Option<bool>,
+
     /// The credential properties extension output (for registration).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cred_props: Option<CredentialPropertiesOutputJSON>,

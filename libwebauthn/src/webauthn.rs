@@ -9,7 +9,7 @@ use crate::ops::u2f::{RegisterRequest, SignRequest, UpgradableResponse};
 use crate::ops::webauthn::{DowngradableRequest, GetAssertionRequest, GetAssertionResponse};
 use crate::ops::webauthn::{MakeCredentialRequest, MakeCredentialResponse};
 use crate::proto::ctap1::Ctap1;
-use crate::proto::ctap2::preflight::ctap2_preflight;
+use crate::proto::ctap2::preflight::{ctap2_preflight, ctap2_preflight_with_appid};
 use crate::proto::ctap2::{
     Ctap2, Ctap2ClientPinRequest, Ctap2GetAssertionRequest, Ctap2MakeCredentialRequest,
     Ctap2UserVerificationOperation,
@@ -104,11 +104,21 @@ async fn make_credential_fido2<C: Channel>(
         Ctap2MakeCredentialRequest::from_webauthn_request(op, &get_info_response)?;
     if C::supports_preflight() {
         if let Some(exclude_list) = &op.exclude {
-            let filtered_exclude_list = ctap2_preflight(
+            // FIDO AppID Exclusion (WebAuthn L3 §10.1.2): if the relying
+            // party supplied a legacy AppID, the preflight must test
+            // each excludeList entry against both `SHA-256(rp.id)` and
+            // `SHA-256(appidExclude)` so that legacy U2F-keyed
+            // credentials are correctly detected.
+            let appid_exclude = op
+                .extensions
+                .as_ref()
+                .and_then(|e| e.appid_exclude.as_deref());
+            let filtered_exclude_list = ctap2_preflight_with_appid(
                 channel,
                 exclude_list,
                 &op.client_data_hash(),
                 &op.relying_party.id,
+                appid_exclude,
             )
             .await;
             ctap2_request.exclude = Some(filtered_exclude_list);
@@ -246,13 +256,41 @@ async fn get_assertion_u2f<C: Channel>(
     channel: &mut C,
     op: &GetAssertionRequest,
 ) -> Result<GetAssertionResponse, Error> {
+    use sha2::{Digest, Sha256};
+
     let sign_requests: Vec<SignRequest> = op.try_downgrade()?;
+
+    // Precompute the AppID-derived application parameter so we can
+    // distinguish a match-by-rpId from a match-by-appid for the
+    // `clientExtensionResults.appid` output. The downgrade path emits
+    // both forms of SignRequest when `appid` is set.
+    let appid_hash: Option<Vec<u8>> =
+        op.extensions
+            .as_ref()
+            .and_then(|e| e.appid.as_ref())
+            .map(|appid| {
+                let mut hasher = Sha256::default();
+                hasher.update(appid.as_bytes());
+                hasher.finalize().to_vec()
+            });
 
     for sign_request in sign_requests {
         match channel.ctap1_sign(&sign_request).await {
             Ok(response) => {
                 debug!("Found successful candidate in allowList");
-                return response.try_upgrade(&sign_request);
+                let mut upgraded = response.try_upgrade(&sign_request)?;
+                // Surface the FIDO AppID extension output in the
+                // assertion's clientExtensionResults.
+                if let Some(ref appid_hash) = appid_hash {
+                    let used_appid = sign_request.app_id_hash == *appid_hash;
+                    for assertion in upgraded.assertions.iter_mut() {
+                        let unsigned = assertion
+                            .unsigned_extensions_output
+                            .get_or_insert_with(Default::default);
+                        unsigned.appid = Some(used_appid);
+                    }
+                }
+                return Ok(upgraded);
             }
             Err(Error::Ctap(CtapError::NoCredentials)) => {
                 debug!("No credentials found, trying with the next.");

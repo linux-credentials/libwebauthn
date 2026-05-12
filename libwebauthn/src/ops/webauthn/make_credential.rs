@@ -549,6 +549,11 @@ pub struct MakeCredentialsRequestExtensions {
     pub min_pin_length: Option<bool>,
     pub hmac_create_secret: Option<bool>,
     pub prf: Option<MakeCredentialPrfInput>,
+    /// FIDO AppID Exclusion extension (WebAuthn L3 §10.1.2). When set, the
+    /// excludeList is preflighted against both `SHA-256(rp.id)` and
+    /// `SHA-256(appidExclude)` so that legacy U2F-keyed credentials are
+    /// detected and registration is prevented.
+    pub appid_exclude: Option<String>,
 }
 
 pub type MakeCredentialsResponseExtensions = Ctap2MakeCredentialsResponseExtensions;
@@ -785,6 +790,25 @@ mod tests {
             req.extensions,
             Some(MakeCredentialsRequestExtensions { prf: Some(_), .. })
         ));
+    }
+
+    #[test]
+    fn test_request_from_json_appid_exclude_extension() {
+        let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
+        let req_json = json_field_add(
+            REQUEST_BASE_JSON,
+            "extensions",
+            r#"{"appidExclude": "https://www.example.org/u2f/origins.json"}"#,
+        );
+
+        let req: MakeCredentialRequest =
+            MakeCredentialRequest::from_json(&request_origin, &MockPublicSuffixList, &req_json)
+                .unwrap();
+        let ext = req.extensions.expect("extensions should be present");
+        assert_eq!(
+            ext.appid_exclude.as_deref(),
+            Some("https://www.example.org/u2f/origins.json")
+        );
     }
 
     #[test]

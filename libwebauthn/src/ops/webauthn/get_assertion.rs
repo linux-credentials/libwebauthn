@@ -96,6 +96,29 @@ pub enum GetAssertionRequestParsingError {
 
     #[error("Mismatching relying party ID: {0} != {1}")]
     MismatchingRelyingPartyId(String, String),
+
+    #[error("Invalid AppID: {0}")]
+    InvalidAppId(String),
+}
+
+/// Basic sanity check for FIDO AppID strings (WebAuthn L3 §10.1.1).
+///
+/// Per spec the AppID should be a same-site URL (typically `https://<rpid>/...`).
+/// Full same-site validation against the rpId is not yet implemented; for now
+/// we require non-empty input, an absolute URL form, and the `https` scheme.
+fn validate_appid(appid: &str) -> Result<String, GetAssertionRequestParsingError> {
+    if appid.is_empty() {
+        return Err(GetAssertionRequestParsingError::InvalidAppId(
+            "appid must not be empty".to_string(),
+        ));
+    }
+    // Sanity check: must be an https URL.
+    if !appid.starts_with("https://") {
+        return Err(GetAssertionRequestParsingError::InvalidAppId(format!(
+            "appid must be an https URL, got: {appid}"
+        )));
+    }
+    Ok(appid.to_string())
 }
 
 impl WebAuthnIDL<GetAssertionRequestParsingError> for GetAssertionRequest {
@@ -145,6 +168,11 @@ impl FromIdlModel<PublicKeyCredentialRequestOptionsJSON, GetAssertionRequestPars
             None => None,
         };
 
+        let appid = match inner.extensions.as_ref().and_then(|e| e.appid.as_ref()) {
+            Some(s) => Some(validate_appid(s)?),
+            None => None,
+        };
+
         let extensions =
             inner
                 .extensions
@@ -156,6 +184,7 @@ impl FromIdlModel<PublicKeyCredentialRequestOptionsJSON, GetAssertionRequestPars
                         .clone()
                         .and_then(|lb| GetAssertionLargeBlobExtension::try_from(lb).ok()),
                     prf: prf.clone(),
+                    appid: appid.clone(),
                 });
 
         let timeout: Duration = inner
@@ -328,6 +357,10 @@ pub struct GetAssertionRequestExtensions {
     /// PRF extension input. At the CTAP level, this is converted to HMAC secret.
     pub prf: Option<PrfInput>,
     pub large_blob: Option<GetAssertionLargeBlobExtension>,
+    /// FIDO AppID extension (WebAuthn L3 §10.1.1). When the relying party has
+    /// existing U2F credentials registered under a legacy AppID, this URL is
+    /// hashed in place of the rpId to derive the U2F application parameter.
+    pub appid: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -389,6 +422,12 @@ pub struct GetAssertionResponseUnsignedExtensions {
     pub large_blob: Option<GetAssertionLargeBlobExtensionOutput>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prf: Option<GetAssertionPrfOutput>,
+    /// FIDO AppID extension output (WebAuthn L3 §10.1.1):
+    /// `Some(true)` if the assertion matched the legacy AppID-derived application
+    /// parameter, `Some(false)` if AppID was supplied but `rp.id` was used, `None`
+    /// if the extension wasn't requested.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub appid: Option<bool>,
 }
 
 /// Context required for serializing a GetAssertion response to JSON.
@@ -464,6 +503,9 @@ impl Assertion {
         let mut results = AuthenticationExtensionsClientOutputsJSON::default();
 
         if let Some(unsigned_ext) = &self.unsigned_extensions_output {
+            // FIDO AppID extension output
+            results.appid = unsigned_ext.appid;
+
             // HMAC-secret extension output
             if let Some(hmac_output) = &unsigned_ext.hmac_get_secret {
                 results.hmac_get_secret = Some(HMACGetSecretOutputJSON {
@@ -541,34 +583,62 @@ impl DowngradableRequest<Vec<SignRequest>> for GetAssertionRequest {
 
     fn try_downgrade(&self) -> Result<Vec<SignRequest>, CtapError> {
         trace!(?self);
-        let downgraded_requests: Vec<SignRequest> = self
-            .allow
-            .iter()
-            .map(|credential| {
-                // Let controlByte be a byte initialized as follows:
-                // * If "up" is set to false, set it to 0x08 (dont-enforce-user-presence-and-sign).
-                // * For USB, set it to 0x07 (check-only). This should prevent call getting blocked on waiting for user
-                //   input. If response returns success, then call again setting the enforce-user-presence-and-sign.
-                // * For NFC, set it to 0x03 (enforce-user-presence-and-sign). The tap has already provided the presence
-                //   and won’t block.
-                // --> This is already set to 0x08 in trait: From<&Ctap1RegisterRequest> for ApduRequest
+        let challenge = self.client_data_hash();
 
-                // Use clientDataHash parameter of CTAP2 request as CTAP1/U2F challenge parameter (32 bytes).
-                let challenge = self.client_data_hash();
+        // Let rpIdHash be a byte string of size 32 initialized with SHA-256 hash of rp.id parameter as
+        // CTAP1/U2F application parameter (32 bytes).
+        let mut hasher = Sha256::default();
+        hasher.update(self.relying_party_id.as_bytes());
+        let rp_id_hash = hasher.finalize().to_vec();
 
-                // Let rpIdHash be a byte string of size 32 initialized with SHA-256 hash of rp.id parameter as
-                // CTAP1/U2F application parameter (32 bytes).
+        // FIDO AppID extension (WebAuthn L3 §10.1.1): if the relying party
+        // supplies a legacy AppID, additionally derive a second application
+        // parameter from `SHA-256(appid)` and emit a paired SignRequest for
+        // each credential. The downstream U2F sign loop tries both, mirroring
+        // the spec's "try rpId first, then appID" preflight model.
+        let appid_hash: Option<Vec<u8>> = self
+            .extensions
+            .as_ref()
+            .and_then(|e| e.appid.as_ref())
+            .map(|appid| {
                 let mut hasher = Sha256::default();
-                hasher.update(self.relying_party_id.as_bytes());
-                let rp_id_hash = hasher.finalize().to_vec();
+                hasher.update(appid.as_bytes());
+                hasher.finalize().to_vec()
+            });
 
-                // Let credentialId is the byte string initialized with the id for this PublicKeyCredentialDescriptor.
-                let credential_id = &credential.id;
+        let mut downgraded_requests: Vec<SignRequest> = Vec::new();
+        for credential in &self.allow {
+            // Let controlByte be a byte initialized as follows:
+            // * If "up" is set to false, set it to 0x08 (dont-enforce-user-presence-and-sign).
+            // * For USB, set it to 0x07 (check-only). This should prevent call getting blocked on waiting for user
+            //   input. If response returns success, then call again setting the enforce-user-presence-and-sign.
+            // * For NFC, set it to 0x03 (enforce-user-presence-and-sign). The tap has already provided the presence
+            //   and won’t block.
+            // --> This is already set to 0x08 in trait: From<&Ctap1RegisterRequest> for ApduRequest
 
-                // Let u2fAuthenticateRequest be a byte string with the following structure: [...]
-                SignRequest::new_upgraded(&rp_id_hash, &challenge, credential_id, self.timeout)
-            })
-            .collect();
+            // Let credentialId is the byte string initialized with the id for this PublicKeyCredentialDescriptor.
+            let credential_id = &credential.id;
+
+            // Let u2fAuthenticateRequest be a byte string with the following structure: [...]
+            downgraded_requests.push(SignRequest::new_upgraded(
+                &rp_id_hash,
+                &challenge,
+                credential_id,
+                self.timeout,
+            ));
+
+            // If an AppID was supplied, also emit a sign request keyed under
+            // the legacy AppID hash, so a U2F-keyed credential under the old
+            // application parameter remains reachable.
+            if let Some(ref appid_hash) = appid_hash {
+                downgraded_requests.push(SignRequest::new_upgraded(
+                    appid_hash,
+                    &challenge,
+                    credential_id,
+                    self.timeout,
+                ));
+            }
+        }
         trace!(?downgraded_requests);
         Ok(downgraded_requests)
     }
@@ -759,6 +829,86 @@ mod tests {
     }
 
     #[test]
+    fn test_request_from_json_appid_extension() {
+        let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
+        let req_json = json_field_add(
+            REQUEST_BASE_JSON,
+            "extensions",
+            r#"{"appid":"https://www.example.org/u2f/origins.json"}"#,
+        );
+
+        let req: GetAssertionRequest =
+            GetAssertionRequest::from_json(&request_origin, &MockPublicSuffixList, &req_json)
+                .unwrap();
+        let ext = req.extensions.expect("extensions should be present");
+        assert_eq!(
+            ext.appid.as_deref(),
+            Some("https://www.example.org/u2f/origins.json")
+        );
+    }
+
+    #[test]
+    fn test_request_from_json_appid_extension_invalid_non_https() {
+        let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
+        let req_json = json_field_add(
+            REQUEST_BASE_JSON,
+            "extensions",
+            r#"{"appid":"http://www.example.org/u2f/origins.json"}"#,
+        );
+
+        let res = GetAssertionRequest::from_json(&request_origin, &MockPublicSuffixList, &req_json);
+        assert!(matches!(
+            res,
+            Err(GetAssertionRequestParsingError::InvalidAppId(_))
+        ));
+    }
+
+    #[test]
+    fn test_try_downgrade_with_appid_uses_appid_hash() {
+        use sha2::{Digest, Sha256};
+
+        let mut req = request_base();
+        req.extensions = Some(GetAssertionRequestExtensions {
+            cred_blob: false,
+            prf: None,
+            large_blob: None,
+            appid: Some("https://www.example.org/u2f/origins.json".to_string()),
+        });
+
+        let sign_requests = req.try_downgrade().expect("downgrade ok");
+        // With one credential in allow and `appid` set, we emit two requests:
+        // first the rp.id-derived one, then the appid-derived one.
+        assert_eq!(sign_requests.len(), 2);
+
+        let mut rp_hasher = Sha256::default();
+        rp_hasher.update(b"example.org");
+        let rp_hash = rp_hasher.finalize().to_vec();
+
+        let mut appid_hasher = Sha256::default();
+        appid_hasher.update(b"https://www.example.org/u2f/origins.json");
+        let appid_hash = appid_hasher.finalize().to_vec();
+
+        assert_eq!(sign_requests[0].app_id_hash, rp_hash);
+        assert_eq!(sign_requests[1].app_id_hash, appid_hash);
+        assert_eq!(sign_requests[0].key_handle, sign_requests[1].key_handle);
+    }
+
+    #[test]
+    fn test_try_downgrade_without_appid_uses_rp_hash() {
+        use sha2::{Digest, Sha256};
+
+        let req = request_base();
+        let sign_requests = req.try_downgrade().expect("downgrade ok");
+        // One credential, no appid: one request.
+        assert_eq!(sign_requests.len(), 1);
+
+        let mut rp_hasher = Sha256::default();
+        rp_hasher.update(b"example.org");
+        let rp_hash = rp_hasher.finalize().to_vec();
+        assert_eq!(sign_requests[0].app_id_hash, rp_hash);
+    }
+
+    #[test]
     #[ignore] // FIXME(#134) allow arbitrary size input
     fn test_request_from_json_prf_extension() {
         let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
@@ -909,6 +1059,7 @@ mod tests {
                     second: None,
                 }),
             }),
+            appid: None,
         });
 
         let request = create_test_request();
@@ -920,5 +1071,49 @@ mod tests {
         let results = prf.results.as_ref().unwrap();
         assert_eq!(results.first.0, vec![0x01u8; 32]);
         assert!(results.second.is_none());
+    }
+
+    #[test]
+    fn test_assertion_appid_extension_output_true() {
+        let mut assertion = create_test_assertion();
+        assertion.unsigned_extensions_output = Some(GetAssertionResponseUnsignedExtensions {
+            hmac_get_secret: None,
+            large_blob: None,
+            prf: None,
+            appid: Some(true),
+        });
+
+        let request = create_test_request();
+        let model = assertion.to_idl_model(&request).unwrap();
+        assert_eq!(model.client_extension_results.appid, Some(true));
+
+        // The output should also round-trip through the JSON wire format.
+        let json = serde_json::to_value(&model.client_extension_results).unwrap();
+        assert_eq!(
+            json.get("appid").and_then(|v| v.as_bool()),
+            Some(true),
+            "JSON output should include `appid: true`"
+        );
+    }
+
+    #[test]
+    fn test_assertion_appid_extension_output_omitted_when_none() {
+        let mut assertion = create_test_assertion();
+        assertion.unsigned_extensions_output = Some(GetAssertionResponseUnsignedExtensions {
+            hmac_get_secret: None,
+            large_blob: None,
+            prf: None,
+            appid: None,
+        });
+
+        let request = create_test_request();
+        let model = assertion.to_idl_model(&request).unwrap();
+        assert_eq!(model.client_extension_results.appid, None);
+
+        let json = serde_json::to_value(&model.client_extension_results).unwrap();
+        assert!(
+            json.get("appid").is_none(),
+            "JSON output should omit `appid` when not requested"
+        );
     }
 }
