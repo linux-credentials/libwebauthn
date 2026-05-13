@@ -3,6 +3,7 @@ pub mod device;
 pub mod error;
 pub mod gatt;
 pub mod manager;
+pub(crate) mod pairing;
 
 pub use connection::Connection;
 pub use device::FidoDevice;
