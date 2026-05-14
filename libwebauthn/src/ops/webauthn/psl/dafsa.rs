@@ -147,13 +147,12 @@ fn parse_header(bytes: &[u8]) -> Result<Vec<u8>, DafsaFileLoadError> {
 /// flag bits) if `key` is present in `graph`, `None` otherwise. ASCII-only: callers
 /// must pass keys already converted to IDN-ASCII (punycode for non-ASCII labels).
 fn lookup(graph: &[u8], key: &[u8]) -> Option<u8> {
-    let end = graph.len();
     let mut pos: usize = 0;
     let mut offset: usize = 0;
     let mut key_pos: usize = 0;
     let key_end = key.len();
 
-    while let Some(()) = get_next_offset(graph, end, &mut pos, &mut offset) {
+    while get_next_offset(graph, &mut pos, &mut offset).is_some() {
         let mut did_consume = false;
 
         if key_pos < key_end && !is_eol(graph, offset) {
@@ -196,32 +195,27 @@ fn lookup(graph: &[u8], key: &[u8]) -> Option<u8> {
     None
 }
 
-fn get_next_offset(graph: &[u8], end: usize, pos: &mut usize, offset: &mut usize) -> Option<()> {
-    if *pos >= end {
-        return None;
-    }
-    if *pos + 2 >= end {
-        return None;
-    }
-    let b = graph[*pos];
+fn get_next_offset(graph: &[u8], pos: &mut usize, offset: &mut usize) -> Option<()> {
+    let b = *graph.get(*pos)?;
     let consumed = match b & 0x60 {
         0x60 => {
-            *offset += ((b as usize & 0x1F) << 16)
-                | ((graph[*pos + 1] as usize) << 8)
-                | (graph[*pos + 2] as usize);
+            let hi = *graph.get(*pos + 1)? as usize;
+            let lo = *graph.get(*pos + 2)? as usize;
+            *offset = offset.checked_add(((b as usize & 0x1F) << 16) | (hi << 8) | lo)?;
             3
         }
         0x40 => {
-            *offset += ((b as usize & 0x1F) << 8) | (graph[*pos + 1] as usize);
+            let lo = *graph.get(*pos + 1)? as usize;
+            *offset = offset.checked_add(((b as usize & 0x1F) << 8) | lo)?;
             2
         }
         _ => {
-            *offset += (b as usize) & 0x3F;
+            *offset = offset.checked_add((b as usize) & 0x3F)?;
             1
         }
     };
     if b & 0x80 != 0 {
-        *pos = end;
+        *pos = graph.len();
     } else {
         *pos += consumed;
     }
