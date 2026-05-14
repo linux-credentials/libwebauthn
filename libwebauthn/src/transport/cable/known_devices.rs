@@ -23,7 +23,7 @@ use tokio::task;
 use tracing::{debug, instrument, trace};
 
 use super::channel::CableChannel;
-use super::tunnel::{self, CableLinkingInfo};
+use super::protocol::{self, CableLinkingInfo};
 use super::Cable;
 
 #[async_trait]
@@ -223,7 +223,7 @@ impl<'d> Device<'d, Cable, CableChannel> for CableKnownDevice {
                 cbor_rx_send,
             );
 
-            tunnel::connection(tunnel_input).await;
+            protocol::connection(tunnel_input).await;
             ux_sender
                 .set_connection_state(ConnectionState::Terminated)
                 .await;

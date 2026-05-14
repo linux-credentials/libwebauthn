@@ -19,7 +19,8 @@ use super::connection_stages::{
     MpscUxUpdateSender, ProximityCheckInput, TunnelConnectionInput, UxUpdateSender,
 };
 use super::known_devices::CableKnownDeviceInfoStore;
-use super::tunnel::{self, KNOWN_TUNNEL_DOMAINS};
+use super::protocol;
+use super::tunnel::KNOWN_TUNNEL_DOMAINS;
 use super::{channel::CableChannel, channel::ConnectionState, Cable};
 use crate::proto::ctap2::cbor;
 use crate::transport::cable::digit_encode;
@@ -225,7 +226,7 @@ impl<'d> Device<'d, Cable, CableChannel> for CableQrCodeDevice {
                 cbor_tx_recv,
                 cbor_rx_send,
             );
-            tunnel::connection(tunnel_input).await;
+            protocol::connection(tunnel_input).await;
 
             ux_sender
                 .set_connection_state(ConnectionState::Terminated)
