@@ -49,6 +49,14 @@ pub(crate) async fn select_uv_proto(
     None
 }
 
+/// Spec-valid decrypted pinUvAuthToken length: 16 or 32 bytes for protocol one, exactly 32 for protocol two.
+fn pin_uv_auth_token_len_valid(version: Ctap2PinUvAuthProtocol, len: usize) -> bool {
+    match version {
+        Ctap2PinUvAuthProtocol::One => len == 16 || len == 32,
+        Ctap2PinUvAuthProtocol::Two => len == 32,
+    }
+}
+
 #[instrument(skip_all)]
 pub(crate) async fn user_verification<R, C>(
     channel: &mut C,
@@ -359,18 +367,12 @@ where
                 let uv_auth_token =
                     uv_proto.decrypt(&shared_secret, &encrypted_pin_uv_auth_token)?;
 
-                // pinUvAuthToken is 16 bytes for PUAP1 and 32 bytes for PUAP2.
-                // Reject a shorter token before it is used as a key downstream.
-                let min_token_len = match uv_proto.version() {
-                    Ctap2PinUvAuthProtocol::One => 16,
-                    Ctap2PinUvAuthProtocol::Two => 32,
-                };
-                if uv_auth_token.len() < min_token_len {
+                // Reject a spec-invalid token length before it is used as a key downstream.
+                if !pin_uv_auth_token_len_valid(uv_proto.version(), uv_auth_token.len()) {
                     error!(
                         protocol = ?uv_proto.version(),
                         token_len = uv_auth_token.len(),
-                        min_expected = min_token_len,
-                        "Decrypted pinUvAuthToken is shorter than required"
+                        "Decrypted pinUvAuthToken has an invalid length"
                     );
                     return Err(Error::Ctap(CtapError::Other));
                 }
@@ -563,8 +565,24 @@ mod test {
         UvUpdate,
     };
 
-    use super::{user_verification, Error};
+    use super::{pin_uv_auth_token_len_valid, user_verification, Error};
     const TIMEOUT: Duration = Duration::from_secs(1);
+
+    #[test]
+    fn pin_uv_auth_token_len_valid_enforces_spec_lengths() {
+        use Ctap2PinUvAuthProtocol::{One, Two};
+        // Protocol one: the authenticator may pick 16 or 32 bytes, nothing else.
+        assert!(pin_uv_auth_token_len_valid(One, 16));
+        assert!(pin_uv_auth_token_len_valid(One, 32));
+        for bad in [0, 15, 17, 20, 31, 33, 64] {
+            assert!(!pin_uv_auth_token_len_valid(One, bad), "len {bad}");
+        }
+        // Protocol two: exactly 32 bytes.
+        assert!(pin_uv_auth_token_len_valid(Two, 32));
+        for bad in [0, 15, 16, 17, 31, 33, 64] {
+            assert!(!pin_uv_auth_token_len_valid(Two, bad), "len {bad}");
+        }
+    }
 
     fn create_info(
         options: &[(&'static str, bool)],
