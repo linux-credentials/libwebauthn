@@ -10,6 +10,7 @@ use rand::RngCore;
 use serde::Serialize;
 use serde_bytes::ByteArray;
 use serde_indexed::SerializeIndexed;
+use serde_repr::Serialize_repr;
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task;
 use tracing::instrument;
@@ -34,6 +35,14 @@ pub enum QrCodeOperationHint {
     GetAssertionRequest,
     #[serde(rename = "mc")]
     MakeCredential,
+}
+
+/// A data transfer channel the client supports, as listed in QR code key 6.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize_repr)]
+#[repr(u8)]
+pub enum CableTransportChannel {
+    WebSocket = 0,
+    Ble = 1,
 }
 
 #[derive(Debug, Clone, SerializeIndexed)]
@@ -69,9 +78,9 @@ pub struct CableQrCode {
     #[serde(index = 0x05)]
     pub operation_hint: QrCodeOperationHint,
 
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Key 6: data transfer channels the client supports (0 = WebSocket, 1 = BLE).
     #[serde(index = 0x06)]
-    pub supports_non_discoverable_mc: Option<bool>,
+    pub transports: Vec<CableTransportChannel>,
 }
 
 impl std::fmt::Display for CableQrCode {
@@ -142,10 +151,7 @@ impl CableQrCodeDevice {
                 current_time: current_unix_time,
                 operation_hint: hint,
                 state_assisted: Some(state_assisted),
-                supports_non_discoverable_mc: match hint {
-                    QrCodeOperationHint::MakeCredential => Some(true),
-                    _ => None,
-                },
+                transports: vec![CableTransportChannel::WebSocket],
             },
             private_key: private_key_scalar,
             store,
@@ -248,5 +254,19 @@ impl<'d> Device<'d, Cable, CableChannel> for CableQrCodeDevice {
     // }
 }
 
-// TODO: unit tests
-// https://source.chromium.org/chromium/chromium/src/+/main:device/fido/cable/v2_handshake_unittest.cc
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn qr_code_encodes_transport_channels_at_key_6() {
+        let device = CableQrCodeDevice::new_transient(QrCodeOperationHint::MakeCredential).unwrap();
+        let bytes = cbor::to_vec(&device.qr_code).unwrap();
+        let map: BTreeMap<u64, cbor::Value> = cbor::from_slice(&bytes).unwrap();
+        assert_eq!(
+            map.get(&6),
+            Some(&cbor::Value::Array(vec![cbor::Value::Integer(0)])),
+        );
+    }
+}
