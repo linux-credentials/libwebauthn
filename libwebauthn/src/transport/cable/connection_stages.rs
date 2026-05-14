@@ -1,12 +1,14 @@
+use ::btleplug::api::{AddressType, BDAddr};
 use async_trait::async_trait;
 use tokio::sync::{broadcast, mpsc, watch};
-use tracing::{debug, error, instrument, trace, warn};
+use tracing::{debug, error, info, instrument, trace, warn};
 
 use super::advertisement::{await_advertisement, DecryptedAdvert};
 use super::channel::{CableUpdate, CableUxUpdate, ConnectionState};
 use super::crypto::{derive, KeyPurpose};
 use super::data_channel::{CableDataChannel, WebSocketDataChannel};
 use super::known_devices::{CableKnownDevice, CableKnownDeviceInfoStore, ClientNonce};
+use super::l2cap::L2capDataChannel;
 use super::protocol::{self, CableTunnelConnectionType, TunnelNoiseState};
 use super::qr_code_device::CableQrCodeDevice;
 use super::tunnel;
@@ -46,14 +48,24 @@ impl ProximityCheckInput {
 
 #[derive(Debug)]
 pub(crate) struct ProximityCheckOutput {
-    pub _device: FidoDevice,
+    pub device: FidoDevice,
     pub advert: DecryptedAdvert,
+}
+
+/// L2CAP parameters from the advertisement suffix, for a BLE data channel.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct BleConnectionParams {
+    pub address: BDAddr,
+    pub address_type: Option<AddressType>,
+    pub psm: u16,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct ConnectionInput {
     pub tunnel_domain: String,
     pub connection_type: CableTunnelConnectionType,
+    /// Some if the CMHD offered a BLE L2CAP channel; None selects WebSocket.
+    pub ble: Option<BleConnectionParams>,
 }
 
 impl ConnectionInput {
@@ -79,9 +91,22 @@ impl ConnectionInput {
             tunnel_id: tunnel_id_str,
             private_key: qr_device.private_key,
         };
+
+        let ble = proximity_output
+            .advert
+            .suffix
+            .as_ref()
+            .and_then(|suffix| suffix.ble_psm())
+            .map(|psm| BleConnectionParams {
+                address: proximity_output.device.properties.address,
+                address_type: proximity_output.device.properties.address_type,
+                psm,
+            });
+
         Ok(Self {
             tunnel_domain,
             connection_type,
+            ble,
         })
     }
 
@@ -107,6 +132,7 @@ impl ConnectionInput {
         Self {
             tunnel_domain: known_device.device_info.tunnel_domain.clone(),
             connection_type,
+            ble: None,
         }
     }
 }
@@ -252,10 +278,7 @@ pub(crate) async fn proximity_check_stage(
     let (device, advert) = await_advertisement(&input.eid_key).await?;
 
     debug!("Proximity check completed successfully");
-    Ok(ProximityCheckOutput {
-        _device: device,
-        advert,
-    })
+    Ok(ProximityCheckOutput { device, advert })
 }
 
 #[instrument(skip_all, err)]
@@ -269,8 +292,7 @@ pub(crate) async fn connection_stage(
         .send_update(CableUxUpdate::CableUpdate(CableUpdate::Connecting))
         .await;
 
-    let ws_stream = tunnel::connect(&input.tunnel_domain, &input.connection_type).await?;
-    let data_channel: Box<dyn CableDataChannel> = Box::new(WebSocketDataChannel::new(ws_stream));
+    let data_channel = connect_data_channel(&input).await?;
 
     debug!("Connection stage completed successfully");
     Ok(ConnectionOutput {
@@ -278,6 +300,32 @@ pub(crate) async fn connection_stage(
         connection_type: input.connection_type,
         tunnel_domain: input.tunnel_domain,
     })
+}
+
+/// Connects the data transfer channel: a direct BLE L2CAP channel if the CMHD
+/// offered one, otherwise the WebSocket tunnel. A failed L2CAP attempt falls
+/// back to the tunnel, whose routing details are always present in the advert.
+async fn connect_data_channel(
+    input: &ConnectionInput,
+) -> Result<Box<dyn CableDataChannel>, TransportError> {
+    if let Some(ble) = input.ble {
+        match L2capDataChannel::connect(ble.address, ble.address_type, ble.psm).await {
+            Ok(channel) => {
+                info!(psm = ble.psm, "Connected over BLE L2CAP");
+                return Ok(Box::new(channel));
+            }
+            Err(e) => {
+                warn!(
+                    ?e,
+                    "BLE L2CAP connection failed, falling back to WebSocket tunnel"
+                );
+            }
+        }
+    }
+
+    let ws_stream = tunnel::connect(&input.tunnel_domain, &input.connection_type).await?;
+    info!(tunnel_domain = %input.tunnel_domain, "Connected over WebSocket tunnel");
+    Ok(Box::new(WebSocketDataChannel::new(ws_stream)))
 }
 
 #[instrument(skip_all, err)]
