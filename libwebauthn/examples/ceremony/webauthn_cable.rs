@@ -86,7 +86,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         println!("{}", image);
 
         let mut channel = device.channel().await.unwrap();
-        println!("Tunnel established {:?}", channel);
+        println!("Channel established {:?}", channel);
 
         let state_recv = channel.get_ux_update_receiver();
         tokio::spawn(common::handle_cable_updates(state_recv));
@@ -118,7 +118,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
     .unwrap();
 
     let mut channel = known_device.channel().await.unwrap();
-    println!("Tunnel established {:?}", channel);
+    println!("Channel established {:?}", channel);
 
     let state_recv = channel.get_ux_update_receiver();
     tokio::spawn(common::handle_cable_updates(state_recv));

@@ -37,6 +37,7 @@ _Looking for the D-Bus API proposal?_ Check out [credentialsd][credentialsd].
   - 🟢 Discoverable credentials (resident keys)
   - 🟢 Hybrid transport (caBLE v2): QR-initiated transactions
   - 🟢 Hybrid transport (caBLE v2): State-assisted transactions (remember this phone)
+  - 🟢 Hybrid transport (CTAP 2.3): direct BLE L2CAP data channel, QR-initiated, no tunnel server
 
 ## Runtime requirements
 
