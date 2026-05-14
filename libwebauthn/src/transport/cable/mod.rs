@@ -3,6 +3,7 @@ use std::fmt::Display;
 mod crypto;
 mod data_channel;
 mod digit_encode;
+mod l2cap;
 mod protocol;
 
 pub mod advertisement;
