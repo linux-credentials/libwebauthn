@@ -33,12 +33,27 @@ pub use system::{SystemLoadError, SystemPublicSuffixList};
 /// Implementations decide where the PSL data lives (system file, embedded
 /// snapshot, HTTP-cached, etc).
 pub trait PublicSuffixList: Send + Sync {
-    /// Returns the registrable domain (eTLD+1) of `host`, or `None` if
-    /// `host` has no registrable domain (e.g. it is itself a public suffix).
-    fn registrable_domain(&self, host: &str) -> Option<String>;
-
     /// Returns the public suffix of `host`, or `None` if none applies.
     fn public_suffix(&self, host: &str) -> Option<String>;
+
+    /// Returns the registrable domain (eTLD+1) of `host`, or `None` if
+    /// `host` has no registrable domain (e.g. it is itself a public suffix).
+    ///
+    /// The default implementation derives this from [`public_suffix`]: the
+    /// registrable domain is the public suffix plus one more label. An
+    /// implementation whose backing library computes it directly may override
+    /// this.
+    ///
+    /// [`public_suffix`]: PublicSuffixList::public_suffix
+    fn registrable_domain(&self, host: &str) -> Option<String> {
+        let suffix = self.public_suffix(host)?;
+        if host == suffix {
+            return None;
+        }
+        let prefix = host.strip_suffix(&suffix)?.strip_suffix('.')?;
+        let last_label = prefix.rsplit('.').next()?;
+        Some(format!("{last_label}.{suffix}"))
+    }
 }
 
 /// Test-only PSL that recognises a small fixed set of public suffixes.
@@ -62,16 +77,6 @@ impl PublicSuffixList for MockPublicSuffixList {
             }
         }
         None
-    }
-
-    fn registrable_domain(&self, host: &str) -> Option<String> {
-        let suffix = self.public_suffix(host)?;
-        if host == suffix {
-            return None;
-        }
-        let prefix = host.strip_suffix(&suffix)?.strip_suffix('.')?;
-        let last_label = prefix.rsplit('.').next()?;
-        Some(format!("{last_label}.{suffix}"))
     }
 }
 

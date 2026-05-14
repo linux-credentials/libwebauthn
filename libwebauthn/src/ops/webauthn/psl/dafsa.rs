@@ -102,16 +102,6 @@ impl PublicSuffixList for DafsaFilePublicSuffixList {
             }
         }
     }
-
-    fn registrable_domain(&self, host: &str) -> Option<String> {
-        let suffix = self.public_suffix(host)?;
-        if host == suffix {
-            return None;
-        }
-        let prefix = host.strip_suffix(&suffix)?.strip_suffix('.')?;
-        let last_label = prefix.rsplit('.').next()?;
-        Some(format!("{last_label}.{suffix}"))
-    }
 }
 
 fn parse_header(bytes: &[u8]) -> Result<Vec<u8>, DafsaFileLoadError> {
