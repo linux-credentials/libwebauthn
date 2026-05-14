@@ -1,7 +1,4 @@
 //! Transport-agnostic message channel for the hybrid transport.
-// Unused until the protocol refactor wires it in.
-#![allow(dead_code)]
-
 use async_trait::async_trait;
 use futures::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
