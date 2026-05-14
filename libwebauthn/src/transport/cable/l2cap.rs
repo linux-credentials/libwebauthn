@@ -1,7 +1,4 @@
 //! [`CableDataChannel`] over a direct BLE L2CAP connection-oriented channel.
-// Unused until the protocol refactor wires it in.
-#![allow(dead_code)]
-
 use std::str::FromStr;
 
 use async_trait::async_trait;

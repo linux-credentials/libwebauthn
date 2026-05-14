@@ -39,7 +39,6 @@ impl AdvertisementSuffix {
     }
 
     /// L2CAP server PSM for the BLE channel, if advertised and in `u16` range.
-    #[allow(dead_code)] // Consumed by the BLE L2CAP connection path (not yet wired).
     pub fn ble_psm(&self) -> Option<u16> {
         match self.channels.get(&TRANSPORT_CHANNEL_BLE) {
             Some(Value::Integer(psm)) => u16::try_from(*psm).ok(),

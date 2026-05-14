@@ -151,7 +151,7 @@ impl CableQrCodeDevice {
                 current_time: current_unix_time,
                 operation_hint: hint,
                 state_assisted: Some(state_assisted),
-                transports: vec![CableTransportChannel::WebSocket],
+                transports: vec![CableTransportChannel::WebSocket, CableTransportChannel::Ble],
             },
             private_key: private_key_scalar,
             store,
@@ -266,7 +266,10 @@ mod tests {
         let map: BTreeMap<u64, cbor::Value> = cbor::from_slice(&bytes).unwrap();
         assert_eq!(
             map.get(&6),
-            Some(&cbor::Value::Array(vec![cbor::Value::Integer(0)])),
+            Some(&cbor::Value::Array(vec![
+                cbor::Value::Integer(0),
+                cbor::Value::Integer(1),
+            ])),
         );
     }
 }
