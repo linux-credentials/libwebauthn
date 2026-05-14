@@ -79,8 +79,7 @@ impl DafsaFilePublicSuffixList {
         if let Some(flags) = lookup(&self.graph, domain.as_bytes()) {
             return (flags & FLAG_EXCEPTION) == 0;
         }
-        if let Some(parent_start) = domain.find('.').map(|i| i + 1) {
-            let parent = &domain[parent_start..];
+        if let Some((_, parent)) = domain.split_once('.') {
             if let Some(flags) = lookup(&self.graph, parent.as_bytes()) {
                 return (flags & FLAG_WILDCARD) != 0;
             }
@@ -96,8 +95,8 @@ impl PublicSuffixList for DafsaFilePublicSuffixList {
             if self.is_public_suffix(current) {
                 return Some(current.to_string());
             }
-            match current.find('.') {
-                Some(i) => current = &current[i + 1..],
+            match current.split_once('.') {
+                Some((_, rest)) => current = rest,
                 None => return None,
             }
         }
@@ -105,31 +104,34 @@ impl PublicSuffixList for DafsaFilePublicSuffixList {
 }
 
 fn parse_header(bytes: &[u8]) -> Result<Vec<u8>, DafsaFileLoadError> {
-    if bytes.len() < HEADER_LEN {
-        return Err(DafsaFileLoadError::Truncated);
-    }
-    if &bytes[..MAGIC.len()] != MAGIC {
+    let (header, graph) = bytes
+        .split_at_checked(HEADER_LEN)
+        .ok_or(DafsaFileLoadError::Truncated)?;
+    if !header.starts_with(MAGIC) {
         return Err(DafsaFileLoadError::BadMagic);
     }
-    if bytes[HEADER_LEN - 1] != b'\n' {
+    if header.last() != Some(&b'\n') {
         return Err(DafsaFileLoadError::BadMagic);
     }
-    let version_field = &bytes[MAGIC.len()..HEADER_LEN - 1];
+    let version_field = header
+        .get(MAGIC.len()..HEADER_LEN - 1)
+        .ok_or(DafsaFileLoadError::BadMagic)?;
     let digit_count = version_field
         .iter()
         .take_while(|b| b.is_ascii_digit())
         .count();
-    if digit_count == 0 {
-        return Err(DafsaFileLoadError::BadMagic);
-    }
-    let version: u32 = std::str::from_utf8(&version_field[..digit_count])
+    let version_digits = version_field
+        .get(..digit_count)
+        .filter(|digits| !digits.is_empty())
+        .ok_or(DafsaFileLoadError::BadMagic)?;
+    let version: u32 = std::str::from_utf8(version_digits)
         .map_err(|_| DafsaFileLoadError::BadMagic)?
         .parse()
         .map_err(|_| DafsaFileLoadError::BadMagic)?;
     if version != 0 {
         return Err(DafsaFileLoadError::UnsupportedVersion(version));
     }
-    Ok(bytes[HEADER_LEN..].to_vec())
+    Ok(graph.to_vec())
 }
 
 /// Port of `LookupStringInFixedSet` from libpsl's `lookup_string_in_fixed_set.c`.

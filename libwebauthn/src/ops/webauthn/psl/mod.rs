@@ -20,6 +20,9 @@
 //! Most callers should use [`SystemPublicSuffixList::auto`], which probes
 //! the standard system paths for whichever format is available.
 
+// Module-scoped until the crate-wide indexing_slicing deny lands.
+#![cfg_attr(not(any(test, feature = "virt")), deny(clippy::indexing_slicing))]
+
 pub mod dafsa;
 pub mod dat;
 mod system;
