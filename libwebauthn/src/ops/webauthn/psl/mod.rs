@@ -7,81 +7,55 @@
 //!
 //! Rather than bundle a snapshot of the PSL inside the crate (which would go
 //! stale with each release), libwebauthn defines a [`PublicSuffixList`] trait
-//! and lets callers plug in an implementation. A simple
-//! [`DatFilePublicSuffixList`] is provided that reads the standard `.dat`
-//! file shipped by the `publicsuffix-list` distribution package, kept fresh
-//! by the system package manager.
+//! and lets callers plug in an implementation. Two built-in loaders are
+//! provided that read system-managed Public Suffix List files kept fresh by
+//! the package manager:
+//!
+//! * [`DatFilePublicSuffixList`] reads the text `.dat` format (shipped on
+//!   Debian/Ubuntu, Arch, and Fedora's `publicsuffix-list` package).
+//! * [`DafsaFilePublicSuffixList`] reads libpsl's binary `.dafsa` format
+//!   (shipped on Debian/Ubuntu, and on Fedora as `publicsuffix-list-dafsa`,
+//!   which is required by `libpsl` and thus present on most installs).
+//!
+//! Most callers should use [`SystemPublicSuffixList::auto`], which probes
+//! the standard system paths for whichever format is available.
 
-use std::path::{Path, PathBuf};
+// Module-scoped until the crate-wide indexing_slicing deny lands.
+#![cfg_attr(not(any(test, feature = "virt")), deny(clippy::indexing_slicing))]
+
+pub mod dafsa;
+pub mod dat;
+mod system;
+
+pub use dafsa::{DafsaFileLoadError, DafsaFilePublicSuffixList, SYSTEM_PSL_DAFSA_PATH};
+pub use dat::{DatFileLoadError, DatFilePublicSuffixList, SYSTEM_PSL_PATH};
+pub use system::{SystemLoadError, SystemPublicSuffixList};
 
 /// Public Suffix List lookup interface.
 ///
 /// Implementations decide where the PSL data lives (system file, embedded
 /// snapshot, HTTP-cached, etc).
 pub trait PublicSuffixList: Send + Sync {
-    /// Returns the registrable domain (eTLD+1) of `host`, or `None` if
-    /// `host` has no registrable domain (e.g. it is itself a public suffix).
-    fn registrable_domain(&self, host: &str) -> Option<String>;
-
     /// Returns the public suffix of `host`, or `None` if none applies.
     fn public_suffix(&self, host: &str) -> Option<String>;
-}
 
-#[derive(thiserror::Error, Debug)]
-pub enum DatFileLoadError {
-    #[error("io error: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("invalid PSL data: {0}")]
-    Parse(String),
-}
-
-/// Standard system path for the Public Suffix List on most Linux distros that
-/// ship the `publicsuffix-list` (or equivalent) package.
-pub const SYSTEM_PSL_PATH: &str = "/usr/share/publicsuffix/public_suffix_list.dat";
-
-/// `PublicSuffixList` implementation backed by a Public Suffix List `.dat`
-/// file loaded from disk at construction time.
-pub struct DatFilePublicSuffixList {
-    list: publicsuffix::List,
-    source: PathBuf,
-}
-
-impl std::fmt::Debug for DatFilePublicSuffixList {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DatFilePublicSuffixList")
-            .field("source", &self.source)
-            .finish()
-    }
-}
-
-impl DatFilePublicSuffixList {
-    /// Reads a PSL `.dat` file from `path`.
-    pub fn from_path(path: impl AsRef<Path>) -> Result<Self, DatFileLoadError> {
-        let path = path.as_ref();
-        let data = std::fs::read_to_string(path)?;
-        let list = publicsuffix::List::from_str(&data)
-            .map_err(|e| DatFileLoadError::Parse(e.to_string()))?;
-        Ok(Self {
-            list,
-            source: path.to_path_buf(),
-        })
-    }
-
-    /// Reads the system-managed PSL at [`SYSTEM_PSL_PATH`].
-    pub fn from_system_file() -> Result<Self, DatFileLoadError> {
-        Self::from_path(SYSTEM_PSL_PATH)
-    }
-}
-
-impl PublicSuffixList for DatFilePublicSuffixList {
+    /// Returns the registrable domain (eTLD+1) of `host`, or `None` if
+    /// `host` has no registrable domain (e.g. it is itself a public suffix).
+    ///
+    /// The default implementation derives this from [`public_suffix`]: the
+    /// registrable domain is the public suffix plus one more label. An
+    /// implementation whose backing library computes it directly may override
+    /// this.
+    ///
+    /// [`public_suffix`]: PublicSuffixList::public_suffix
     fn registrable_domain(&self, host: &str) -> Option<String> {
-        let domain = self.list.parse_domain(host).ok()?;
-        domain.root().map(|s| s.to_string())
-    }
-
-    fn public_suffix(&self, host: &str) -> Option<String> {
-        let domain = self.list.parse_domain(host).ok()?;
-        domain.suffix().map(|s| s.to_string())
+        let suffix = self.public_suffix(host)?;
+        if host == suffix {
+            return None;
+        }
+        let prefix = host.strip_suffix(&suffix)?.strip_suffix('.')?;
+        let last_label = prefix.rsplit('.').next()?;
+        Some(format!("{last_label}.{suffix}"))
     }
 }
 
@@ -106,16 +80,6 @@ impl PublicSuffixList for MockPublicSuffixList {
             }
         }
         None
-    }
-
-    fn registrable_domain(&self, host: &str) -> Option<String> {
-        let suffix = self.public_suffix(host)?;
-        if host == suffix {
-            return None;
-        }
-        let prefix = host.strip_suffix(&suffix)?.strip_suffix('.')?;
-        let last_label = prefix.rsplit('.').next()?;
-        Some(format!("{last_label}.{suffix}"))
     }
 }
 
