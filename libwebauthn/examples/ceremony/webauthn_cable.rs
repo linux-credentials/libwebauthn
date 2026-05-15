@@ -17,6 +17,7 @@ use libwebauthn::ops::webauthn::{
     DatFilePublicSuffixList, GetAssertionRequest, JsonFormat, MakeCredentialRequest, RequestOrigin,
     WebAuthnIDL as _, WebAuthnIDLResponse as _,
 };
+use libwebauthn::transport::cable::channel::CableChannel;
 use libwebauthn::transport::{Channel as _, Device};
 use libwebauthn::webauthn::WebAuthn;
 
@@ -108,25 +109,53 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
     println!("Waiting for 5 seconds before contacting the device...");
     sleep(Duration::from_secs(5)).await;
 
+    // Second leg: prefer state-assisted reconnection if the peer offered
+    // linking info, otherwise fall back to a fresh QR. Many authenticators
+    // don't send linking info, so the fallback is the common path.
     let all_devices = device_info_store.list_all().await;
-    let (_known_device_id, known_device_info) =
-        all_devices.first().expect("No known devices found");
+    if let Some((_, known_device_info)) = all_devices.first() {
+        println!("Reconnecting state-assisted to known device...");
+        let mut known_device: CableKnownDevice = CableKnownDevice::new(
+            ClientPayloadHint::GetAssertion,
+            known_device_info,
+            device_info_store.clone(),
+        )
+        .await
+        .unwrap();
+        let mut channel = known_device.channel().await.unwrap();
+        println!("Channel established {:?}", channel);
+        run_get_assertion(&mut channel, &request_origin, &psl).await?;
+    } else {
+        println!("No known devices (peer did not offer linking). Falling back to QR.");
+        let mut device: CableQrCodeDevice = CableQrCodeDevice::new_persistent(
+            QrCodeOperationHint::GetAssertionRequest,
+            device_info_store.clone(),
+            CableTransports::CloudAssistedOnly,
+        )?;
+        let qr_code = QrCode::new(device.qr_code.to_string()).unwrap();
+        let image = qr_code
+            .render::<unicode::Dense1x2>()
+            .dark_color(unicode::Dense1x2::Light)
+            .light_color(unicode::Dense1x2::Dark)
+            .build();
+        println!("{}", image);
+        let mut channel = device.channel().await.unwrap();
+        println!("Channel established {:?}", channel);
+        run_get_assertion(&mut channel, &request_origin, &psl).await?;
+    }
 
-    let mut known_device: CableKnownDevice = CableKnownDevice::new(
-        ClientPayloadHint::GetAssertion,
-        known_device_info,
-        device_info_store.clone(),
-    )
-    .await
-    .unwrap();
+    Ok(())
+}
 
-    let mut channel = known_device.channel().await.unwrap();
-    println!("Channel established {:?}", channel);
-
+async fn run_get_assertion(
+    channel: &mut CableChannel,
+    request_origin: &RequestOrigin,
+    psl: &DatFilePublicSuffixList,
+) -> Result<(), Box<dyn Error>> {
     let state_recv = channel.get_ux_update_receiver();
     tokio::spawn(common::handle_cable_updates(state_recv));
 
-    let request = GetAssertionRequest::from_json(&request_origin, &psl, GET_ASSERTION_REQUEST)
+    let request = GetAssertionRequest::from_json(request_origin, psl, GET_ASSERTION_REQUEST)
         .expect("Failed to parse request JSON");
     let response = retry_user_errors!(channel.webauthn_get_assertion(&request)).unwrap();
     for assertion in &response.assertions {
@@ -135,6 +164,5 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             .expect("Failed to serialize GetAssertion response");
         println!("WebAuthn GetAssertion response (JSON):\n{assertion_json}");
     }
-
     Ok(())
 }
