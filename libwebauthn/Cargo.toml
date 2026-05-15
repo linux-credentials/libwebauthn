@@ -123,6 +123,10 @@ path = "examples/ceremony/webauthn_nfc.rs"
 required-features = ["nfc"]
 
 [[example]]
+name = "webauthn_cable"
+path = "examples/ceremony/webauthn_cable.rs"
+
+[[example]]
 name = "webauthn_cable_wss"
 path = "examples/ceremony/webauthn_cable_wss.rs"
 
