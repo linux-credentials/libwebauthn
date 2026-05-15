@@ -6,7 +6,9 @@ use libwebauthn::transport::cable::is_available;
 use libwebauthn::transport::cable::known_devices::{
     CableKnownDevice, ClientPayloadHint, EphemeralDeviceInfoStore,
 };
-use libwebauthn::transport::cable::qr_code_device::{CableQrCodeDevice, QrCodeOperationHint};
+use libwebauthn::transport::cable::qr_code_device::{
+    CableQrCodeDevice, CableTransports, QrCodeOperationHint,
+};
 use qrcode::render::unicode;
 use qrcode::QrCode;
 use tokio::time::sleep;
@@ -74,6 +76,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         let mut device: CableQrCodeDevice = CableQrCodeDevice::new_persistent(
             QrCodeOperationHint::MakeCredential,
             device_info_store.clone(),
+            CableTransports::CloudAssistedOnly,
         )?;
 
         println!("Created QR code, awaiting for advertisement.");

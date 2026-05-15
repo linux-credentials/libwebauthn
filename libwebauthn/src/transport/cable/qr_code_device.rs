@@ -37,12 +37,42 @@ pub enum QrCodeOperationHint {
     MakeCredential,
 }
 
-/// A data transfer channel the client supports, as listed in QR code key 6.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize_repr)]
+/// One of the data transfer channels listed in QR code key 6.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize_repr)]
 #[repr(u8)]
-pub enum CableTransportChannel {
+pub(crate) enum CableTransportChannel {
     WebSocket = 0,
     Ble = 1,
+}
+
+/// Which hybrid transport(s) the QR code advertises support for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CableTransports {
+    /// caBLE v2 only: advertise the cloud-assisted WebSocket tunnel. Omits QR
+    /// key 6, so the QR stays valid for legacy peers that read key 6 as a
+    /// `supports_non_discoverable_mc` boolean and would hard-reject a CBOR
+    /// array (e.g. Google Play services Fido pre-CTAP-2.3).
+    CloudAssistedOnly,
+
+    /// caBLE v2 + CTAP 2.3 hybrid: advertise both the cloud-assisted WebSocket
+    /// tunnel and the direct BLE L2CAP data channel via QR key 6. CTAP 2.3-
+    /// aware peers may open the L2CAP channel; older peers silently ignore
+    /// key 6 and fall back to the WebSocket tunnel.
+    CloudAssistedOrLocal,
+}
+
+impl CableTransports {
+    /// CBOR form of QR key 6. `None` for `CloudAssistedOnly` so a legacy peer
+    /// doesn't see an unexpected CBOR array where it wants a boolean.
+    pub(crate) fn to_qr_field(self) -> Option<Vec<CableTransportChannel>> {
+        match self {
+            Self::CloudAssistedOnly => None,
+            Self::CloudAssistedOrLocal => Some(vec![
+                CableTransportChannel::WebSocket,
+                CableTransportChannel::Ble,
+            ]),
+        }
+    }
 }
 
 #[derive(Debug, Clone, SerializeIndexed)]
@@ -78,14 +108,13 @@ pub struct CableQrCode {
     #[serde(index = 0x05)]
     pub operation_hint: QrCodeOperationHint,
 
-    /// Key 6: data transfer channels the client supports (0 = WebSocket, 1 = BLE).
-    /// Omitted by default: caBLE v2 used key 6 as a `supports_non_discoverable_mc`
-    /// boolean, and legacy clients (e.g. Google Play services Fido) hard-reject a
-    /// CBOR array there with a type mismatch on QR parse. The CTAP 2.3 hybrid-aware path
-    /// requires opting in once peers ship support.
+    /// Key 6: data transfer channels the client supports (CTAP 2.3 hybrid).
+    /// Set via [`CableTransports`] at construction time; stored here as a
+    /// `Vec` for CBOR serialization. `None` omits key 6 entirely so the QR
+    /// stays valid for caBLE v2 peers that interpret key 6 incompatibly.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(index = 0x06)]
-    pub transports: Option<Vec<CableTransportChannel>>,
+    pub(crate) transports: Option<Vec<CableTransportChannel>>,
 }
 
 impl std::fmt::Display for CableQrCode {
@@ -122,14 +151,16 @@ impl CableQrCodeDevice {
     pub fn new_persistent(
         hint: QrCodeOperationHint,
         store: Arc<dyn CableKnownDeviceInfoStore>,
+        transports: CableTransports,
     ) -> Result<Self, Error> {
-        Self::new(hint, true, Some(store))
+        Self::new(hint, true, Some(store), transports)
     }
 
     fn new(
         hint: QrCodeOperationHint,
         state_assisted: bool,
         store: Option<Arc<dyn CableKnownDeviceInfoStore>>,
+        transports: CableTransports,
     ) -> Result<Self, Error> {
         let private_key_scalar = NonZeroScalar::random(&mut OsRng);
         let private_key = SecretKey::from(private_key_scalar);
@@ -148,6 +179,8 @@ impl CableQrCodeDevice {
             .ok()
             .map(|t| t.as_secs());
 
+        let transports = transports.to_qr_field();
+
         Ok(Self {
             qr_code: CableQrCode {
                 public_key: ByteArray::from(public_key),
@@ -158,7 +191,7 @@ impl CableQrCodeDevice {
                 // Chrome convention: omit key 4 when false (presence implies
                 // caBLE v2.1, absence implies v2.0).
                 state_assisted: state_assisted.then_some(true),
-                transports: None,
+                transports,
             },
             private_key: private_key_scalar,
             store,
@@ -169,8 +202,11 @@ impl CableQrCodeDevice {
 impl CableQrCodeDevice {
     /// Generates a QR code, without any known-device store. A device scanning this QR code
     /// will not be persisted.
-    pub fn new_transient(hint: QrCodeOperationHint) -> Result<Self, Error> {
-        Self::new(hint, false, None)
+    pub fn new_transient(
+        hint: QrCodeOperationHint,
+        transports: CableTransports,
+    ) -> Result<Self, Error> {
+        Self::new(hint, false, None, transports)
     }
 
     #[instrument(skip_all, err)]
@@ -267,21 +303,24 @@ mod tests {
     use std::collections::BTreeMap;
 
     #[test]
-    fn qr_code_omits_key_6_by_default() {
-        let device = CableQrCodeDevice::new_transient(QrCodeOperationHint::MakeCredential).unwrap();
+    fn qr_code_omits_key_6_for_cloud_assisted_only() {
+        let device = CableQrCodeDevice::new_transient(
+            QrCodeOperationHint::MakeCredential,
+            CableTransports::CloudAssistedOnly,
+        )
+        .unwrap();
         let bytes = cbor::to_vec(&device.qr_code).unwrap();
         let map: BTreeMap<u64, cbor::Value> = cbor::from_slice(&bytes).unwrap();
         assert_eq!(map.get(&6), None);
     }
 
     #[test]
-    fn qr_code_encodes_transport_channels_at_key_6_when_set() {
-        let mut device =
-            CableQrCodeDevice::new_transient(QrCodeOperationHint::MakeCredential).unwrap();
-        device.qr_code.transports = Some(vec![
-            CableTransportChannel::WebSocket,
-            CableTransportChannel::Ble,
-        ]);
+    fn qr_code_encodes_key_6_for_cloud_assisted_or_local() {
+        let device = CableQrCodeDevice::new_transient(
+            QrCodeOperationHint::MakeCredential,
+            CableTransports::CloudAssistedOrLocal,
+        )
+        .unwrap();
         let bytes = cbor::to_vec(&device.qr_code).unwrap();
         let map: BTreeMap<u64, cbor::Value> = cbor::from_slice(&bytes).unwrap();
         assert_eq!(
