@@ -231,10 +231,6 @@ impl CableQrCodeDevice {
     }
 }
 
-unsafe impl Send for CableQrCodeDevice {}
-
-unsafe impl Sync for CableQrCodeDevice {}
-
 impl Display for CableQrCodeDevice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "CableQrCodeDevice")
@@ -301,6 +297,13 @@ impl<'d> Device<'d, Cable, CableChannel> for CableQrCodeDevice {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    // Downstream callers (e.g. credentialsd) move a CableQrCodeDevice across
+    // tokio::spawn boundaries, so both Send and Sync need to auto-derive.
+    const _: fn() = || {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<CableQrCodeDevice>();
+    };
 
     #[test]
     fn qr_code_omits_key_6_for_cloud_assisted_only() {
