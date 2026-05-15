@@ -21,8 +21,13 @@ pub(crate) struct L2capDataChannel {
 }
 
 impl L2capDataChannel {
-    /// Connects to the peer's auto-generated PSM over an insecure
-    /// ([`SecurityLevel::Sdp`]) L2CAP CoC, taking the peer's btleplug address.
+    /// Connects to the peer's auto-generated PSM over an insecure L2CAP CoC.
+    ///
+    /// The socket is left at the kernel's default `sec_level` of
+    /// `BT_SECURITY_LOW`, which on an LE link does not trigger pairing or
+    /// encryption. We deliberately don't call `set_security`:
+    /// `BT_SECURITY_SDP` (0) is rejected by `l2cap_sock_setsockopt` with
+    /// `-EINVAL` on any L2CAP CoC.
     pub(crate) async fn connect(
         addr: BDAddr,
         addr_type: Option<AddressType>,
@@ -30,33 +35,13 @@ impl L2capDataChannel {
     ) -> Result<Self, TransportError> {
         let (addr, addr_type) = bdaddr_to_bluer(addr, addr_type)?;
 
-        let socket = bluer::l2cap::Socket::<bluer::l2cap::Stream>::new_stream().map_err(|e| {
-            error!(?e, "Failed to create L2CAP stream socket");
-            TransportError::IoError(e.kind())
-        })?;
-        socket
-            .bind(bluer::l2cap::SocketAddr::any_le())
-            .map_err(|e| {
-                error!(?e, "Failed to bind L2CAP socket");
-                TransportError::IoError(e.kind())
-            })?;
-        // Insecure CoC: security must be set before connect().
-        socket
-            .set_security(bluer::l2cap::Security {
-                level: bluer::l2cap::SecurityLevel::Sdp,
-                key_size: 0,
-            })
-            .map_err(|e| {
-                error!(?e, "Failed to set L2CAP security level");
-                TransportError::IoError(e.kind())
-            })?;
-        let stream = socket
-            .connect(bluer::l2cap::SocketAddr::new(addr, addr_type, psm))
-            .await
-            .map_err(|e| {
-                error!(?e, %addr, psm, "Failed to connect L2CAP CoC");
-                TransportError::ConnectionFailed
-            })?;
+        let stream =
+            bluer::l2cap::Stream::connect(bluer::l2cap::SocketAddr::new(addr, addr_type, psm))
+                .await
+                .map_err(|e| {
+                    error!(?e, %addr, psm, "Failed to connect L2CAP CoC");
+                    TransportError::ConnectionFailed
+                })?;
 
         Ok(Self {
             stream,
