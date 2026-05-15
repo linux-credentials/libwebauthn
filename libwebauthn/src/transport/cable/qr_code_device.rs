@@ -79,8 +79,13 @@ pub struct CableQrCode {
     pub operation_hint: QrCodeOperationHint,
 
     /// Key 6: data transfer channels the client supports (0 = WebSocket, 1 = BLE).
+    /// Omitted by default: caBLE v2 used key 6 as a `supports_non_discoverable_mc`
+    /// boolean, and legacy clients (e.g. Google Play services Fido) hard-reject a
+    /// CBOR array there with a type mismatch on QR parse. The CTAP 2.3 hybrid-aware path
+    /// requires opting in once peers ship support.
+    #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(index = 0x06)]
-    pub transports: Vec<CableTransportChannel>,
+    pub transports: Option<Vec<CableTransportChannel>>,
 }
 
 impl std::fmt::Display for CableQrCode {
@@ -151,7 +156,7 @@ impl CableQrCodeDevice {
                 current_time: current_unix_time,
                 operation_hint: hint,
                 state_assisted: Some(state_assisted),
-                transports: vec![CableTransportChannel::WebSocket, CableTransportChannel::Ble],
+                transports: None,
             },
             private_key: private_key_scalar,
             store,
@@ -260,8 +265,21 @@ mod tests {
     use std::collections::BTreeMap;
 
     #[test]
-    fn qr_code_encodes_transport_channels_at_key_6() {
+    fn qr_code_omits_key_6_by_default() {
         let device = CableQrCodeDevice::new_transient(QrCodeOperationHint::MakeCredential).unwrap();
+        let bytes = cbor::to_vec(&device.qr_code).unwrap();
+        let map: BTreeMap<u64, cbor::Value> = cbor::from_slice(&bytes).unwrap();
+        assert_eq!(map.get(&6), None);
+    }
+
+    #[test]
+    fn qr_code_encodes_transport_channels_at_key_6_when_set() {
+        let mut device =
+            CableQrCodeDevice::new_transient(QrCodeOperationHint::MakeCredential).unwrap();
+        device.qr_code.transports = Some(vec![
+            CableTransportChannel::WebSocket,
+            CableTransportChannel::Ble,
+        ]);
         let bytes = cbor::to_vec(&device.qr_code).unwrap();
         let map: BTreeMap<u64, cbor::Value> = cbor::from_slice(&bytes).unwrap();
         assert_eq!(
