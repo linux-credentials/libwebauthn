@@ -104,10 +104,26 @@ impl CableDataChannel for L2capDataChannel {
                 return Ok(Some(message));
             }
             let mut chunk = [0u8; 1024];
-            let n = self.stream.read(&mut chunk).await.map_err(|e| {
-                error!(?e, "Failed to read L2CAP message");
-                TransportError::IoError(e.kind())
-            })?;
+            let n = match self.stream.read(&mut chunk).await {
+                Ok(n) => n,
+                // The peer tearing down after a successful ceremony surfaces as
+                // ECONNRESET / EPIPE rather than a clean EOF; treat it like EOF
+                // when nothing is half-buffered.
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::ConnectionReset
+                            | std::io::ErrorKind::BrokenPipe
+                            | std::io::ErrorKind::UnexpectedEof
+                    ) =>
+                {
+                    0
+                }
+                Err(e) => {
+                    error!(?e, "Failed to read L2CAP message");
+                    return Err(TransportError::IoError(e.kind()));
+                }
+            };
             if n == 0 {
                 // Peer closed; only a clean close if nothing is half-buffered.
                 if self.read_buf.is_empty() {
