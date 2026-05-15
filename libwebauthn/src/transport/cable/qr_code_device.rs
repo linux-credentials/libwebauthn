@@ -155,7 +155,9 @@ impl CableQrCodeDevice {
                 known_tunnel_domains_count: KNOWN_TUNNEL_DOMAINS.len() as u8,
                 current_time: current_unix_time,
                 operation_hint: hint,
-                state_assisted: Some(state_assisted),
+                // Chrome convention: omit key 4 when false (presence implies
+                // caBLE v2.1, absence implies v2.0).
+                state_assisted: state_assisted.then_some(true),
                 transports: None,
             },
             private_key: private_key_scalar,
