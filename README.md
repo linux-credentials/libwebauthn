@@ -37,6 +37,7 @@ _Looking for the D-Bus API proposal?_ Check out [credentialsd][credentialsd].
   - 🟢 Discoverable credentials (resident keys)
   - 🟢 Hybrid transport (caBLE v2): QR-initiated transactions
   - 🟢 Hybrid transport (caBLE v2): State-assisted transactions (remember this phone)
+  - 🟢 Hybrid transport (CTAP 2.3): direct BLE L2CAP data channel, QR-initiated, no tunnel server
 
 ## Runtime requirements
 
@@ -50,7 +51,7 @@ Validating the relying party ID against the calling origin requires the [Public 
 | **Bluetooth Low Energy**     | 🟢 Supported (bluez)  | 🟢 Supported (bluez)  |
 | **NFC**                      | 🟢 Supported (pcsc or libnfc) | 🟢 Supported (pcsc or libnfc) |
 | **TPM 2.0 (Platform)**       | 🟠 Planned ([#4][#4]) | 🟠 Planned ([#4][#4]) |
-| **Hybrid (QR code scan, aka caBLE v2)**         | N/A                   | 🟢 Supported          |
+| **Hybrid (QR code scan, caBLE v2 + CTAP 2.3)**  | N/A                   | 🟢 Supported          |
 
 ## Example programs
 
@@ -72,7 +73,8 @@ WebAuthn examples consume and emit JSON per the [WebAuthn IDL][webauthn].
 | **USB (HID)**         | `cargo run --example u2f_hid`                                                                                            | `cargo run --example webauthn_hid`                                                                                                 |
 | **Bluetooth (BLE)**   | `cargo run --example u2f_ble`                                                                                            | —                                                                                                                                  |
 | **NFC** [^nfc]        | `cargo run --features nfc-backend-pcsc --example u2f_nfc`<br>`cargo run --features nfc-backend-libnfc --example u2f_nfc` | `cargo run --features nfc-backend-pcsc --example webauthn_nfc`<br>`cargo run --features nfc-backend-libnfc --example webauthn_nfc` |
-| **Hybrid (caBLE v2)** | —                                                                                                                        | `cargo run --example webauthn_cable`                                                                                               |
+| **Hybrid (caBLE v2 + CTAP 2.3)** | —                                                                                                             | `cargo run --example webauthn_cable`                                                                                               |
+| **Hybrid (caBLE v2)** | —                                                                                                                        | `cargo run --example webauthn_cable_wss`                                                                                           |
 
 [^nfc]: `nfc-backend-pcsc` is pure userspace and recommended on most systems. `nfc-backend-libnfc` requires the `libnfc` system library. Both can be enabled together; the first FIDO device found by either backend is used.
 

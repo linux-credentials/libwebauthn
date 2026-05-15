@@ -77,6 +77,7 @@ tokio-stream = "0.1"
 snow = { version = "0.10", features = ["use-p256"] }
 ctap-types = { version = "0.4.0" }
 btleplug = "0.11.7"
+bluer = { version = "0.17", default-features = false, features = ["l2cap"] }
 thiserror = "2.0.12"
 serde_json = "1.0.141"
 apdu-core = { version = "0.4.0", optional = true }
@@ -124,6 +125,10 @@ required-features = ["nfc"]
 [[example]]
 name = "webauthn_cable"
 path = "examples/ceremony/webauthn_cable.rs"
+
+[[example]]
+name = "webauthn_cable_wss"
+path = "examples/ceremony/webauthn_cable_wss.rs"
 
 [[example]]
 name = "webauthn_extensions_hid"
