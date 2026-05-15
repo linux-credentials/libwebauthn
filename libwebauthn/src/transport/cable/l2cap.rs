@@ -1,16 +1,24 @@
 //! [`CableDataChannel`] over a direct BLE L2CAP connection-oriented channel.
 use std::str::FromStr;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use btleplug::api::{AddressType, BDAddr};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tracing::{error, warn};
+use tokio::time::Instant;
+use tracing::{debug, error, warn};
 
 use super::data_channel::CableDataChannel;
 use crate::transport::error::TransportError;
 
 /// End-of-Message sequence terminating every L2CAP message (CRLF).
 const EOM: [u8; 2] = [0x0D, 0x0A];
+
+/// How long to wait for the negotiated send MTU to become available after
+/// `connect()` returns. If unset, bluer silently caps each write to 16 bytes,
+/// fragmenting the handshake across multiple SDUs.
+const MTU_READY_TIMEOUT: Duration = Duration::from_secs(2);
+const MTU_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 /// [`CableDataChannel`] over the insecure L2CAP CoC socket the CMHD opens for CTAP 2.3 hybrid.
 /// Messages are CRLF-terminated per the CTAP 2.3 hybrid draft.
@@ -43,6 +51,8 @@ impl L2capDataChannel {
                     TransportError::ConnectionFailed
                 })?;
 
+        await_send_mtu(&stream).await;
+
         Ok(Self {
             stream,
             read_buf: Vec::new(),
@@ -50,11 +60,33 @@ impl L2capDataChannel {
     }
 }
 
+/// Polls `BT_SNDMTU` until the kernel has the peer's MTU from the LE Credit
+/// Based Connection Response. Without this, bluer's first writes assume an MTU
+/// of 16 bytes and split the Noise handshake into 5+ SDUs, which some peers
+/// don't reassemble before timing out.
+async fn await_send_mtu(stream: &bluer::l2cap::Stream) {
+    let deadline = Instant::now() + MTU_READY_TIMEOUT;
+    loop {
+        if let Ok(mtu) = stream.as_ref().send_mtu() {
+            if mtu > 0 {
+                debug!(mtu, "L2CAP send MTU is available");
+                return;
+            }
+        }
+        if Instant::now() >= deadline {
+            warn!(
+                timeout = ?MTU_READY_TIMEOUT,
+                "L2CAP send MTU did not become available; first writes may be capped at 16 bytes"
+            );
+            return;
+        }
+        tokio::time::sleep(MTU_POLL_INTERVAL).await;
+    }
+}
+
 #[async_trait]
 impl CableDataChannel for L2capDataChannel {
     async fn send(&mut self, message: &[u8]) -> Result<(), TransportError> {
-        // NOTE: CRLF-terminating binary ciphertext is ambiguous in the CTAP 2.3 hybrid draft
-        // and may need revisiting against real hardware.
         self.stream.write_all(message).await.map_err(|e| {
             error!(?e, "Failed to write L2CAP message");
             TransportError::IoError(e.kind())
