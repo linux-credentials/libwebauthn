@@ -39,7 +39,7 @@ pub use psl::{
 };
 pub use related_origins::{
     validate_related_origins, NoRelatedOriginsClient, RelatedOriginsError,
-    RelatedOriginsHttpClient, WellKnownResponse, MAX_REGISTRABLE_LABELS,
+    RelatedOriginsHttpClient, WellKnownResponse,
 };
 use serde::Deserialize;
 
