@@ -44,8 +44,10 @@ pub enum RelatedOriginsError {
     FetchFailed(String),
     #[error("unexpected content type: {0:?}")]
     UnexpectedContentType(Option<String>),
+    /// Step 2.b: body did not decode as JSON.
     #[error("malformed JSON body: {0}")]
     MalformedJson(String),
+    /// Step 2.c: top-level `origins` was missing or not an array of strings.
     #[error("malformed well-known document: {0}")]
     MalformedDocument(String),
     #[error("no listed related origin matches the caller origin")]
@@ -80,8 +82,15 @@ pub async fn validate_related_origins(
         ));
     }
 
-    let doc: WellKnownDocument = serde_json::from_slice(&resp.body)
+    let value: serde_json::Value = serde_json::from_slice(&resp.body)
         .map_err(|e| RelatedOriginsError::MalformedJson(e.to_string()))?;
+    if !value.is_object() {
+        return Err(RelatedOriginsError::MalformedJson(
+            "top-level value is not a JSON object".into(),
+        ));
+    }
+    let doc: WellKnownDocument = serde_json::from_value(value)
+        .map_err(|e| RelatedOriginsError::MalformedDocument(e.to_string()))?;
 
     let mut labels_seen: BTreeSet<String> = BTreeSet::new();
     for origin_item in &doc.origins {
