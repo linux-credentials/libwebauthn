@@ -3,7 +3,7 @@ use std::{collections::HashMap, time::Duration};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tracing::{debug, error, trace};
+use tracing::{debug, error, trace, warn};
 
 use crate::{
     fido::AuthenticatorData,
@@ -23,7 +23,7 @@ use crate::{
             Base64UrlString, FromIdlModel, JsonError,
         },
         psl::PublicSuffixList,
-        related_origins::RelatedOriginsHttpClient,
+        related_origins::{validate_related_origins, RelatedOriginsHttpClient},
         Operation, WebAuthnIDL,
     },
     pin::PinUvAuthProtocol,
@@ -175,7 +175,7 @@ impl FromIdlModel<PublicKeyCredentialRequestOptionsJSON, GetAssertionRequestPars
     async fn from_idl_model(
         request_origin: &RequestOrigin,
         psl: &dyn PublicSuffixList,
-        _http: &dyn RelatedOriginsHttpClient,
+        http: &dyn RelatedOriginsHttpClient,
         inner: PublicKeyCredentialRequestOptionsJSON,
     ) -> Result<Self, GetAssertionRequestParsingError> {
         let effective_rp_id = request_origin.origin.host.as_str();
@@ -183,12 +183,16 @@ impl FromIdlModel<PublicKeyCredentialRequestOptionsJSON, GetAssertionRequestPars
             let parsed = RelyingPartyId::try_from(relying_party_id).map_err(|err| {
                 GetAssertionRequestParsingError::InvalidRelyingPartyId(err.to_string())
             })?;
-            // TODO(#160): Add related-origins fallback per WebAuthn L3 §5.11.
             if !is_registrable_domain_suffix_or_equal(&parsed.0, effective_rp_id, psl) {
-                return Err(GetAssertionRequestParsingError::MismatchingRelyingPartyId(
-                    parsed.0,
-                    effective_rp_id.to_string(),
-                ));
+                if let Err(err) =
+                    validate_related_origins(&request_origin.origin, &parsed, psl, http).await
+                {
+                    warn!(rp_id = %parsed.0, error = ?err, "Related-origins validation failed");
+                    return Err(GetAssertionRequestParsingError::MismatchingRelyingPartyId(
+                        parsed.0,
+                        effective_rp_id.to_string(),
+                    ));
+                }
             }
             parsed.0
         } else {
