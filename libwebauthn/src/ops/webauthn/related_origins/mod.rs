@@ -20,8 +20,7 @@ pub mod http;
 #[cfg(feature = "related-origins-client")]
 pub use http::{HttpPolicy, ReqwestRelatedOriginsClient};
 
-/// WebAuthn L3 §5.11 requires support for at least 5 registrable origin labels;
-/// we cap at exactly 5 to bound abuse surface.
+/// WebAuthn L3 §5.11 minimum; capped at 5 to bound abuse surface.
 const MAX_REGISTRABLE_LABELS: usize = 5;
 
 #[derive(Debug, Clone)]
@@ -62,9 +61,7 @@ pub enum RelatedOriginsError {
 }
 
 impl RelatedOriginsError {
-    /// Static, log-safe variant discriminant. Use in place of the `Debug` /
-    /// `Display` impls when the error may carry reqwest- or serde-supplied
-    /// text (IPs, body snippets) that should not reach operator logs.
+    /// Log-safe variant discriminant; `Debug`/`Display` may carry reqwest/serde text with IPs or body snippets.
     pub fn kind(&self) -> &'static str {
         match self {
             RelatedOriginsError::FetchFailed(_) => "fetch_failed",
@@ -84,8 +81,6 @@ struct WellKnownDocument {
 }
 
 /// Runs the WebAuthn L3 §5.11.1 related-origins validation procedure.
-/// Returns `Ok(())` when a listed origin matches `caller_origin`, otherwise
-/// returns the first fetch/parse error or [`RelatedOriginsError::NoMatchingOrigin`].
 pub async fn validate_related_origins(
     caller_origin: &Origin,
     rp_id: &RelyingPartyId,
@@ -140,8 +135,7 @@ pub async fn validate_related_origins(
     Err(RelatedOriginsError::NoMatchingOrigin)
 }
 
-/// First label of `host`'s registrable domain (eTLD+1), or `None` when the host
-/// has no registrable domain (e.g. bare eTLD, IP literal, unknown TLD).
+/// First label of `host`'s registrable domain (eTLD+1), or `None` if `host` has no registrable domain.
 pub(crate) fn registrable_origin_label(host: &str, psl: &dyn PublicSuffixList) -> Option<String> {
     let registrable = psl.registrable_domain(host)?;
     let label = registrable.split('.').next()?;
@@ -151,8 +145,7 @@ pub(crate) fn registrable_origin_label(host: &str, psl: &dyn PublicSuffixList) -
     Some(label.to_string())
 }
 
-/// Effective domain of a URL per HTML §6.2: domain hosts and IP literals; opaque
-/// hosts and host-less URLs return `None`.
+/// Effective domain of `url` per HTML §6.2; `None` for opaque or host-less URLs.
 fn effective_domain_of(url: &Url) -> Option<String> {
     match url.host()? {
         Host::Domain(d) => Some(d.to_string()),
@@ -161,10 +154,7 @@ fn effective_domain_of(url: &Url) -> Option<String> {
     }
 }
 
-/// WebAuthn L3 §5.11.1 step 4.f: tuple-origin equality (scheme, host, port)
-/// between the caller's origin and the listed entry. The spec defers to HTML
-/// §7.5 "same origin", which compares only those three components, so
-/// userinfo, paths, queries and fragments on the listed URL are ignored.
+/// Tuple-origin equality (scheme, host, port) per WebAuthn L3 §5.11.1 step 4.f and HTML §7.5; userinfo, path, query and fragment on `listed` are ignored.
 fn same_origin(caller: &Origin, listed: &Url) -> bool {
     if caller.scheme.as_str() != listed.scheme() {
         return false;
@@ -179,8 +169,7 @@ fn same_origin(caller: &Origin, listed: &Url) -> bool {
     caller_port == listed.port_or_known_default()
 }
 
-/// Default port for a WebAuthn scheme, per the WHATWG URL Standard's
-/// special-scheme port table.
+/// Default port per the WHATWG URL Standard special-scheme port table.
 fn default_port(scheme: Scheme) -> Option<u16> {
     match scheme {
         Scheme::Https => Some(443),
@@ -188,16 +177,13 @@ fn default_port(scheme: Scheme) -> Option<u16> {
     }
 }
 
-/// Fetch §2.5 `application/json` essence check: case-insensitive, parameters
-/// ignored. Used for WebAuthn L3 §5.11.1 step 2.a.
+/// Fetch §2.5 `application/json` essence check; used for WebAuthn L3 §5.11.1 step 2.a.
 fn is_application_json(value: &str) -> bool {
     let essence = value.split(';').next().unwrap_or("").trim();
     essence.eq_ignore_ascii_case("application/json")
 }
 
-/// `RelatedOriginsHttpClient` that always refuses; preserves today's
-/// "mismatching rp.id is a hard error" semantics for callers that do not opt
-/// into related-origin fetches.
+/// `RelatedOriginsHttpClient` that always refuses; preserves strict rp.id matching when callers do not opt into related-origin fetches.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NoRelatedOriginsClient;
 
@@ -351,9 +337,7 @@ mod tests {
 
     #[tokio::test]
     async fn label_cap_allows_fifth_distinct_label_match() {
-        // §5.11.1 step 4.e: the 5th distinct label still satisfies size < max
-        // at step 4.g, so it is recorded and the same-origin check at 4.f
-        // succeeds. Pins the cap boundary at 5.
+        // §5.11.1 step 4.e: the 5th distinct label is still within the cap.
         let body = r#"{"origins":[
             "https://a.com",
             "https://b.com",
@@ -735,9 +719,7 @@ mod tests {
 
     #[tokio::test]
     async fn ipv6_listed_origin_skipped_no_registrable_label() {
-        // IPv6 host has no registrable label, so the loop skips at step 4.c/4.d
-        // before reaching same-origin. Bare IP-literal origins therefore
-        // cannot match via related-origins, matching browser behaviour.
+        // IPv6 host has no registrable label; loop skips at step 4.c/4.d.
         let http = MockClient {
             response: Ok(json_ct(r#"{"origins":["https://[::1]"]}"#)),
         };
