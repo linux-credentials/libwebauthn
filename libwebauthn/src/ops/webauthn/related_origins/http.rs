@@ -5,7 +5,6 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::StreamExt;
-use reqwest::header::{HeaderMap, HeaderValue, REFERER};
 use reqwest::redirect::Policy;
 use reqwest::{Client, StatusCode};
 
@@ -51,14 +50,13 @@ impl ReqwestRelatedOriginsClient {
             }
             attempt.follow()
         });
-        let mut default_headers = HeaderMap::new();
-        default_headers.insert(REFERER, HeaderValue::from_static(""));
-        // `cookies` feature off, so reqwest holds no cookie jar to disable.
+        // WebAuthn L3 §5.11.1 step 2: fetch "without a referrer"; `cookies`
+        // feature is off, so reqwest holds no cookie jar.
         let client = Client::builder()
             .https_only(true)
             .redirect(redirect_policy)
+            .referer(false)
             .timeout(policy.request_timeout)
-            .default_headers(default_headers)
             .build()
             .map_err(|e| RelatedOriginsError::FetchFailed(e.to_string()))?;
         Ok(Self {
