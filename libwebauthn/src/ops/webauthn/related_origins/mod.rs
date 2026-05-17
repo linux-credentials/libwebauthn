@@ -19,7 +19,7 @@ pub mod http;
 
 /// WebAuthn L3 §5.11 requires support for at least 5 registrable origin labels;
 /// we cap at exactly 5 to bound abuse surface.
-pub const MAX_REGISTRABLE_LABELS: usize = 5;
+const MAX_REGISTRABLE_LABELS: usize = 5;
 
 #[derive(Debug, Clone)]
 pub struct WellKnownResponse {
