@@ -699,11 +699,56 @@ impl DowngradableRequest<RegisterRequest> for MakeCredentialRequest {
 mod tests {
     use std::time::Duration;
 
+    use async_trait::async_trait;
+
     use crate::ops::webauthn::psl::MockPublicSuffixList;
+    use crate::ops::webauthn::related_origins::{
+        RelatedOriginsError, RelatedOriginsHttpClient, WellKnownResponse,
+    };
     use crate::ops::webauthn::{MakeCredentialRequest, NoRelatedOriginsClient, RequestOrigin};
     use crate::proto::ctap2::Ctap2PublicKeyCredentialType;
 
     use super::*;
+
+    /// Test-only HTTP client backed by a fixed response. `panicking` proves the
+    /// suffix-check short-circuit by failing the test if the fetch is invoked.
+    struct MockHttpClient {
+        response: Option<Result<WellKnownResponse, RelatedOriginsError>>,
+    }
+
+    impl MockHttpClient {
+        fn ok_body(body: &str) -> Self {
+            Self {
+                response: Some(Ok(WellKnownResponse {
+                    content_type: Some("application/json".into()),
+                    body: body.as_bytes().to_vec(),
+                })),
+            }
+        }
+
+        fn err(e: RelatedOriginsError) -> Self {
+            Self {
+                response: Some(Err(e)),
+            }
+        }
+
+        fn panicking() -> Self {
+            Self { response: None }
+        }
+    }
+
+    #[async_trait]
+    impl RelatedOriginsHttpClient for MockHttpClient {
+        async fn fetch_well_known(
+            &self,
+            _: &RelyingPartyId,
+        ) -> Result<WellKnownResponse, RelatedOriginsError> {
+            match &self.response {
+                Some(r) => r.clone(),
+                None => panic!("fetch_well_known should not be called"),
+            }
+        }
+    }
 
     pub const REQUEST_BASE_JSON: &str = r#"
     {
@@ -1144,6 +1189,97 @@ mod tests {
         .unwrap();
         assert_eq!(req.relying_party.id, "localhost");
         assert_eq!(req.origin, "http://localhost:3000");
+    }
+
+    // `.de` substituted with `.org` (MockPublicSuffixList lacks `.de`); pattern
+    // (different eTLD between caller origin and rp.id) is identical.
+
+    #[tokio::test]
+    async fn related_origins_match_resolves_mismatch() {
+        let request_origin: RequestOrigin = "https://app.example.org".parse().unwrap();
+        let req_json = json_field_add(
+            REQUEST_BASE_JSON,
+            "rp",
+            r#"{"id": "example.com", "name": "example.com"}"#,
+        );
+        let http = MockHttpClient::ok_body(r#"{"origins":["https://app.example.org"]}"#);
+
+        let req = MakeCredentialRequest::from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            &http,
+            &req_json,
+        )
+        .await
+        .unwrap();
+        assert_eq!(req.relying_party.id, "example.com");
+    }
+
+    #[tokio::test]
+    async fn related_origins_no_match_keeps_mismatch_error() {
+        let request_origin: RequestOrigin = "https://app.example.org".parse().unwrap();
+        let req_json = json_field_add(
+            REQUEST_BASE_JSON,
+            "rp",
+            r#"{"id": "example.com", "name": "example.com"}"#,
+        );
+        let http = MockHttpClient::ok_body(r#"{"origins":["https://other.org"]}"#);
+
+        let result = MakeCredentialRequest::from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            &http,
+            &req_json,
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(MakeCredentialRequestParsingError::MismatchingRelyingPartyId(_, _))
+        ));
+    }
+
+    #[tokio::test]
+    async fn related_origins_fetch_error_keeps_mismatch_error() {
+        let request_origin: RequestOrigin = "https://app.example.org".parse().unwrap();
+        let req_json = json_field_add(
+            REQUEST_BASE_JSON,
+            "rp",
+            r#"{"id": "example.com", "name": "example.com"}"#,
+        );
+        let http = MockHttpClient::err(RelatedOriginsError::FetchFailed("simulated".into()));
+
+        let result = MakeCredentialRequest::from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            &http,
+            &req_json,
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(MakeCredentialRequestParsingError::MismatchingRelyingPartyId(_, _))
+        ));
+    }
+
+    #[tokio::test]
+    async fn related_origins_not_consulted_when_suffix_matches() {
+        let request_origin: RequestOrigin = "https://login.example.com".parse().unwrap();
+        let req_json = json_field_add(
+            REQUEST_BASE_JSON,
+            "rp",
+            r#"{"id": "example.com", "name": "example.com"}"#,
+        );
+        let http = MockHttpClient::panicking();
+
+        let req = MakeCredentialRequest::from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            &http,
+            &req_json,
+        )
+        .await
+        .unwrap();
+        assert_eq!(req.relying_party.id, "example.com");
     }
 
     // Tests for response JSON serialization
