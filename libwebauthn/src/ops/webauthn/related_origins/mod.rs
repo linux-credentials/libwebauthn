@@ -347,6 +347,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn label_cap_allows_fifth_distinct_label_match() {
+        // §5.11.1 step 4.e: the 5th distinct label still satisfies size < max
+        // at step 4.g, so it is recorded and the same-origin check at 4.f
+        // succeeds. Pins the cap boundary at 5.
+        let body = r#"{"origins":[
+            "https://a.com",
+            "https://b.com",
+            "https://c.com",
+            "https://d.com",
+            "https://example.com"
+        ]}"#;
+        let http = MockClient {
+            response: Ok(json_ct(body)),
+        };
+        let res = validate_related_origins(
+            &caller("https://example.com"),
+            &rp("example.com"),
+            &MockPublicSuffixList,
+            &http,
+        )
+        .await;
+        assert!(matches!(res, Ok(())));
+    }
+
+    #[tokio::test]
     async fn label_cap_blocks_sixth_distinct_label_match() {
         // §5.11.1 step 4.e: a sixth distinct label is silently skipped, so the
         // would-be match never reaches step 4.f.
