@@ -718,3 +718,72 @@ impl Ctap2AuthTokenStore for HidChannel<'_> {
         self.auth_token_data = None;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{CancelOnDrop, CancelState};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    #[test]
+    fn cancel_state_default_is_not_cancelled() {
+        let state = CancelState::default();
+        assert!(!state.is_cancelled());
+    }
+
+    #[test]
+    fn cancel_state_signal_sets_flag() {
+        let state = CancelState::default();
+        state.signal();
+        assert!(state.is_cancelled());
+    }
+
+    #[test]
+    fn cancel_state_reset_clears_flag() {
+        let state = CancelState::default();
+        state.signal();
+        state.reset();
+        assert!(!state.is_cancelled());
+    }
+
+    #[test]
+    fn cancel_state_signal_is_idempotent() {
+        let state = CancelState::default();
+        state.signal();
+        state.signal();
+        assert!(state.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn cancel_state_signal_wakes_waiter() {
+        let state = Arc::new(CancelState::default());
+        let waiter = state.clone();
+        let task = tokio::spawn(async move { waiter.notify.notified().await });
+        // Yield so the waiter registers before we signal.
+        tokio::task::yield_now().await;
+        state.signal();
+        tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .expect("notify did not wake waiter within 1s")
+            .expect("waiter task panicked");
+    }
+
+    #[test]
+    fn cancel_on_drop_signals_when_dropped() {
+        let state = CancelState::default();
+        {
+            let _guard = CancelOnDrop::new(&state);
+        }
+        assert!(state.is_cancelled());
+    }
+
+    #[test]
+    fn cancel_on_drop_disarm_skips_signal() {
+        let state = CancelState::default();
+        {
+            let mut guard = CancelOnDrop::new(&state);
+            guard.disarm();
+        }
+        assert!(!state.is_cancelled());
+    }
+}
