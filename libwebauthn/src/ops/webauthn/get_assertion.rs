@@ -3,7 +3,7 @@ use std::{collections::HashMap, time::Duration};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tracing::{debug, error, trace, warn};
+use tracing::{debug, error, trace};
 
 use crate::{
     fido::AuthenticatorData,
@@ -185,7 +185,7 @@ impl FromIdlModel<PublicKeyCredentialRequestOptionsJSON, GetAssertionRequestPars
                 if let Err(err) =
                     validate_related_origins(&request_origin.origin, &parsed, psl, http).await
                 {
-                    warn!(rp_id = %parsed.0, error = ?err, "Related-origins validation failed");
+                    debug!(rp_id = %parsed.0, kind = err.kind(), "Related-origins validation failed");
                     return Err(GetAssertionRequestParsingError::MismatchingRelyingPartyId(
                         parsed.0,
                         effective_rp_id.to_string(),

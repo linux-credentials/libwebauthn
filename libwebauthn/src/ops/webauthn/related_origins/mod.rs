@@ -58,6 +58,21 @@ pub enum RelatedOriginsError {
     NoMatchingOrigin,
 }
 
+impl RelatedOriginsError {
+    /// Static, log-safe variant discriminant. Use in place of the `Debug` /
+    /// `Display` impls when the error may carry reqwest- or serde-supplied
+    /// text (IPs, body snippets) that should not reach operator logs.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            RelatedOriginsError::FetchFailed(_) => "fetch_failed",
+            RelatedOriginsError::UnexpectedContentType(_) => "unexpected_content_type",
+            RelatedOriginsError::MalformedJson(_) => "malformed_json",
+            RelatedOriginsError::MalformedDocument(_) => "malformed_document",
+            RelatedOriginsError::NoMatchingOrigin => "no_matching_origin",
+        }
+    }
+}
+
 pub type RelatedOriginsResult = Result<(), RelatedOriginsError>;
 
 #[derive(Debug, Deserialize)]
