@@ -3,6 +3,7 @@ mod get_assertion;
 pub mod idl;
 mod make_credential;
 pub mod psl;
+pub mod related_origins;
 mod timeout;
 
 use super::u2f::{RegisterRequest, SignRequest};
@@ -35,6 +36,10 @@ pub use psl::{
     DafsaFileLoadError, DafsaFilePublicSuffixList, DatFileLoadError, DatFilePublicSuffixList,
     PublicSuffixList, SystemLoadError, SystemPublicSuffixList, SYSTEM_PSL_DAFSA_PATH,
     SYSTEM_PSL_PATH,
+};
+pub use related_origins::{
+    validate_related_origins, NoRelatedOriginsClient, RelatedOriginsError,
+    RelatedOriginsHttpClient, WellKnownResponse, MAX_REGISTRABLE_LABELS,
 };
 use serde::Deserialize;
 
