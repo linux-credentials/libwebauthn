@@ -30,6 +30,10 @@ pub struct WellKnownResponse {
 /// Fetcher for `https://{rp_id}/.well-known/webauthn`, per WebAuthn L3 §5.11.1
 /// step 2. Implementations MUST send no credentials, no Referer, refuse
 /// non-`https://` redirects, cap the body size, and bound the request duration.
+/// Implementations MUST return `Err(FetchFailed)` for any status code other
+/// than 200 (after following redirects). Implementations MUST report the wire
+/// `Content-Type` header value unmodified (or `None` if absent) and MUST NOT
+/// synthesise an `application/json` content type for non-JSON responses.
 #[async_trait]
 pub trait RelatedOriginsHttpClient: Send + Sync {
     async fn fetch_well_known(
