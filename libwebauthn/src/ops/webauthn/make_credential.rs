@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use ctap_types::ctap2::credential_management::CredentialProtectionPolicy as Ctap2CredentialProtectionPolicy;
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
-use tracing::{debug, instrument, trace};
+use tracing::{debug, instrument, trace, warn};
 
 use crate::{
     fido::AuthenticatorData,
@@ -22,7 +22,7 @@ use crate::{
             Base64UrlString, FromIdlModel, JsonError, WebAuthnIDL,
         },
         psl::PublicSuffixList,
-        related_origins::RelatedOriginsHttpClient,
+        related_origins::{validate_related_origins, RelatedOriginsHttpClient},
         Operation, PrfInputValue, PrfOutputValue, RelyingPartyId, RequestOrigin,
     },
     proto::{
@@ -374,21 +374,25 @@ impl FromIdlModel<PublicKeyCredentialCreationOptionsJSON, MakeCredentialRequestP
     async fn from_idl_model(
         request_origin: &RequestOrigin,
         psl: &dyn PublicSuffixList,
-        _http: &dyn RelatedOriginsHttpClient,
+        http: &dyn RelatedOriginsHttpClient,
         inner: PublicKeyCredentialCreationOptionsJSON,
     ) -> Result<Self, MakeCredentialRequestParsingError> {
         let effective_rp_id = request_origin.origin.host.as_str();
         let rp_id = RelyingPartyId::try_from(inner.rp.id.as_str()).map_err(|err| {
             MakeCredentialRequestParsingError::InvalidRelyingPartyId(err.to_string())
         })?;
-        // TODO(#160): Add related-origins fallback per WebAuthn L3 §5.11.
         if !is_registrable_domain_suffix_or_equal(&rp_id.0, effective_rp_id, psl) {
-            return Err(
-                MakeCredentialRequestParsingError::MismatchingRelyingPartyId(
-                    rp_id.0,
-                    effective_rp_id.to_string(),
-                ),
-            );
+            if let Err(err) =
+                validate_related_origins(&request_origin.origin, &rp_id, psl, http).await
+            {
+                warn!(rp_id = %rp_id.0, error = ?err, "Related-origins validation failed");
+                return Err(
+                    MakeCredentialRequestParsingError::MismatchingRelyingPartyId(
+                        rp_id.0,
+                        effective_rp_id.to_string(),
+                    ),
+                );
+            }
         }
         let mut relying_party = inner.rp;
         relying_party.id = rp_id.0;
