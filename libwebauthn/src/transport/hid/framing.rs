@@ -3,7 +3,7 @@ use std::io::{Cursor as IOCursor, Error as IOError, ErrorKind as IOErrorKind};
 
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
-use tracing::error;
+use tracing::{error, warn};
 
 const BROADCAST_CID: u32 = 0xFFFFFFFF;
 const PACKET_INITIAL_HEADER_SIZE: usize = 7;
@@ -122,7 +122,7 @@ impl HidMessageParser {
         if (self.packets.is_empty() && packet.len() < PACKET_INITIAL_HEADER_SIZE)
             || packet.len() < PACKET_CONT_HEADER_SIZE + 1
         {
-            error!("Packet length is invalid");
+            warn!("Packet length is invalid");
             return Err(IOError::new(
                 IOErrorKind::InvalidInput,
                 "Packet length is invalid",
@@ -131,7 +131,7 @@ impl HidMessageParser {
 
         // CID 0x00000000 is reserved (CTAP 2.2 §11.2.4); reject all-zero frames.
         if packet.iter().all(|&b| b == 0) {
-            error!("Received all-zero packet, rejecting");
+            warn!("Received all-zero packet, rejecting");
             return Err(IOError::new(
                 IOErrorKind::InvalidData,
                 "All-zero packet is not a valid CTAPHID frame",
@@ -142,7 +142,7 @@ impl HidMessageParser {
             // First packet must be an initialization packet: high bit of
             // byte 4 set (CTAP 2.2 §11.2.4).
             if packet[4] & PACKET_INITIAL_CMD_MASK == 0 {
-                error!("First packet is not an initialization packet");
+                warn!("First packet is not an initialization packet");
                 return Err(IOError::new(
                     IOErrorKind::InvalidData,
                     "First packet must be an initialization packet",
@@ -153,7 +153,7 @@ impl HidMessageParser {
             // high bit cleared, SEQ starts at 0 and increments monotonically.
             let initial = &self.packets[0];
             if packet[..4] != initial[..4] {
-                error!("Continuation packet CID does not match initial packet");
+                warn!("Continuation packet CID does not match initial packet");
                 return Err(IOError::new(
                     IOErrorKind::InvalidData,
                     "Continuation packet CID mismatch",
@@ -161,7 +161,7 @@ impl HidMessageParser {
             }
             let seq = packet[4];
             if seq & PACKET_INITIAL_CMD_MASK != 0 {
-                error!(seq, "Unexpected init packet during continuation");
+                warn!(seq, "Unexpected init packet during continuation");
                 return Err(IOError::new(
                     IOErrorKind::InvalidData,
                     "Unexpected initialization packet during continuation",
@@ -169,14 +169,14 @@ impl HidMessageParser {
             }
             let expected_seq = (self.packets.len() - 1) as u8;
             if expected_seq > PACKET_CONT_SEQ_MAX {
-                error!(seq, "Continuation count exceeds maximum SEQ");
+                warn!(seq, "Continuation count exceeds maximum SEQ");
                 return Err(IOError::new(
                     IOErrorKind::InvalidData,
                     "Too many continuation packets",
                 ));
             }
             if seq != expected_seq {
-                error!(seq, expected_seq, "Out-of-order continuation SEQ");
+                warn!(seq, expected_seq, "Out-of-order continuation SEQ");
                 return Err(IOError::new(
                     IOErrorKind::InvalidData,
                     "Out-of-order continuation SEQ",
