@@ -731,10 +731,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn same_origin_with_ipv6_match() {
+    async fn ipv6_listed_origin_skipped_no_registrable_label() {
         // IPv6 host has no registrable label, so the loop skips at step 4.c/4.d
-        // before reaching same-origin. This documents that bare IP-literal
-        // origins cannot match via related-origins, matching browser behaviour.
+        // before reaching same-origin. Bare IP-literal origins therefore
+        // cannot match via related-origins, matching browser behaviour.
         let http = MockClient {
             response: Ok(json_ct(r#"{"origins":["https://[::1]"]}"#)),
         };
