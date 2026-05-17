@@ -17,6 +17,9 @@ use super::psl::PublicSuffixList;
 #[cfg(feature = "related-origins-client")]
 pub mod http;
 
+#[cfg(feature = "related-origins-client")]
+pub use http::{HttpPolicy, ReqwestRelatedOriginsClient};
+
 /// WebAuthn L3 §5.11 requires support for at least 5 registrable origin labels;
 /// we cap at exactly 5 to bound abuse surface.
 const MAX_REGISTRABLE_LABELS: usize = 5;
