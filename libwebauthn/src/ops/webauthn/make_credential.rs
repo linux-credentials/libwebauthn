@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use ctap_types::ctap2::credential_management::CredentialProtectionPolicy as Ctap2CredentialProtectionPolicy;
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
-use tracing::{debug, instrument, trace, warn};
+use tracing::{debug, instrument, trace};
 
 use crate::{
     fido::AuthenticatorData,
@@ -385,7 +385,7 @@ impl FromIdlModel<PublicKeyCredentialCreationOptionsJSON, MakeCredentialRequestP
             if let Err(err) =
                 validate_related_origins(&request_origin.origin, &rp_id, psl, http).await
             {
-                warn!(rp_id = %rp_id.0, error = ?err, "Related-origins validation failed");
+                debug!(rp_id = %rp_id.0, kind = err.kind(), "Related-origins validation failed");
                 return Err(
                     MakeCredentialRequestParsingError::MismatchingRelyingPartyId(
                         rp_id.0,
