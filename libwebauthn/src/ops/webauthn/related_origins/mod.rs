@@ -75,7 +75,9 @@ pub async fn validate_related_origins(
         .map(is_application_json)
         .unwrap_or(false);
     if !content_type_ok {
-        return Err(RelatedOriginsError::UnexpectedContentType(resp.content_type));
+        return Err(RelatedOriginsError::UnexpectedContentType(
+            resp.content_type,
+        ));
     }
 
     let doc: WellKnownDocument = serde_json::from_slice(&resp.body)
@@ -109,10 +111,7 @@ pub async fn validate_related_origins(
 
 /// First label of `host`'s registrable domain (eTLD+1), or `None` when the host
 /// has no registrable domain (e.g. bare eTLD, IP literal, unknown TLD).
-pub(crate) fn registrable_origin_label(
-    host: &str,
-    psl: &dyn PublicSuffixList,
-) -> Option<String> {
+pub(crate) fn registrable_origin_label(host: &str, psl: &dyn PublicSuffixList) -> Option<String> {
     let registrable = psl.registrable_domain(host)?;
     let label = registrable.split('.').next()?;
     if label.is_empty() {

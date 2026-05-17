@@ -14,45 +14,48 @@ pub use response::{
     WebAuthnIDLResponse,
 };
 
+use async_trait::async_trait;
 use origin::RequestOrigin;
-
-use super::psl::PublicSuffixList;
-
 use serde::de::DeserializeOwned;
 use serde_json;
 
+use super::psl::PublicSuffixList;
+use super::related_origins::RelatedOriginsHttpClient;
+
 pub type JsonError = serde_json::Error;
 
+#[async_trait]
 pub trait WebAuthnIDL<E>: Sized
 where
-    E: std::error::Error, // Validation error type.
+    E: std::error::Error,
     Self: FromIdlModel<Self::IdlModel, E>,
 {
-    /// An error type that can be returned when deserializing from JSON, including
-    /// JSON parsing errors and any additional validation errors.
     type Error: std::error::Error + From<JsonError> + From<E>;
+    type IdlModel: DeserializeOwned + Send;
 
-    /// The JSON model that this IDL can deserialize from.
-    type IdlModel: DeserializeOwned;
-
-    fn from_json(
+    async fn from_json(
         request_origin: &RequestOrigin,
         psl: &dyn PublicSuffixList,
+        http: &dyn RelatedOriginsHttpClient,
         json: &str,
     ) -> Result<Self, Self::Error> {
         let idl_model: Self::IdlModel = serde_json::from_str(json)?;
-        Self::from_idl_model(request_origin, psl, idl_model).map_err(From::from)
+        Self::from_idl_model(request_origin, psl, http, idl_model)
+            .await
+            .map_err(From::from)
     }
 }
 
+#[async_trait]
 pub trait FromIdlModel<T, E>: Sized
 where
-    T: DeserializeOwned,
+    T: DeserializeOwned + Send,
     E: std::error::Error,
 {
-    fn from_idl_model(
+    async fn from_idl_model(
         request_origin: &RequestOrigin,
         psl: &dyn PublicSuffixList,
+        http: &dyn RelatedOriginsHttpClient,
         model: T,
     ) -> Result<Self, E>;
 }

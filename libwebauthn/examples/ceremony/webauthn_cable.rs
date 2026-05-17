@@ -11,8 +11,8 @@ use qrcode::render::unicode;
 use qrcode::QrCode;
 
 use libwebauthn::ops::webauthn::{
-    DatFilePublicSuffixList, JsonFormat, MakeCredentialRequest, RequestOrigin, WebAuthnIDL as _,
-    WebAuthnIDLResponse as _,
+    DatFilePublicSuffixList, JsonFormat, MakeCredentialRequest, NoRelatedOriginsClient,
+    RequestOrigin, WebAuthnIDL as _, WebAuthnIDLResponse as _,
 };
 use libwebauthn::transport::{Channel as _, Device};
 use libwebauthn::webauthn::WebAuthn;
@@ -79,8 +79,14 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
     let state_recv = channel.get_ux_update_receiver();
     tokio::spawn(common::handle_cable_updates(state_recv));
 
-    let request = MakeCredentialRequest::from_json(&request_origin, &psl, MAKE_CREDENTIAL_REQUEST)
-        .expect("Failed to parse request JSON");
+    let request = MakeCredentialRequest::from_json(
+        &request_origin,
+        &psl,
+        &NoRelatedOriginsClient,
+        MAKE_CREDENTIAL_REQUEST,
+    )
+    .await
+    .expect("Failed to parse request JSON");
 
     let response = retry_user_errors!(channel.webauthn_make_credential(&request)).unwrap();
     let response_json = response

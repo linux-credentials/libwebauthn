@@ -14,8 +14,8 @@ use qrcode::QrCode;
 use tokio::time::sleep;
 
 use libwebauthn::ops::webauthn::{
-    GetAssertionRequest, JsonFormat, MakeCredentialRequest, RequestOrigin, SystemPublicSuffixList,
-    WebAuthnIDL as _, WebAuthnIDLResponse as _,
+    GetAssertionRequest, JsonFormat, MakeCredentialRequest, NoRelatedOriginsClient, RequestOrigin,
+    SystemPublicSuffixList, WebAuthnIDL as _, WebAuthnIDLResponse as _,
 };
 use libwebauthn::transport::cable::channel::CableChannel;
 use libwebauthn::transport::{Channel as _, Device};
@@ -95,9 +95,14 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         let state_recv = channel.get_ux_update_receiver();
         tokio::spawn(common::handle_cable_updates(state_recv));
 
-        let request =
-            MakeCredentialRequest::from_json(&request_origin, &psl, MAKE_CREDENTIAL_REQUEST)
-                .expect("Failed to parse request JSON");
+        let request = MakeCredentialRequest::from_json(
+            &request_origin,
+            &psl,
+            &NoRelatedOriginsClient,
+            MAKE_CREDENTIAL_REQUEST,
+        )
+        .await
+        .expect("Failed to parse request JSON");
 
         let response = retry_user_errors!(channel.webauthn_make_credential(&request)).unwrap();
         let response_json = response
@@ -155,8 +160,14 @@ async fn run_get_assertion(
     let state_recv = channel.get_ux_update_receiver();
     tokio::spawn(common::handle_cable_updates(state_recv));
 
-    let request = GetAssertionRequest::from_json(request_origin, psl, GET_ASSERTION_REQUEST)
-        .expect("Failed to parse request JSON");
+    let request = GetAssertionRequest::from_json(
+        request_origin,
+        psl,
+        &NoRelatedOriginsClient,
+        GET_ASSERTION_REQUEST,
+    )
+    .await
+    .expect("Failed to parse request JSON");
     let response = retry_user_errors!(channel.webauthn_get_assertion(&request)).unwrap();
     for assertion in &response.assertions {
         let assertion_json = assertion

@@ -1,5 +1,6 @@
 use std::{collections::HashMap, time::Duration};
 
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tracing::{debug, error, trace};
@@ -22,6 +23,7 @@ use crate::{
             Base64UrlString, FromIdlModel, JsonError,
         },
         psl::PublicSuffixList,
+        related_origins::RelatedOriginsHttpClient,
         Operation, WebAuthnIDL,
     },
     pin::PinUvAuthProtocol,
@@ -166,12 +168,14 @@ impl WebAuthnIDL<GetAssertionRequestParsingError> for GetAssertionRequest {
     sequence<DOMString>                                     hints = [];
     AuthenticationExtensionsClientInputsJSON                extensions;
 }; */
+#[async_trait]
 impl FromIdlModel<PublicKeyCredentialRequestOptionsJSON, GetAssertionRequestParsingError>
     for GetAssertionRequest
 {
-    fn from_idl_model(
+    async fn from_idl_model(
         request_origin: &RequestOrigin,
         psl: &dyn PublicSuffixList,
+        _http: &dyn RelatedOriginsHttpClient,
         inner: PublicKeyCredentialRequestOptionsJSON,
     ) -> Result<Self, GetAssertionRequestParsingError> {
         let effective_rp_id = request_origin.origin.host.as_str();
@@ -654,7 +658,7 @@ mod tests {
     use serde_bytes::ByteBuf;
 
     use crate::ops::webauthn::psl::MockPublicSuffixList;
-    use crate::ops::webauthn::{GetAssertionRequest, RequestOrigin};
+    use crate::ops::webauthn::{GetAssertionRequest, NoRelatedOriginsClient, RequestOrigin};
     use crate::proto::ctap2::Ctap2PublicKeyCredentialType;
 
     use super::*;
@@ -705,49 +709,66 @@ mod tests {
         serde_json::to_string(&v).unwrap()
     }
 
-    #[test]
-    fn test_request_from_json_base() {
+    #[tokio::test]
+    async fn test_request_from_json_base() {
         let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
         let req: GetAssertionRequest = GetAssertionRequest::from_json(
             &request_origin,
             &MockPublicSuffixList,
+            &NoRelatedOriginsClient,
             REQUEST_BASE_JSON,
         )
+        .await
         .unwrap();
         assert_eq!(req, request_base());
     }
 
-    #[test]
-    fn test_request_from_json_ignore_missing_rp_id() {
+    #[tokio::test]
+    async fn test_request_from_json_ignore_missing_rp_id() {
         let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
         let req_json = json_field_rm(REQUEST_BASE_JSON, "rpId");
 
-        let req: GetAssertionRequest =
-            GetAssertionRequest::from_json(&request_origin, &MockPublicSuffixList, &req_json)
-                .unwrap();
+        let req: GetAssertionRequest = GetAssertionRequest::from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            &NoRelatedOriginsClient,
+            &req_json,
+        )
+        .await
+        .unwrap();
         assert_eq!(req, request_base());
     }
 
-    #[test]
-    fn test_request_from_json_invalid_rp_id() {
+    #[tokio::test]
+    async fn test_request_from_json_invalid_rp_id() {
         let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
         let req_json = json_field_add(REQUEST_BASE_JSON, "rpId", r#""example.org.""#);
 
-        let result =
-            GetAssertionRequest::from_json(&request_origin, &MockPublicSuffixList, &req_json);
+        let result = GetAssertionRequest::from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            &NoRelatedOriginsClient,
+            &req_json,
+        )
+        .await;
         assert!(matches!(
             result,
             Err(GetAssertionRequestParsingError::InvalidRelyingPartyId(_))
         ));
     }
 
-    #[test]
-    fn test_request_from_json_mismatching_rp_id() {
+    #[tokio::test]
+    async fn test_request_from_json_mismatching_rp_id() {
         let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
         let req_json = json_field_add(REQUEST_BASE_JSON, "rpId", r#""other.example.org""#);
 
-        let result =
-            GetAssertionRequest::from_json(&request_origin, &MockPublicSuffixList, &req_json);
+        let result = GetAssertionRequest::from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            &NoRelatedOriginsClient,
+            &req_json,
+        )
+        .await;
         assert!(matches!(
             result,
             Err(GetAssertionRequestParsingError::MismatchingRelyingPartyId(
@@ -757,26 +778,37 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn test_request_from_json_rp_id_is_parent_registrable_suffix() {
+    #[tokio::test]
+    async fn test_request_from_json_rp_id_is_parent_registrable_suffix() {
         // origin = login.example.org, rp.id = example.org -> accepted.
         let request_origin: RequestOrigin = "https://login.example.org".parse().unwrap();
         let req_json = json_field_add(REQUEST_BASE_JSON, "rpId", r#""example.org""#);
 
-        let req = GetAssertionRequest::from_json(&request_origin, &MockPublicSuffixList, &req_json)
-            .unwrap();
+        let req = GetAssertionRequest::from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            &NoRelatedOriginsClient,
+            &req_json,
+        )
+        .await
+        .unwrap();
         assert_eq!(req.relying_party_id, "example.org");
         assert_eq!(req.origin, "https://login.example.org");
     }
 
-    #[test]
-    fn test_request_from_json_rp_id_is_etld_rejected() {
+    #[tokio::test]
+    async fn test_request_from_json_rp_id_is_etld_rejected() {
         // origin = example.co.uk, rp.id = co.uk (a public suffix) -> rejected.
         let request_origin: RequestOrigin = "https://example.co.uk".parse().unwrap();
         let req_json = json_field_add(REQUEST_BASE_JSON, "rpId", r#""co.uk""#);
 
-        let result =
-            GetAssertionRequest::from_json(&request_origin, &MockPublicSuffixList, &req_json);
+        let result = GetAssertionRequest::from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            &NoRelatedOriginsClient,
+            &req_json,
+        )
+        .await;
         assert!(matches!(
             result,
             Err(GetAssertionRequestParsingError::MismatchingRelyingPartyId(
@@ -786,14 +818,19 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn test_request_from_json_ignore_missing_allow_credentials() {
+    #[tokio::test]
+    async fn test_request_from_json_ignore_missing_allow_credentials() {
         let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
         let req_json = json_field_rm(REQUEST_BASE_JSON, "allowCredentials");
 
-        let req: GetAssertionRequest =
-            GetAssertionRequest::from_json(&request_origin, &MockPublicSuffixList, &req_json)
-                .unwrap();
+        let req: GetAssertionRequest = GetAssertionRequest::from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            &NoRelatedOriginsClient,
+            &req_json,
+        )
+        .await
+        .unwrap();
         assert_eq!(
             req,
             GetAssertionRequest {
@@ -803,36 +840,46 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_request_from_json_default_timeout() {
+    #[tokio::test]
+    async fn test_request_from_json_default_timeout() {
         let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
         let req_json = json_field_rm(REQUEST_BASE_JSON, "timeout");
 
-        let req: GetAssertionRequest =
-            GetAssertionRequest::from_json(&request_origin, &MockPublicSuffixList, &req_json)
-                .unwrap();
+        let req: GetAssertionRequest = GetAssertionRequest::from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            &NoRelatedOriginsClient,
+            &req_json,
+        )
+        .await
+        .unwrap();
         assert_eq!(req.timeout, DEFAULT_TIMEOUT);
     }
 
-    #[test]
-    fn test_request_from_json_empty_extensions() {
+    #[tokio::test]
+    async fn test_request_from_json_empty_extensions() {
         // Test that "extensions": {} results in Some(default) not None
         // This is important for strict portals that distinguish between
         // no extensions key vs empty extensions object
         let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
         let req_json = json_field_add(REQUEST_BASE_JSON, "extensions", r#"{}"#);
 
-        let req: GetAssertionRequest =
-            GetAssertionRequest::from_json(&request_origin, &MockPublicSuffixList, &req_json)
-                .unwrap();
+        let req: GetAssertionRequest = GetAssertionRequest::from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            &NoRelatedOriginsClient,
+            &req_json,
+        )
+        .await
+        .unwrap();
         assert_eq!(
             req.extensions,
             Some(GetAssertionRequestExtensions::default())
         );
     }
 
-    #[test]
-    fn test_request_from_json_appid_extension() {
+    #[tokio::test]
+    async fn test_request_from_json_appid_extension() {
         let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
         let req_json = json_field_add(
             REQUEST_BASE_JSON,
@@ -840,9 +887,14 @@ mod tests {
             r#"{"appid":"https://www.example.org/u2f/origins.json"}"#,
         );
 
-        let req: GetAssertionRequest =
-            GetAssertionRequest::from_json(&request_origin, &MockPublicSuffixList, &req_json)
-                .unwrap();
+        let req: GetAssertionRequest = GetAssertionRequest::from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            &NoRelatedOriginsClient,
+            &req_json,
+        )
+        .await
+        .unwrap();
         let ext = req.extensions.expect("extensions should be present");
         assert_eq!(
             ext.appid.as_deref(),
@@ -850,8 +902,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_request_from_json_appid_extension_invalid_non_https() {
+    #[tokio::test]
+    async fn test_request_from_json_appid_extension_invalid_non_https() {
         let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
         let req_json = json_field_add(
             REQUEST_BASE_JSON,
@@ -859,7 +911,13 @@ mod tests {
             r#"{"appid":"http://www.example.org/u2f/origins.json"}"#,
         );
 
-        let res = GetAssertionRequest::from_json(&request_origin, &MockPublicSuffixList, &req_json);
+        let res = GetAssertionRequest::from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            &NoRelatedOriginsClient,
+            &req_json,
+        )
+        .await;
         assert!(matches!(
             res,
             Err(GetAssertionRequestParsingError::InvalidAppId(_))
@@ -911,34 +969,40 @@ mod tests {
         assert_eq!(sign_requests[0].app_id_hash, rp_hash);
     }
 
-    fn parse_prf(extensions_json: &str) -> PrfInput {
+    async fn parse_prf(extensions_json: &str) -> PrfInput {
         let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
         let req_json = json_field_add(REQUEST_BASE_JSON, "extensions", extensions_json);
-        let req = GetAssertionRequest::from_json(&request_origin, &MockPublicSuffixList, &req_json)
-            .expect("request should parse");
+        let req = GetAssertionRequest::from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            &NoRelatedOriginsClient,
+            &req_json,
+        )
+        .await
+        .expect("request should parse");
         req.extensions
             .expect("extensions")
             .prf
             .expect("prf extension")
     }
 
-    #[test]
-    fn test_request_from_json_prf_extension() {
+    #[tokio::test]
+    async fn test_request_from_json_prf_extension() {
         // Non-32-byte inputs must now parse (W3C WebAuthn L3 §10.1.4). "AQID"
         // decodes to 0x010203, "BAUG" to 0x040506.
-        let prf = parse_prf(r#"{"prf":{"eval":{"first":"AQID","second":"BAUG"}}}"#);
+        let prf = parse_prf(r#"{"prf":{"eval":{"first":"AQID","second":"BAUG"}}}"#).await;
         let eval = prf.eval.expect("eval");
         assert_eq!(eval.first, vec![0x01, 0x02, 0x03]);
         assert_eq!(eval.second.as_deref(), Some(&[0x04u8, 0x05, 0x06][..]));
     }
 
-    #[test]
-    fn test_prf_input_variable_length() {
+    #[tokio::test]
+    async fn test_prf_input_variable_length() {
         // W3C WebAuthn L3 §10.1.4: PRF inputs are BufferSources of any length.
         for len in [1usize, 16, 31, 33, 64, 256] {
             let bytes = vec![0xABu8; len];
             let b64 = base64_url::encode(&bytes);
-            let prf = parse_prf(&format!(r#"{{"prf":{{"eval":{{"first":"{b64}"}}}}}}"#));
+            let prf = parse_prf(&format!(r#"{{"prf":{{"eval":{{"first":"{b64}"}}}}}}"#)).await;
             let eval = prf.eval.unwrap();
             assert_eq!(eval.first.len(), len, "len {len}");
             assert_eq!(eval.first, bytes, "len {len}");
@@ -946,34 +1010,35 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_prf_input_short_via_json() {
+    #[tokio::test]
+    async fn test_prf_input_short_via_json() {
         // Regression test for #209: a sub-32-byte salt encoded in the JSON IDL
         // must round-trip through GetAssertionRequest::from_json into a
         // PrfInputValue with the expected bytes.
-        let prf = parse_prf(r#"{"prf":{"eval":{"first":"aGk"}}}"#); // base64url "aGk" -> b"hi"
+        let prf = parse_prf(r#"{"prf":{"eval":{"first":"aGk"}}}"#).await; // base64url "aGk" -> b"hi"
         let eval = prf.eval.expect("eval");
         assert_eq!(eval.first, b"hi");
         assert!(eval.second.is_none());
     }
 
-    #[test]
-    fn test_prf_input_empty_allowed() {
+    #[tokio::test]
+    async fn test_prf_input_empty_allowed() {
         // §10.1.4 says "of any length" with no lower bound; empty must parse.
-        let prf = parse_prf(r#"{"prf":{"eval":{"first":""}}}"#);
+        let prf = parse_prf(r#"{"prf":{"eval":{"first":""}}}"#).await;
         let eval = prf.eval.unwrap();
         assert!(eval.first.is_empty());
         assert!(eval.second.is_none());
     }
 
-    #[test]
-    fn test_prf_eval_by_credential_variable_length() {
+    #[tokio::test]
+    async fn test_prf_eval_by_credential_variable_length() {
         // NOTE: the IDL field is currently deserialized as `eval_by_credential`
         // rather than the spec name `evalByCredential` — separate concern from
         // #209. Use the field name the deserializer accepts.
         let prf = parse_prf(
             r#"{"prf":{"eval_by_credential":{"Y3JlZDE":{"first":"AQ","second":"AgIC"}}}}"#,
-        );
+        )
+        .await;
         let v = prf.eval_by_credential.get("Y3JlZDE").expect("entry");
         assert_eq!(v.first, vec![0x01]);
         assert_eq!(v.second.as_deref(), Some(&[0x02u8, 0x02, 0x02][..]));
