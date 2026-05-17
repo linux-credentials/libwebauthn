@@ -151,19 +151,29 @@ async fn discover_properties(
     Ok(result)
 }
 
+/// Brief scan window so btleplug's adapter.peripherals() observes
+/// currently-advertising FIDO authenticators before we enumerate.
+const SCAN_DURATION: std::time::Duration = std::time::Duration::from_secs(3);
+
 #[instrument(level = Level::DEBUG, skip_all)]
 pub async fn list_fido_devices() -> Result<Vec<FidoDevice>, Error> {
     let adapter = get_adapter().await?;
+    adapter
+        .start_scan(ScanFilter {
+            services: vec![FIDO_PROFILE_UUID],
+        })
+        .await
+        .or(Err(Error::ConnectionFailed))?;
+    tokio::time::sleep(SCAN_DURATION).await;
+    let _ = adapter.stop_scan().await;
     let peripherals: Vec<Peripheral> = adapter
         .peripherals()
         .await
-        .or(Err(Error::ConnectionFailed))?
-        .into_iter()
-        .filter(|p| p.services().iter().any(|s| s.uuid == FIDO_PROFILE_UUID))
-        .collect();
-    let with_properties = discover_properties(peripherals)
+        .or(Err(Error::ConnectionFailed))?;
+    let with_properties: Vec<FidoDevice> = discover_properties(peripherals)
         .await?
         .into_iter()
+        .filter(|(_, props)| props.services.contains(&FIDO_PROFILE_UUID))
         .map(|(peripheral, properties)| FidoDevice {
             peripheral,
             properties,
@@ -191,6 +201,15 @@ pub async fn get_device(peripheral: Peripheral) -> Result<Option<FidoDevice>, Er
 pub async fn supported_fido_revisions(
     peripheral: &Peripheral,
 ) -> Result<SupportedRevisions, Error> {
+    enforce_bonded(peripheral).await?;
+    peripheral
+        .connect()
+        .await
+        .or(Err(Error::ConnectionFailed))?;
+    peripheral
+        .discover_services()
+        .await
+        .or(Err(Error::ConnectionFailed))?;
     let services = discover_services(peripheral).await?;
     let revision = peripheral
         .read(&services.service_revision_bitfield)
