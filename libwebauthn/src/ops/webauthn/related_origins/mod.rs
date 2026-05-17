@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use url::{Host, Url};
 
-use super::idl::origin::Origin;
+use super::idl::origin::{Origin, Scheme};
 use super::idl::rpid::RelyingPartyId;
 use super::psl::PublicSuffixList;
 
@@ -158,13 +158,31 @@ fn effective_domain_of(url: &Url) -> Option<String> {
     }
 }
 
-/// WebAuthn L3 §5.11.1 step 4.f: typed-origin equality between the caller's
-/// origin and the listed entry's tuple origin.
+/// WebAuthn L3 §5.11.1 step 4.f: tuple-origin equality (scheme, host, port)
+/// between the caller's origin and the listed entry. The spec defers to HTML
+/// §7.5 "same origin", which compares only those three components, so
+/// userinfo, paths, queries and fragments on the listed URL are ignored.
 fn same_origin(caller: &Origin, listed: &Url) -> bool {
-    let Ok(listed_str) = listed.as_str().parse::<Origin>() else {
+    if caller.scheme.as_str() != listed.scheme() {
+        return false;
+    }
+    let Some(listed_host) = effective_domain_of(listed) else {
         return false;
     };
-    *caller == listed_str
+    if caller.host.as_str() != listed_host {
+        return false;
+    }
+    let caller_port = caller.port.or_else(|| default_port(caller.scheme));
+    caller_port == listed.port_or_known_default()
+}
+
+/// Default port for a WebAuthn scheme, per the WHATWG URL Standard's
+/// special-scheme port table.
+fn default_port(scheme: Scheme) -> Option<u16> {
+    match scheme {
+        Scheme::Https => Some(443),
+        Scheme::Http => Some(80),
+    }
 }
 
 /// Fetch §2.5 `application/json` essence check: case-insensitive, parameters
@@ -667,6 +685,24 @@ mod tests {
         )
         .await;
         assert!(matches!(res, Err(RelatedOriginsError::NoMatchingOrigin)));
+    }
+
+    #[tokio::test]
+    async fn listed_origin_with_path_still_matches() {
+        // §5.11.1 step 4.f: same-origin compares (scheme, host, port) only, so
+        // a trailing path on the listed entry must not block the match.
+        let body = r#"{"origins":["https://example.com/foo"]}"#;
+        let http = MockClient {
+            response: Ok(json_ct(body)),
+        };
+        let res = validate_related_origins(
+            &caller("https://example.com"),
+            &rp("example.com"),
+            &MockPublicSuffixList,
+            &http,
+        )
+        .await;
+        assert!(matches!(res, Ok(())));
     }
 
     #[tokio::test]
