@@ -1,8 +1,8 @@
 use std::error::Error;
 
 use libwebauthn::ops::webauthn::{
-    GetAssertionRequest, JsonFormat, MakeCredentialRequest, RequestOrigin, SystemPublicSuffixList,
-    WebAuthnIDL as _, WebAuthnIDLResponse as _,
+    GetAssertionRequest, JsonFormat, MakeCredentialRequest, NoRelatedOriginsClient, RequestOrigin,
+    SystemPublicSuffixList, WebAuthnIDL as _, WebAuthnIDLResponse as _,
 };
 use libwebauthn::transport::nfc::{get_nfc_device, is_nfc_available};
 use libwebauthn::transport::{Channel as _, Device};
@@ -33,6 +33,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
     let make_credentials_request = MakeCredentialRequest::from_json(
         &request_origin,
         &psl,
+        &NoRelatedOriginsClient,
         r#"
         {
             "rp": {
@@ -58,6 +59,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         }
         "#,
     )
+    .await
     .expect("Failed to parse request JSON");
     println!(
         "WebAuthn MakeCredential request: {:?}",
@@ -77,6 +79,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
     let get_assertion = GetAssertionRequest::from_json(
         &request_origin,
         &psl,
+        &NoRelatedOriginsClient,
         r#"
         {
             "challenge": "Y3JlZGVudGlhbHMtZm9yLWxpbnV4L2xpYndlYmF1dGhu",
@@ -86,6 +89,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         }
         "#,
     )
+    .await
     .expect("Failed to parse request JSON");
     println!("WebAuthn GetAssertion request: {:?}", get_assertion);
 
