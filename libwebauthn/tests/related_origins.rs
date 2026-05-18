@@ -49,7 +49,7 @@ impl RelatedOriginsHttpClient for StaticHttp {
 
 const MAKE_CREDENTIAL_JSON: &str = r#"
 {
-    "rp": {"id": "brand.com", "name": "brand.com"},
+    "rp": {"id": "example.org", "name": "example.org"},
     "user": {
         "id": "dXNlcmlk",
         "name": "mario.rossi",
@@ -71,7 +71,7 @@ const GET_ASSERTION_JSON: &str = r#"
 {
     "challenge": "Y3JlZGVudGlhbHMtZm9yLWxpbnV4L2xpYndlYmF1dGhu",
     "timeout": 30000,
-    "rpId": "brand.com",
+    "rpId": "example.org",
     "allowCredentials": [
         {"type": "public-key", "id": "bXktY3JlZGVudGlhbC1pZA"}
     ],
@@ -79,13 +79,14 @@ const GET_ASSERTION_JSON: &str = r#"
 }
 "#;
 
-// `.de` in design §8.3 substituted with `.org` (test PSL knows `.com` and
-// `.org`); pattern (different eTLD between caller and rp.id) is identical.
-const WELL_KNOWN_BODY: &str = r#"{"origins":["https://app.brand.org","https://brand.com"]}"#;
+// Caller and rp.id sit on different eTLDs (`example.com` vs `example.org`),
+// matching the §8.3 design example so the related-origins fetch path is
+// actually exercised.
+const WELL_KNOWN_BODY: &str = r#"{"origins":["https://app.example.com","https://example.org"]}"#;
 
 #[tokio::test]
 async fn end_to_end_mock_match_via_make_credential() {
-    let request_origin: RequestOrigin = "https://app.brand.org".parse().unwrap();
+    let request_origin: RequestOrigin = "https://app.example.com".parse().unwrap();
     let http = StaticHttp {
         body: WELL_KNOWN_BODY,
     };
@@ -95,15 +96,15 @@ async fn end_to_end_mock_match_via_make_credential() {
             .await
             .unwrap();
 
-    assert_eq!(req.relying_party.id, "brand.com");
+    assert_eq!(req.relying_party.id, "example.org");
     assert!(req
         .client_data_json()
-        .contains(r#""origin":"https://app.brand.org""#));
+        .contains(r#""origin":"https://app.example.com""#));
 }
 
 #[tokio::test]
 async fn end_to_end_mock_match_via_get_assertion() {
-    let request_origin: RequestOrigin = "https://app.brand.org".parse().unwrap();
+    let request_origin: RequestOrigin = "https://app.example.com".parse().unwrap();
     let http = StaticHttp {
         body: WELL_KNOWN_BODY,
     };
@@ -112,8 +113,8 @@ async fn end_to_end_mock_match_via_get_assertion() {
         .await
         .unwrap();
 
-    assert_eq!(req.relying_party_id, "brand.com");
+    assert_eq!(req.relying_party_id, "example.org");
     assert!(req
         .client_data_json()
-        .contains(r#""origin":"https://app.brand.org""#));
+        .contains(r#""origin":"https://app.example.com""#));
 }
