@@ -1,14 +1,17 @@
+use ::btleplug::api::{AddressType, BDAddr};
 use async_trait::async_trait;
 use tokio::sync::{broadcast, mpsc, watch};
-use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
-use tracing::{debug, error, instrument, trace, warn};
+use tracing::{debug, error, info, instrument, trace, warn};
 
 use super::advertisement::{await_advertisement, DecryptedAdvert};
 use super::channel::{CableUpdate, CableUxUpdate, ConnectionState};
 use super::crypto::{derive, KeyPurpose};
+use super::data_channel::{CableDataChannel, WebSocketDataChannel};
 use super::known_devices::{CableKnownDevice, CableKnownDeviceInfoStore, ClientNonce};
+use super::l2cap::L2capDataChannel;
+use super::protocol::{self, CableTunnelConnectionType, TunnelNoiseState};
 use super::qr_code_device::CableQrCodeDevice;
-use super::tunnel::{self, CableTunnelConnectionType, TunnelNoiseState};
+use super::tunnel;
 use crate::proto::ctap2::cbor::{CborRequest, CborResponse};
 use crate::transport::ble::btleplug::FidoDevice;
 use crate::transport::error::TransportError;
@@ -45,14 +48,24 @@ impl ProximityCheckInput {
 
 #[derive(Debug)]
 pub(crate) struct ProximityCheckOutput {
-    pub _device: FidoDevice,
+    pub device: FidoDevice,
     pub advert: DecryptedAdvert,
+}
+
+/// L2CAP parameters from the advertisement suffix, for a BLE data channel.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct BleConnectionParams {
+    pub address: BDAddr,
+    pub address_type: Option<AddressType>,
+    pub psm: u16,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct ConnectionInput {
     pub tunnel_domain: String,
     pub connection_type: CableTunnelConnectionType,
+    /// Some if the CMHD offered a BLE L2CAP channel; None selects WebSocket.
+    pub ble: Option<BleConnectionParams>,
 }
 
 impl ConnectionInput {
@@ -70,7 +83,7 @@ impl ConnectionInput {
             KeyPurpose::TunnelID,
         )
         .map_err(|_| TransportError::InvalidKey)?;
-        let tunnel_id = &tunnel_id_full[..16];
+        let tunnel_id = tunnel_id_full.get(..16).ok_or(TransportError::InvalidKey)?;
         let tunnel_id_str = hex::encode(tunnel_id);
 
         let connection_type = CableTunnelConnectionType::QrCode {
@@ -78,9 +91,22 @@ impl ConnectionInput {
             tunnel_id: tunnel_id_str,
             private_key: qr_device.private_key,
         };
+
+        let ble = proximity_output
+            .advert
+            .suffix
+            .as_ref()
+            .and_then(|suffix| suffix.ble_psm())
+            .map(|psm| BleConnectionParams {
+                address: proximity_output.device.properties.address,
+                address_type: proximity_output.device.properties.address_type,
+                psm,
+            });
+
         Ok(Self {
             tunnel_domain,
             connection_type,
+            ble,
         })
     }
 
@@ -106,19 +132,19 @@ impl ConnectionInput {
         Self {
             tunnel_domain: known_device.device_info.tunnel_domain.clone(),
             connection_type,
+            ble: None,
         }
     }
 }
 
-#[derive(Debug)]
 pub(crate) struct ConnectionOutput {
-    pub ws_stream: WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
+    pub data_channel: Box<dyn CableDataChannel>,
     pub connection_type: CableTunnelConnectionType,
     pub tunnel_domain: String,
 }
 
 pub(crate) struct HandshakeInput {
-    pub ws_stream: WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
+    pub data_channel: Box<dyn CableDataChannel>,
     pub psk: [u8; 32],
     pub connection_type: CableTunnelConnectionType,
     pub tunnel_domain: String,
@@ -133,7 +159,7 @@ impl HandshakeInput {
         let advert_plaintext = &proximity_output.advert.plaintext;
         let psk = derive_psk(qr_device.qr_code.qr_secret.as_ref(), advert_plaintext)?;
         Ok(Self {
-            ws_stream: connection_output.ws_stream,
+            data_channel: connection_output.data_channel,
             psk,
             connection_type: connection_output.connection_type,
             tunnel_domain: connection_output.tunnel_domain,
@@ -149,7 +175,7 @@ impl HandshakeInput {
         let advert_plaintext = proximity_output.advert.plaintext;
         let psk = derive_psk(&link_secret, &advert_plaintext)?;
         Ok(Self {
-            ws_stream: connection_output.ws_stream,
+            data_channel: connection_output.data_channel,
             psk,
             connection_type: connection_output.connection_type,
             tunnel_domain: connection_output.tunnel_domain,
@@ -158,7 +184,7 @@ impl HandshakeInput {
 }
 
 pub(crate) struct HandshakeOutput {
-    pub ws_stream: WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
+    pub data_channel: Box<dyn CableDataChannel>,
     pub noise_state: TunnelNoiseState,
     pub connection_type: CableTunnelConnectionType,
     pub tunnel_domain: String,
@@ -168,7 +194,7 @@ pub(crate) struct TunnelConnectionInput {
     pub connection_type: CableTunnelConnectionType,
     pub tunnel_domain: String,
     pub known_device_store: Option<Arc<dyn CableKnownDeviceInfoStore>>,
-    pub ws_stream: WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
+    pub data_channel: Box<dyn CableDataChannel>,
     pub noise_state: TunnelNoiseState,
     pub cbor_tx_recv: mpsc::Receiver<CborRequest>,
     pub cbor_rx_send: mpsc::Sender<CborResponse>,
@@ -185,7 +211,7 @@ impl TunnelConnectionInput {
             connection_type: handshake_output.connection_type,
             tunnel_domain: handshake_output.tunnel_domain,
             known_device_store,
-            ws_stream: handshake_output.ws_stream,
+            data_channel: handshake_output.data_channel,
             noise_state: handshake_output.noise_state,
             cbor_tx_recv,
             cbor_rx_send,
@@ -252,10 +278,7 @@ pub(crate) async fn proximity_check_stage(
     let (device, advert) = await_advertisement(&input.eid_key).await?;
 
     debug!("Proximity check completed successfully");
-    Ok(ProximityCheckOutput {
-        _device: device,
-        advert,
-    })
+    Ok(ProximityCheckOutput { device, advert })
 }
 
 #[instrument(skip_all, err)]
@@ -269,14 +292,40 @@ pub(crate) async fn connection_stage(
         .send_update(CableUxUpdate::CableUpdate(CableUpdate::Connecting))
         .await;
 
-    let ws_stream = tunnel::connect(&input.tunnel_domain, &input.connection_type).await?;
+    let data_channel = connect_data_channel(&input).await?;
 
     debug!("Connection stage completed successfully");
     Ok(ConnectionOutput {
-        ws_stream,
+        data_channel,
         connection_type: input.connection_type,
         tunnel_domain: input.tunnel_domain,
     })
+}
+
+/// Connects the data transfer channel: a direct BLE L2CAP channel if the CMHD
+/// offered one, otherwise the WebSocket tunnel. A failed L2CAP attempt falls
+/// back to the tunnel, whose routing details are always present in the advert.
+async fn connect_data_channel(
+    input: &ConnectionInput,
+) -> Result<Box<dyn CableDataChannel>, TransportError> {
+    if let Some(ble) = input.ble {
+        match L2capDataChannel::connect(ble.address, ble.address_type, ble.psm).await {
+            Ok(channel) => {
+                info!(psm = ble.psm, "Connected over BLE L2CAP");
+                return Ok(Box::new(channel));
+            }
+            Err(e) => {
+                warn!(
+                    ?e,
+                    "BLE L2CAP connection failed, falling back to WebSocket tunnel"
+                );
+            }
+        }
+    }
+
+    let ws_stream = tunnel::connect(&input.tunnel_domain, &input.connection_type).await?;
+    info!(tunnel_domain = %input.tunnel_domain, "Connected over WebSocket tunnel");
+    Ok(Box::new(WebSocketDataChannel::new(ws_stream)))
 }
 
 #[instrument(skip_all, err)]
@@ -290,9 +339,9 @@ pub(crate) async fn handshake_stage(
         .send_update(CableUxUpdate::CableUpdate(CableUpdate::Authenticating))
         .await;
 
-    let mut ws_stream = input.ws_stream;
+    let mut data_channel = input.data_channel;
     let noise_state =
-        tunnel::do_handshake(&mut ws_stream, input.psk, &input.connection_type).await?;
+        protocol::do_handshake(&mut *data_channel, input.psk, &input.connection_type).await?;
 
     debug!("Handshake stage completed successfully");
     ux_sender
@@ -304,7 +353,7 @@ pub(crate) async fn handshake_stage(
         .await;
 
     Ok(HandshakeOutput {
-        ws_stream,
+        data_channel,
         noise_state,
         connection_type: input.connection_type,
         tunnel_domain: input.tunnel_domain,
@@ -312,8 +361,13 @@ pub(crate) async fn handshake_stage(
 }
 
 fn derive_psk(secret: &[u8], advert_plaintext: &[u8]) -> Result<[u8; 32], Error> {
+    let derived = derive(secret, Some(advert_plaintext), KeyPurpose::Psk)?;
     let mut psk: [u8; 32] = [0u8; 32];
-    psk.copy_from_slice(&derive(secret, Some(advert_plaintext), KeyPurpose::Psk)?[..32]);
+    psk.copy_from_slice(
+        derived
+            .get(..32)
+            .ok_or(Error::Transport(TransportError::InvalidKey))?,
+    );
     Ok(psk)
 }
 
