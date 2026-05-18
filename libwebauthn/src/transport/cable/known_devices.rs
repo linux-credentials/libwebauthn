@@ -98,24 +98,27 @@ impl From<&CableLinkingInfo> for CableKnownDeviceId {
 }
 
 impl CableKnownDeviceInfo {
-    pub(crate) fn new(tunnel_domain: &str, linking_info: &CableLinkingInfo) -> Result<Self, Error> {
+    pub(crate) fn new(
+        tunnel_domain: &str,
+        linking_info: &CableLinkingInfo,
+    ) -> Result<Self, TransportError> {
         let info = Self {
             contact_id: linking_info.contact_id.to_vec(),
             link_id: linking_info
                 .link_id
                 .clone()
                 .try_into()
-                .map_err(|_| Error::Transport(TransportError::InvalidFraming))?,
+                .map_err(|_| TransportError::InvalidFraming)?,
             link_secret: linking_info
                 .link_secret
                 .clone()
                 .try_into()
-                .map_err(|_| Error::Transport(TransportError::InvalidFraming))?,
+                .map_err(|_| TransportError::InvalidFraming)?,
             public_key: linking_info
                 .authenticator_public_key
                 .clone()
                 .try_into()
-                .map_err(|_| Error::Transport(TransportError::InvalidFraming))?,
+                .map_err(|_| TransportError::InvalidFraming)?,
             name: linking_info.authenticator_name.clone(),
             tunnel_domain: tunnel_domain.to_string(),
         };

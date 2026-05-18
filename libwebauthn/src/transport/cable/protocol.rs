@@ -23,7 +23,6 @@ use crate::proto::ctap2::{Ctap2CommandCode, Ctap2GetInfoResponse};
 use crate::transport::cable::connection_stages::TunnelConnectionInput;
 use crate::transport::cable::known_devices::CableKnownDeviceId;
 use crate::transport::error::TransportError;
-use crate::webauthn::error::Error;
 
 const P256_X962_LENGTH: usize = 65;
 const MAX_CBOR_SIZE: usize = 1024 * 1024;
@@ -45,12 +44,10 @@ impl CableTunnelMessage {
             payload: ByteBuf::from(payload.to_vec()),
         }
     }
-    pub fn from_slice(slice: &[u8]) -> Result<Self, Error> {
-        let (type_byte, payload) = slice
-            .split_first()
-            .ok_or(Error::Transport(TransportError::InvalidFraming))?;
+    pub fn from_slice(slice: &[u8]) -> Result<Self, TransportError> {
+        let (type_byte, payload) = slice.split_first().ok_or(TransportError::InvalidFraming)?;
         if payload.is_empty() {
-            return Err(Error::Transport(TransportError::InvalidFraming));
+            return Err(TransportError::InvalidFraming);
         }
 
         let message_type = match *type_byte {
@@ -58,7 +55,7 @@ impl CableTunnelMessage {
             1 => CableTunnelMessageType::Ctap,
             2 => CableTunnelMessageType::Update,
             _ => {
-                return Err(Error::Transport(TransportError::InvalidFraming));
+                return Err(TransportError::InvalidFraming);
             }
         };
 
@@ -572,13 +569,8 @@ async fn connection_recv(
 ) -> Result<RecvOutcome, TransportError> {
     let decrypted_frame = decrypt_frame(encrypted_frame, noise_state).await?;
 
-    let cable_message: CableTunnelMessage = match CableTunnelMessage::from_slice(&decrypted_frame) {
-        Ok(cable_message) => cable_message,
-        Err(e) => {
-            error!(?e, "Failed to decode CABLE tunnel message");
-            return Err(TransportError::InvalidFraming);
-        }
-    };
+    let cable_message: CableTunnelMessage = CableTunnelMessage::from_slice(&decrypted_frame)
+        .inspect_err(|e| error!(?e, "Failed to decode CABLE tunnel message"))?;
 
     trace!(?cable_message);
     match cable_message.message_type {
@@ -660,8 +652,7 @@ fn parse_known_device(
     linking_info: &CableLinkingInfo,
     noise_state: &TunnelNoiseState,
 ) -> Result<CableKnownDeviceInfo, TransportError> {
-    let known_device = CableKnownDeviceInfo::new(tunnel_domain, linking_info)
-        .map_err(|_| TransportError::InvalidFraming)?;
+    let known_device = CableKnownDeviceInfo::new(tunnel_domain, linking_info)?;
     let secret_key = SecretKey::from(private_key);
 
     let Ok(authenticator_public_key) =
