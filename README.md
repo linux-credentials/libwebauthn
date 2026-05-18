@@ -51,7 +51,7 @@ Validating the relying party ID against the calling origin requires the [Public 
 | **Bluetooth Low Energy**     | 🟢 Supported (bluez)  | 🟢 Supported (bluez)  |
 | **NFC**                      | 🟢 Supported (pcsc or libnfc) | 🟢 Supported (pcsc or libnfc) |
 | **TPM 2.0 (Platform)**       | 🟠 Planned ([#4][#4]) | 🟠 Planned ([#4][#4]) |
-| **Hybrid (QR code scan, caBLE v2 + CTAP 2.3)**  | N/A                   | 🟢 Supported          |
+| **CTAP 2.3 hybrid (QR-initiated, BLE only)**    | N/A                   | 🟢 Supported          |
 
 ## Example programs
 
