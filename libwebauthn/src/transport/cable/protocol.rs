@@ -23,7 +23,6 @@ use crate::proto::ctap2::{Ctap2CommandCode, Ctap2GetInfoResponse};
 use crate::transport::cable::connection_stages::TunnelConnectionInput;
 use crate::transport::cable::known_devices::CableKnownDeviceId;
 use crate::transport::error::TransportError;
-use crate::webauthn::error::Error;
 
 const P256_X962_LENGTH: usize = 65;
 const MAX_CBOR_SIZE: usize = 1024 * 1024;
@@ -45,12 +44,10 @@ impl CableTunnelMessage {
             payload: ByteBuf::from(payload.to_vec()),
         }
     }
-    pub fn from_slice(slice: &[u8]) -> Result<Self, Error> {
-        let (type_byte, payload) = slice
-            .split_first()
-            .ok_or(Error::Transport(TransportError::InvalidFraming))?;
+    pub fn from_slice(slice: &[u8]) -> Result<Self, TransportError> {
+        let (type_byte, payload) = slice.split_first().ok_or(TransportError::InvalidFraming)?;
         if payload.is_empty() {
-            return Err(Error::Transport(TransportError::InvalidFraming));
+            return Err(TransportError::InvalidFraming);
         }
 
         let message_type = match *type_byte {
@@ -58,7 +55,7 @@ impl CableTunnelMessage {
             1 => CableTunnelMessageType::Ctap,
             2 => CableTunnelMessageType::Update,
             _ => {
-                return Err(Error::Transport(TransportError::InvalidFraming));
+                return Err(TransportError::InvalidFraming);
             }
         };
 
@@ -115,6 +112,14 @@ enum CableTunnelMessageType {
     Shutdown = 0,
     Ctap = 1,
     Update = 2,
+}
+
+/// Result of processing a single inbound tunnel frame.
+enum RecvOutcome {
+    /// Frame handled, keep the loop running.
+    Continue,
+    /// Peer sent a `Shutdown` control message; close the channel cleanly.
+    PeerShutdown,
 }
 
 #[derive(Clone)]
@@ -268,36 +273,36 @@ pub(crate) async fn do_handshake(
     })
 }
 
-pub(crate) async fn connection(mut input: TunnelConnectionInput) {
-    // Fetch the initial message
+/// Returns `Ok(())` on a clean close and `Err(_)` on any fault that leaves
+/// the encrypted channel unusable; callers surface `Err(_)` via `send_error`.
+pub(crate) async fn connection(mut input: TunnelConnectionInput) -> Result<(), TransportError> {
     let get_info_response_serialized: Vec<u8> = match input.data_channel.recv().await {
         Ok(Some(message)) => match connection_recv_initial(message, &mut input.noise_state).await {
             Ok(initial) => initial,
             Err(e) => {
                 error!(?e, "Failed to process initial message");
-                return;
+                return Err(e);
             }
         },
         Ok(None) => {
             error!("Connection closed before initial message was received");
-            return;
+            return Err(TransportError::ConnectionLost);
         }
         Err(e) => {
             error!(?e, "Failed to read initial message");
-            return;
+            return Err(e);
         }
     };
     debug!(?get_info_response_serialized, "Received initial message");
 
     loop {
-        // Wait for a message on the data channel, or a request to send on cbor_tx_recv
         tokio::select! {
             result = input.data_channel.recv() => {
                 match result {
                     Ok(Some(message)) => {
                         debug!("Received data channel message");
                         trace!(?message);
-                        let _ = connection_recv(
+                        match connection_recv(
                             &input.connection_type,
                             &input.tunnel_domain,
                             &input.known_device_store,
@@ -305,15 +310,23 @@ pub(crate) async fn connection(mut input: TunnelConnectionInput) {
                             &input.cbor_rx_send,
                             &mut input.noise_state,
                         )
-                        .await;
+                        .await
+                        {
+                            Ok(RecvOutcome::Continue) => {}
+                            Ok(RecvOutcome::PeerShutdown) => return Ok(()),
+                            Err(e) => {
+                                error!(?e, "Fatal error processing inbound frame");
+                                return Err(e);
+                            }
+                        }
                     }
                     Ok(None) => {
                         debug!("Data channel closed, closing connection");
-                        return;
+                        return Ok(());
                     }
                     Err(e) => {
                         error!(?e, "Failed to read encrypted CBOR message");
-                        return;
+                        return Err(e);
                     }
                 }
             }
@@ -323,11 +336,23 @@ pub(crate) async fn connection(mut input: TunnelConnectionInput) {
                     Ctap2CommandCode::AuthenticatorGetInfo => {
                         debug!("Responding to GetInfo request with cached response");
                         let response = CborResponse::new_success_from_slice(&get_info_response_serialized);
-                        let _ = input.cbor_rx_send.send(response).await;
+                        if let Err(e) = input.cbor_rx_send.send(response).await {
+                            error!(?e, "CBOR response receiver dropped");
+                            return Err(TransportError::ConnectionFailed);
+                        }
                     }
                     _ => {
                         debug!(?request.command, "Sending CBOR request");
-                        let _ = connection_send(request, &mut *input.data_channel, &mut input.noise_state).await;
+                        if let Err(e) = connection_send(
+                            request,
+                            &mut *input.data_channel,
+                            &mut input.noise_state,
+                        )
+                        .await
+                        {
+                            error!(?e, "Fatal error sending CBOR request");
+                            return Err(e);
+                        }
                     }
                 }
             }
@@ -339,7 +364,7 @@ async fn connection_send(
     request: CborRequest,
     data_channel: &mut dyn CableDataChannel,
     noise_state: &mut TunnelNoiseState,
-) -> Result<(), Error> {
+) -> Result<(), TransportError> {
     debug!("Sending CBOR request");
     trace!(?request);
 
@@ -351,7 +376,7 @@ async fn connection_send(
             cbor_request_len = cbor_request.len(),
             "CBOR request too large"
         );
-        return Err(Error::Transport(TransportError::InvalidFraming));
+        return Err(TransportError::InvalidFraming);
     }
     trace!(?cbor_request, cbor_request_len = cbor_request.len());
 
@@ -378,7 +403,7 @@ async fn connection_send(
         }
         Err(e) => {
             error!(?e, "Failed to encrypt frame");
-            return Err(Error::Transport(TransportError::ConnectionFailed));
+            return Err(TransportError::EncryptionFailed);
         }
     }
 
@@ -392,12 +417,12 @@ async fn connection_send(
 /// Strip the trailing padding-length byte and `padding_len` bytes of padding
 /// from a decrypted Noise transport frame, returning `InvalidFraming` on an
 /// empty plaintext or a declared padding length that exceeds the frame.
-fn strip_frame_padding(mut decrypted_frame: Vec<u8>) -> Result<Vec<u8>, Error> {
+fn strip_frame_padding(mut decrypted_frame: Vec<u8>) -> Result<Vec<u8>, TransportError> {
     let padding_len = match decrypted_frame.last() {
         Some(&b) => b as usize,
         None => {
             error!("Decrypted frame is empty; cannot read padding length");
-            return Err(Error::Transport(TransportError::InvalidFraming));
+            return Err(TransportError::InvalidFraming);
         }
     };
     let new_len = decrypted_frame
@@ -408,7 +433,7 @@ fn strip_frame_padding(mut decrypted_frame: Vec<u8>) -> Result<Vec<u8>, Error> {
                 frame_len = decrypted_frame.len(),
                 padding_len, "Padding length exceeds frame length"
             );
-            Error::Transport(TransportError::InvalidFraming)
+            TransportError::InvalidFraming
         })?;
     decrypted_frame.truncate(new_len);
     Ok(decrypted_frame)
@@ -417,7 +442,7 @@ fn strip_frame_padding(mut decrypted_frame: Vec<u8>) -> Result<Vec<u8>, Error> {
 async fn decrypt_frame(
     encrypted_frame: Vec<u8>,
     noise_state: &mut TunnelNoiseState,
-) -> Result<Vec<u8>, Error> {
+) -> Result<Vec<u8>, TransportError> {
     let mut decrypted_frame = vec![0u8; MAX_CBOR_SIZE];
     match noise_state
         .transport_state
@@ -430,7 +455,7 @@ async fn decrypt_frame(
         }
         Err(e) => {
             error!(?e, "Failed to decrypt CBOR response");
-            return Err(Error::Transport(TransportError::ConnectionFailed));
+            return Err(TransportError::EncryptionFailed);
         }
     }
 
@@ -447,14 +472,14 @@ async fn decrypt_frame(
 async fn connection_recv_initial(
     encrypted_frame: Vec<u8>,
     noise_state: &mut TunnelNoiseState,
-) -> Result<Vec<u8>, Error> {
+) -> Result<Vec<u8>, TransportError> {
     let decrypted_frame = decrypt_frame(encrypted_frame, noise_state).await?;
 
     let initial_message: CableInitialMessage = match cbor::from_slice(&decrypted_frame) {
         Ok(initial_message) => initial_message,
         Err(e) => {
             error!(?e, "Failed to decode initial message");
-            return Err(Error::Transport(TransportError::ConnectionFailed));
+            return Err(TransportError::InvalidFraming);
         }
     };
 
@@ -462,14 +487,16 @@ async fn connection_recv_initial(
         Ok(get_info_response) => get_info_response,
         Err(e) => {
             error!(?e, "Failed to decode GetInfo response");
-            return Err(Error::Transport(TransportError::ConnectionFailed));
+            return Err(TransportError::InvalidFraming);
         }
     };
 
     Ok(initial_message.info.to_vec())
 }
 
-async fn connection_recv_update(message: &[u8]) -> Result<Option<CableLinkingInfo>, Error> {
+async fn connection_recv_update(
+    message: &[u8],
+) -> Result<Option<CableLinkingInfo>, TransportError> {
     // TODO(#66): Android adds a 999-key to the end the message, which is not part of the standard.
     // For now, we parse the message to a map and manuually import fields.
 
@@ -477,7 +504,7 @@ async fn connection_recv_update(message: &[u8]) -> Result<Option<CableLinkingInf
         Ok(update_message) => update_message,
         Err(e) => {
             error!(?e, "Failed to decode update message");
-            return Err(Error::Transport(TransportError::ConnectionFailed));
+            return Err(TransportError::InvalidFraming);
         }
     };
 
@@ -539,27 +566,19 @@ async fn connection_recv(
     encrypted_frame: Vec<u8>,
     cbor_rx_send: &Sender<CborResponse>,
     noise_state: &mut TunnelNoiseState,
-) -> Result<(), Error> {
+) -> Result<RecvOutcome, TransportError> {
     let decrypted_frame = decrypt_frame(encrypted_frame, noise_state).await?;
 
-    // TODO handle the decrypted frame
-    let cable_message: CableTunnelMessage = match CableTunnelMessage::from_slice(&decrypted_frame) {
-        Ok(cable_message) => cable_message,
-        Err(e) => {
-            error!(?e, "Failed to decode CABLE tunnel message");
-            return Err(Error::Transport(TransportError::ConnectionFailed));
-        }
-    };
+    let cable_message: CableTunnelMessage = CableTunnelMessage::from_slice(&decrypted_frame)
+        .inspect_err(|e| error!(?e, "Failed to decode CABLE tunnel message"))?;
 
     trace!(?cable_message);
     match cable_message.message_type {
         CableTunnelMessageType::Shutdown => {
-            // Unexpected shutdown message
-            error!("Received unexpected shutdown message");
-            return Err(Error::Transport(TransportError::ConnectionFailed));
+            debug!("Peer sent Shutdown control message; closing connection cleanly");
+            Ok(RecvOutcome::PeerShutdown)
         }
         CableTunnelMessageType::Ctap => {
-            // Handle the CTAP message
             let cbor_response: CborResponse = (&cable_message.payload.to_vec())
                 .try_into()
                 .or(Err(TransportError::InvalidFraming))?;
@@ -570,20 +589,26 @@ async fn connection_recv(
                 .send(cbor_response)
                 .await
                 .or(Err(TransportError::ConnectionFailed))?;
+            Ok(RecvOutcome::Continue)
         }
         CableTunnelMessageType::Update => {
-            // Handle the update message
-            let maybe_update_message: Option<CableLinkingInfo> =
-                connection_recv_update(&cable_message.payload).await?;
+            // Malformed or unsigned update: log, drop the update, keep the channel.
+            let maybe_update_message = match connection_recv_update(&cable_message.payload).await {
+                Ok(m) => m,
+                Err(e) => {
+                    warn!(?e, "Malformed update message; ignoring");
+                    return Ok(RecvOutcome::Continue);
+                }
+            };
 
             let Some(linking_info) = maybe_update_message else {
                 warn!("Ignoring update message without linking info");
-                return Ok(());
+                return Ok(RecvOutcome::Continue);
             };
 
             let CableTunnelConnectionType::QrCode { private_key, .. } = connection_type else {
                 warn!("Ignoring update message for non-QR code connection");
-                return Ok(());
+                return Ok(RecvOutcome::Continue);
             };
 
             debug!("Received update message with linking info");
@@ -600,12 +625,11 @@ async fn connection_recv(
                             store.put_known_device(&device_id, &known_device).await;
                         }
                         Err(e) => {
-                            error!(
+                            warn!(
                                 ?e,
-                                "Invalid update message from authenticator, forgetting device"
+                                "Invalid linking update from authenticator, forgetting device"
                             );
                             store.delete_known_device(&device_id).await;
-                            return Err(Error::Transport(TransportError::TransportUnavailable));
                         }
                     }
                 }
@@ -613,10 +637,9 @@ async fn connection_recv(
                     warn!("Ignoring update message without a device store");
                 }
             };
+            Ok(RecvOutcome::Continue)
         }
-    };
-
-    Ok(())
+    }
 }
 
 /// Validation requires a shared key computed on the QR code ephemeral identity key (private_key here).
@@ -628,7 +651,7 @@ fn parse_known_device(
     tunnel_domain: &str,
     linking_info: &CableLinkingInfo,
     noise_state: &TunnelNoiseState,
-) -> Result<CableKnownDeviceInfo, Error> {
+) -> Result<CableKnownDeviceInfo, TransportError> {
     let known_device = CableKnownDeviceInfo::new(tunnel_domain, linking_info)?;
     let secret_key = SecretKey::from(private_key);
 
@@ -636,7 +659,7 @@ fn parse_known_device(
         PublicKey::from_sec1_bytes(&linking_info.authenticator_public_key)
     else {
         error!("Failed to parse public key.");
-        return Err(Error::Transport(TransportError::InvalidKey));
+        return Err(TransportError::InvalidKey);
     };
 
     let shared_secret: Vec<u8> = ecdh::diffie_hellman(
@@ -646,15 +669,15 @@ fn parse_known_device(
     .raw_secret_bytes()
     .to_vec();
 
-    let mut hmac = Hmac::<Sha256>::new_from_slice(&shared_secret)
-        .map_err(|_| Error::Transport(TransportError::InvalidKey))?;
+    let mut hmac =
+        Hmac::<Sha256>::new_from_slice(&shared_secret).map_err(|_| TransportError::InvalidKey)?;
     hmac.update(&noise_state.handshake_hash);
     let expected_mac = hmac.finalize().into_bytes().to_vec();
 
     if expected_mac != linking_info.handshake_signature {
         error!("Invalid handshake signature, rejecting update message");
         trace!(?expected_mac, ?linking_info.handshake_signature);
-        return Err(Error::Transport(TransportError::InvalidSignature));
+        return Err(TransportError::InvalidSignature);
     }
 
     debug!("Parsed known device with valid signature");
@@ -668,10 +691,7 @@ mod tests {
     #[test]
     fn strip_frame_padding_rejects_empty() {
         let result = strip_frame_padding(Vec::new());
-        assert!(matches!(
-            result,
-            Err(Error::Transport(TransportError::InvalidFraming))
-        ));
+        assert!(matches!(result, Err(TransportError::InvalidFraming)));
     }
 
     #[test]
@@ -679,10 +699,7 @@ mod tests {
         // Length 1 + declared padding of 5 -> would require subtracting 6 from 1.
         let frame = vec![0x05u8];
         let result = strip_frame_padding(frame);
-        assert!(matches!(
-            result,
-            Err(Error::Transport(TransportError::InvalidFraming))
-        ));
+        assert!(matches!(result, Err(TransportError::InvalidFraming)));
     }
 
     #[test]

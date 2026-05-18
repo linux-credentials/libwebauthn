@@ -271,11 +271,17 @@ impl<'d> Device<'d, Cable, CableChannel> for CableQrCodeDevice {
                 cbor_tx_recv,
                 cbor_rx_send,
             );
-            protocol::connection(tunnel_input).await;
-
-            ux_sender
-                .set_connection_state(ConnectionState::Terminated)
-                .await;
+            match protocol::connection(tunnel_input).await {
+                Ok(()) => {
+                    ux_sender
+                        .set_connection_state(ConnectionState::Terminated)
+                        .await;
+                }
+                Err(e) => {
+                    // send_error already transitions to Terminated.
+                    ux_sender.send_error(e).await;
+                }
+            }
         });
 
         Ok(CableChannel {

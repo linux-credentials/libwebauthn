@@ -22,6 +22,9 @@ pub enum TransportError {
     InvalidSignature,
     #[error("input/output error: {0}")]
     IoError(std::io::ErrorKind),
+    /// Noise transport-mode encrypt or decrypt failed; the channel is unusable.
+    #[error("encryption failed")]
+    EncryptionFailed,
 }
 
 impl From<snow::Error> for TransportError {
