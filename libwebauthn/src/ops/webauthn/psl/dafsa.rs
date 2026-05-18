@@ -34,6 +34,8 @@ pub enum DafsaFileLoadError {
     Truncated,
     #[error("not a libpsl DAFSA file (missing or malformed magic)")]
     BadMagic,
+    #[error("malformed DAFSA header (magic present but header is otherwise invalid)")]
+    BadHeader,
     #[error("unsupported DAFSA version: {0}")]
     UnsupportedVersion(u32),
 }
@@ -111,11 +113,11 @@ fn parse_header(bytes: &[u8]) -> Result<Vec<u8>, DafsaFileLoadError> {
         return Err(DafsaFileLoadError::BadMagic);
     }
     if header.last() != Some(&b'\n') {
-        return Err(DafsaFileLoadError::BadMagic);
+        return Err(DafsaFileLoadError::BadHeader);
     }
     let version_field = header
         .get(MAGIC.len()..HEADER_LEN - 1)
-        .ok_or(DafsaFileLoadError::BadMagic)?;
+        .ok_or(DafsaFileLoadError::BadHeader)?;
     let digit_count = version_field
         .iter()
         .take_while(|b| b.is_ascii_digit())
@@ -123,11 +125,11 @@ fn parse_header(bytes: &[u8]) -> Result<Vec<u8>, DafsaFileLoadError> {
     let version_digits = version_field
         .get(..digit_count)
         .filter(|digits| !digits.is_empty())
-        .ok_or(DafsaFileLoadError::BadMagic)?;
+        .ok_or(DafsaFileLoadError::BadHeader)?;
     let version: u32 = std::str::from_utf8(version_digits)
-        .map_err(|_| DafsaFileLoadError::BadMagic)?
+        .map_err(|_| DafsaFileLoadError::BadHeader)?
         .parse()
-        .map_err(|_| DafsaFileLoadError::BadMagic)?;
+        .map_err(|_| DafsaFileLoadError::BadHeader)?;
     if version != 0 {
         return Err(DafsaFileLoadError::UnsupportedVersion(version));
     }
@@ -407,7 +409,7 @@ mod tests {
         bad[HEADER_LEN - 1] = b' ';
         assert!(matches!(
             parse_header(&bad),
-            Err(DafsaFileLoadError::BadMagic)
+            Err(DafsaFileLoadError::BadHeader)
         ));
     }
 }
