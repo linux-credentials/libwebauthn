@@ -117,6 +117,10 @@ name = "webauthn_hid"
 path = "examples/ceremony/webauthn_hid.rs"
 
 [[example]]
+name = "webauthn_ble"
+path = "examples/ceremony/webauthn_ble.rs"
+
+[[example]]
 name = "webauthn_nfc"
 path = "examples/ceremony/webauthn_nfc.rs"
 required-features = ["nfc"]
