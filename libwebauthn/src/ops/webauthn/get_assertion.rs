@@ -185,7 +185,7 @@ impl FromIdlModel<PublicKeyCredentialRequestOptionsJSON, GetAssertionRequestPars
                 if let Err(err) =
                     validate_related_origins(&request_origin.origin, &parsed, psl, http).await
                 {
-                    debug!(rp_id = %parsed.0, kind = err.kind(), "Related-origins validation failed");
+                    debug!(rp_id = %parsed.0, %err, "Related-origins validation failed");
                     return Err(GetAssertionRequestParsingError::MismatchingRelyingPartyId(
                         parsed.0,
                         effective_rp_id.to_string(),
@@ -662,7 +662,7 @@ mod tests {
 
     use crate::ops::webauthn::psl::MockPublicSuffixList;
     use crate::ops::webauthn::related_origins::{
-        RelatedOriginsError, RelatedOriginsHttpClient, WellKnownResponse,
+        RelatedOriginsHttpClient, WellKnownFetchError, WellKnownResponse,
     };
     use crate::ops::webauthn::{GetAssertionRequest, NoRelatedOriginsClient, RequestOrigin};
     use crate::proto::ctap2::Ctap2PublicKeyCredentialType;
@@ -672,7 +672,7 @@ mod tests {
     /// Test-only HTTP client backed by a fixed response. `panicking` proves the
     /// suffix-check short-circuit by failing the test if the fetch is invoked.
     struct MockHttpClient {
-        response: Option<Result<WellKnownResponse, RelatedOriginsError>>,
+        response: Option<Result<WellKnownResponse, WellKnownFetchError>>,
     }
 
     impl MockHttpClient {
@@ -685,7 +685,7 @@ mod tests {
             }
         }
 
-        fn err(e: RelatedOriginsError) -> Self {
+        fn err(e: WellKnownFetchError) -> Self {
             Self {
                 response: Some(Err(e)),
             }
@@ -701,7 +701,7 @@ mod tests {
         async fn fetch_well_known(
             &self,
             _: &RelyingPartyId,
-        ) -> Result<WellKnownResponse, RelatedOriginsError> {
+        ) -> Result<WellKnownResponse, WellKnownFetchError> {
             match &self.response {
                 Some(r) => r.clone(),
                 None => panic!("fetch_well_known should not be called"),
@@ -910,7 +910,7 @@ mod tests {
     async fn related_origins_fetch_error_keeps_mismatch_error() {
         let request_origin: RequestOrigin = "https://app.example.org".parse().unwrap();
         let req_json = json_field_add(REQUEST_BASE_JSON, "rpId", r#""example.com""#);
-        let http = MockHttpClient::err(RelatedOriginsError::FetchFailed("simulated".into()));
+        let http = MockHttpClient::err(WellKnownFetchError::Transport("simulated".into()));
 
         let result = GetAssertionRequest::from_json(
             &request_origin,

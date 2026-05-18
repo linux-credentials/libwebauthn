@@ -32,22 +32,41 @@ pub struct WellKnownResponse {
 /// Fetcher for `https://{rp_id}/.well-known/webauthn`, per WebAuthn L3 §5.11.1
 /// step 2. Implementations MUST send no credentials, no Referer, refuse
 /// non-`https://` redirects, cap the body size, and bound the request duration.
-/// Implementations MUST return `Err(FetchFailed)` for any status code other
-/// than 200 (after following redirects). Implementations MUST report the wire
-/// `Content-Type` header value unmodified (or `None` if absent) and MUST NOT
-/// synthesise an `application/json` content type for non-JSON responses.
+/// Implementations MUST return `Err(WellKnownFetchError::Status)` for any
+/// status code other than 200 (after following redirects). Implementations MUST
+/// report the wire `Content-Type` header value unmodified (or `None` if absent)
+/// and MUST NOT synthesise an `application/json` content type for non-JSON
+/// responses.
 #[async_trait]
 pub trait RelatedOriginsHttpClient: Send + Sync {
     async fn fetch_well_known(
         &self,
         rp_id: &RelyingPartyId,
-    ) -> Result<WellKnownResponse, RelatedOriginsError>;
+    ) -> Result<WellKnownResponse, WellKnownFetchError>;
+}
+
+/// Failure modes for [`RelatedOriginsHttpClient::fetch_well_known`].
+#[derive(thiserror::Error, Debug, Clone)]
+pub enum WellKnownFetchError {
+    /// Transport-level failure: TLS, DNS, timeout, rejected redirect, body
+    /// stream interrupt, client build error, etc.
+    #[error("transport error: {0}")]
+    Transport(String),
+    /// Endpoint replied with a non-200 status (after following redirects).
+    #[error("HTTP status {0}")]
+    Status(u16),
+    /// Body exceeded the implementation's configured size cap before completion.
+    #[error("body exceeded configured size cap")]
+    BodyTooLarge,
+    /// Implementation does not perform fetches (see [`NoRelatedOriginsClient`]).
+    #[error("client does not support related-origin fetches")]
+    NotSupported,
 }
 
 #[derive(thiserror::Error, Debug, Clone)]
 pub enum RelatedOriginsError {
     #[error("well-known fetch failed: {0}")]
-    FetchFailed(String),
+    Fetch(#[from] WellKnownFetchError),
     #[error("unexpected content type: {0:?}")]
     UnexpectedContentType(Option<String>),
     /// Step 2.b: body did not decode as JSON.
@@ -58,19 +77,6 @@ pub enum RelatedOriginsError {
     MalformedDocument(String),
     #[error("no listed related origin matches the caller origin")]
     NoMatchingOrigin,
-}
-
-impl RelatedOriginsError {
-    /// Log-safe variant discriminant; `Debug`/`Display` may carry reqwest/serde text with IPs or body snippets.
-    pub fn kind(&self) -> &'static str {
-        match self {
-            RelatedOriginsError::FetchFailed(_) => "fetch_failed",
-            RelatedOriginsError::UnexpectedContentType(_) => "unexpected_content_type",
-            RelatedOriginsError::MalformedJson(_) => "malformed_json",
-            RelatedOriginsError::MalformedDocument(_) => "malformed_document",
-            RelatedOriginsError::NoMatchingOrigin => "no_matching_origin",
-        }
-    }
 }
 
 pub type RelatedOriginsResult = Result<(), RelatedOriginsError>;
@@ -192,10 +198,8 @@ impl RelatedOriginsHttpClient for NoRelatedOriginsClient {
     async fn fetch_well_known(
         &self,
         _: &RelyingPartyId,
-    ) -> Result<WellKnownResponse, RelatedOriginsError> {
-        Err(RelatedOriginsError::FetchFailed(
-            "this client does not support related origin requests".into(),
-        ))
+    ) -> Result<WellKnownResponse, WellKnownFetchError> {
+        Err(WellKnownFetchError::NotSupported)
     }
 }
 
@@ -205,7 +209,7 @@ mod tests {
     use super::*;
 
     struct MockClient {
-        response: Result<WellKnownResponse, RelatedOriginsError>,
+        response: Result<WellKnownResponse, WellKnownFetchError>,
     }
 
     #[async_trait]
@@ -213,7 +217,7 @@ mod tests {
         async fn fetch_well_known(
             &self,
             _: &RelyingPartyId,
-        ) -> Result<WellKnownResponse, RelatedOriginsError> {
+        ) -> Result<WellKnownResponse, WellKnownFetchError> {
             self.response.clone()
         }
     }
@@ -670,9 +674,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fetch_error_propagates_as_fetch_failed() {
+    async fn fetch_error_propagates_as_fetch() {
         let http = MockClient {
-            response: Err(RelatedOriginsError::FetchFailed("simulated".into())),
+            response: Err(WellKnownFetchError::Transport("simulated".into())),
         };
         let res = validate_related_origins(
             &caller("https://example.com"),
@@ -681,7 +685,12 @@ mod tests {
             &http,
         )
         .await;
-        assert!(matches!(res, Err(RelatedOriginsError::FetchFailed(_))));
+        assert!(matches!(
+            res,
+            Err(RelatedOriginsError::Fetch(WellKnownFetchError::Transport(
+                _
+            )))
+        ));
     }
 
     #[tokio::test]

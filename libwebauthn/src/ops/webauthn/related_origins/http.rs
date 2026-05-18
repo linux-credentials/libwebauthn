@@ -8,7 +8,7 @@ use futures::StreamExt;
 use reqwest::redirect::Policy;
 use reqwest::{Client, StatusCode};
 
-use super::{RelatedOriginsError, RelatedOriginsHttpClient, WellKnownResponse};
+use super::{RelatedOriginsHttpClient, WellKnownFetchError, WellKnownResponse};
 use crate::ops::webauthn::idl::rpid::RelyingPartyId;
 
 #[derive(Debug, Clone)]
@@ -35,11 +35,11 @@ pub struct ReqwestRelatedOriginsClient {
 }
 
 impl ReqwestRelatedOriginsClient {
-    pub fn new() -> Result<Self, RelatedOriginsError> {
+    pub fn new() -> Result<Self, WellKnownFetchError> {
         Self::with_policy(HttpPolicy::default())
     }
 
-    pub fn with_policy(policy: HttpPolicy) -> Result<Self, RelatedOriginsError> {
+    pub fn with_policy(policy: HttpPolicy) -> Result<Self, WellKnownFetchError> {
         let max_redirects = policy.max_redirects;
         let redirect_policy = Policy::custom(move |attempt| {
             if attempt.previous().len() >= max_redirects {
@@ -58,7 +58,7 @@ impl ReqwestRelatedOriginsClient {
             .referer(false)
             .timeout(policy.request_timeout)
             .build()
-            .map_err(|e| RelatedOriginsError::FetchFailed(e.to_string()))?;
+            .map_err(|e| WellKnownFetchError::Transport(e.to_string()))?;
         Ok(Self {
             client,
             max_body_bytes: policy.max_body_bytes,
@@ -71,19 +71,16 @@ impl RelatedOriginsHttpClient for ReqwestRelatedOriginsClient {
     async fn fetch_well_known(
         &self,
         rp_id: &RelyingPartyId,
-    ) -> Result<WellKnownResponse, RelatedOriginsError> {
+    ) -> Result<WellKnownResponse, WellKnownFetchError> {
         let url = format!("https://{}/.well-known/webauthn", rp_id.0);
         let response = self
             .client
             .get(&url)
             .send()
             .await
-            .map_err(|e| RelatedOriginsError::FetchFailed(e.to_string()))?;
+            .map_err(|e| WellKnownFetchError::Transport(e.to_string()))?;
         if response.status() != StatusCode::OK {
-            return Err(RelatedOriginsError::FetchFailed(format!(
-                "status {}",
-                response.status()
-            )));
+            return Err(WellKnownFetchError::Status(response.status().as_u16()));
         }
         let content_type = response
             .headers()
@@ -94,11 +91,9 @@ impl RelatedOriginsHttpClient for ReqwestRelatedOriginsClient {
         let mut body = Vec::with_capacity(8 * 1024);
         let mut stream = response.bytes_stream();
         while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|e| RelatedOriginsError::FetchFailed(e.to_string()))?;
+            let chunk = chunk.map_err(|e| WellKnownFetchError::Transport(e.to_string()))?;
             if body.len() + chunk.len() > self.max_body_bytes {
-                return Err(RelatedOriginsError::FetchFailed(
-                    "body exceeded size cap".into(),
-                ));
+                return Err(WellKnownFetchError::BodyTooLarge);
             }
             body.extend_from_slice(&chunk);
         }

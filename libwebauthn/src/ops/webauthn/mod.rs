@@ -39,7 +39,7 @@ pub use psl::{
 };
 pub use related_origins::{
     validate_related_origins, NoRelatedOriginsClient, RelatedOriginsError,
-    RelatedOriginsHttpClient, WellKnownResponse,
+    RelatedOriginsHttpClient, WellKnownFetchError, WellKnownResponse,
 };
 #[cfg(feature = "related-origins-client")]
 pub use related_origins::{HttpPolicy, ReqwestRelatedOriginsClient};
