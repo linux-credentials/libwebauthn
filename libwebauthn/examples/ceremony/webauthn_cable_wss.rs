@@ -150,7 +150,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
 async fn run_get_assertion(
     channel: &mut CableChannel,
     request_origin: &RequestOrigin,
-    psl: &DatFilePublicSuffixList,
+    psl: &SystemPublicSuffixList,
 ) -> Result<(), Box<dyn Error>> {
     let state_recv = channel.get_ux_update_receiver();
     tokio::spawn(common::handle_cable_updates(state_recv));
