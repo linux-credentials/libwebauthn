@@ -2,7 +2,7 @@
 use async_trait::async_trait;
 use futures::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
-use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::{Error, Message};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use tracing::error;
 
@@ -41,7 +41,10 @@ impl CableDataChannel for WebSocketDataChannel {
             .await
             .map_err(|e| {
                 error!(?e, "Failed to send WebSocket message");
-                TransportError::ConnectionFailed
+                match e {
+                    Error::Io(io) => TransportError::IoError(io.kind()),
+                    _ => TransportError::ConnectionFailed,
+                }
             })
     }
 
@@ -50,10 +53,16 @@ impl CableDataChannel for WebSocketDataChannel {
             match self.stream.next().await {
                 Some(Ok(Message::Binary(data))) => return Ok(Some(data.into())),
                 Some(Ok(Message::Ping(_) | Message::Pong(_))) => continue,
-                Some(Ok(Message::Close(_))) | None => return Ok(None),
+                Some(Ok(Message::Close(_))) | None | Some(Err(Error::ConnectionClosed)) => {
+                    return Ok(None)
+                }
                 Some(Ok(other)) => {
                     error!(?other, "Unexpected WebSocket message type");
                     return Err(TransportError::ConnectionFailed);
+                }
+                Some(Err(Error::Io(e))) => {
+                    error!(?e, "Failed to read WebSocket message");
+                    return Err(TransportError::IoError(e.kind()));
                 }
                 Some(Err(e)) => {
                     error!(?e, "Failed to read WebSocket message");
