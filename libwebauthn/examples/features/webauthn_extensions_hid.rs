@@ -43,6 +43,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         hmac_create_secret: Some(true),
         prf: None,
         cred_props: Some(true),
+        appid_exclude: None,
     };
 
     for mut device in devices {

@@ -54,6 +54,10 @@ pub struct GetAssertionRequestExtensionsJSON {
     pub large_blob: Option<LargeBlobInputJson>,
     pub hmac_get_secret: Option<HmacGetSecretInputJson>,
     pub prf: Option<PrfInputJson>,
+    /// FIDO AppID extension (WebAuthn L3 §10.1.1). When the relying party has
+    /// existing U2F credentials registered under a legacy AppID, this URL is
+    /// hashed in place of the rpId to derive the U2F application parameter.
+    pub appid: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
