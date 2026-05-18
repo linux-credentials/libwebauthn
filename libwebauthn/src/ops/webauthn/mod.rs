@@ -41,6 +41,8 @@ pub use related_origins::{
     validate_related_origins, NoRelatedOriginsClient, RelatedOriginsError,
     RelatedOriginsHttpClient, WellKnownResponse,
 };
+#[cfg(feature = "related-origins-client")]
+pub use related_origins::{HttpPolicy, ReqwestRelatedOriginsClient};
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq)]

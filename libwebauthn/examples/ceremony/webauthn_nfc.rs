@@ -1,8 +1,9 @@
 use std::error::Error;
 
 use libwebauthn::ops::webauthn::{
-    GetAssertionRequest, JsonFormat, MakeCredentialRequest, NoRelatedOriginsClient, RequestOrigin,
-    SystemPublicSuffixList, WebAuthnIDL as _, WebAuthnIDLResponse as _,
+    GetAssertionRequest, JsonFormat, MakeCredentialRequest, RequestOrigin,
+    ReqwestRelatedOriginsClient, SystemPublicSuffixList, WebAuthnIDL as _,
+    WebAuthnIDLResponse as _,
 };
 use libwebauthn::transport::nfc::{get_nfc_device, is_nfc_available};
 use libwebauthn::transport::{Channel as _, Device};
@@ -30,10 +31,11 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
     let psl = SystemPublicSuffixList::auto().expect(
         "PSL not available; install the publicsuffix-list (or publicsuffix-list-dafsa) package, or pass an explicit path",
     );
+    let related_origins = ReqwestRelatedOriginsClient::new()?;
     let make_credentials_request = MakeCredentialRequest::from_json(
         &request_origin,
         &psl,
-        &NoRelatedOriginsClient,
+        &related_origins,
         r#"
         {
             "rp": {
@@ -79,7 +81,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
     let get_assertion = GetAssertionRequest::from_json(
         &request_origin,
         &psl,
-        &NoRelatedOriginsClient,
+        &related_origins,
         r#"
         {
             "challenge": "Y3JlZGVudGlhbHMtZm9yLWxpbnV4L2xpYndlYmF1dGhu",

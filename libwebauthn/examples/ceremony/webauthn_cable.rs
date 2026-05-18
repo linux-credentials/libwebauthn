@@ -11,8 +11,8 @@ use qrcode::render::unicode;
 use qrcode::QrCode;
 
 use libwebauthn::ops::webauthn::{
-    DatFilePublicSuffixList, JsonFormat, MakeCredentialRequest, NoRelatedOriginsClient,
-    RequestOrigin, WebAuthnIDL as _, WebAuthnIDLResponse as _,
+    DatFilePublicSuffixList, JsonFormat, MakeCredentialRequest, RequestOrigin,
+    ReqwestRelatedOriginsClient, WebAuthnIDL as _, WebAuthnIDLResponse as _,
 };
 use libwebauthn::transport::{Channel as _, Device};
 use libwebauthn::webauthn::WebAuthn;
@@ -58,6 +58,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
     let psl = DatFilePublicSuffixList::from_system_file().expect(
         "PSL not available; install the publicsuffix-list package or pass an explicit path",
     );
+    let related_origins = ReqwestRelatedOriginsClient::new()?;
 
     let mut device: CableQrCodeDevice = CableQrCodeDevice::new_transient(
         QrCodeOperationHint::MakeCredential,
@@ -82,7 +83,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
     let request = MakeCredentialRequest::from_json(
         &request_origin,
         &psl,
-        &NoRelatedOriginsClient,
+        &related_origins,
         MAKE_CREDENTIAL_REQUEST,
     )
     .await

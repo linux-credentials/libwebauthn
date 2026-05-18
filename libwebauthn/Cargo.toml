@@ -141,23 +141,27 @@ required-features = ["nfc"]
 [[example]]
 name = "webauthn_hid"
 path = "examples/ceremony/webauthn_hid.rs"
+required-features = ["related-origins-client"]
 
 [[example]]
 name = "webauthn_ble"
 path = "examples/ceremony/webauthn_ble.rs"
+required-features = ["related-origins-client"]
 
 [[example]]
 name = "webauthn_nfc"
 path = "examples/ceremony/webauthn_nfc.rs"
-required-features = ["nfc"]
+required-features = ["nfc", "related-origins-client"]
 
 [[example]]
 name = "webauthn_cable"
 path = "examples/ceremony/webauthn_cable.rs"
+required-features = ["related-origins-client"]
 
 [[example]]
 name = "webauthn_cable_wss"
 path = "examples/ceremony/webauthn_cable_wss.rs"
+required-features = ["related-origins-client"]
 
 [[example]]
 name = "webauthn_extensions_hid"
