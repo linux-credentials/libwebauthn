@@ -2,7 +2,7 @@
 name = "libwebauthn"
 description = "FIDO2 (WebAuthn) and FIDO U2F platform library for Linux written in Rust "
 version = "0.5.0"
-authors = ["Alfie Fresta <alfie.fresta@gmail.com>"]
+authors = ["Alfie Fresta <afresta@noentropy.org>"]
 edition = "2021"
 license = "LGPL-2.1-or-later"
 license-file = "../COPYING"
