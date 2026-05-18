@@ -6,8 +6,8 @@
 use async_trait::async_trait;
 
 use libwebauthn::ops::webauthn::{
-    GetAssertionRequest, MakeCredentialRequest, PublicSuffixList, RelatedOriginsError,
-    RelatedOriginsHttpClient, RelyingPartyId, RequestOrigin, WebAuthnIDL, WellKnownResponse,
+    GetAssertionRequest, MakeCredentialRequest, PublicSuffixList, RelatedOriginsHttpClient,
+    RelyingPartyId, RequestOrigin, WebAuthnIDL, WellKnownFetchError, WellKnownResponse,
 };
 
 const KNOWN_SUFFIXES: &[&str] = &["com", "org"];
@@ -39,7 +39,7 @@ impl RelatedOriginsHttpClient for StaticHttp {
     async fn fetch_well_known(
         &self,
         _: &RelyingPartyId,
-    ) -> Result<WellKnownResponse, RelatedOriginsError> {
+    ) -> Result<WellKnownResponse, WellKnownFetchError> {
         Ok(WellKnownResponse {
             content_type: Some("application/json".into()),
             body: self.body.as_bytes().to_vec(),
