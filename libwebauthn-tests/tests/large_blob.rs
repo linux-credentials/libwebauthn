@@ -30,6 +30,13 @@ async fn handle_updates(mut state_recv: Receiver<UvUpdate>) {
     assert_eq!(state_recv.recv().await, Ok(UvUpdate::PresenceRequired));
 }
 
+/// Drain `n` `PresenceRequired` updates. One per high-level WebAuthn ceremony.
+async fn handle_updates_n(mut state_recv: Receiver<UvUpdate>, n: usize) {
+    for _ in 0..n {
+        assert_eq!(state_recv.recv().await, Ok(UvUpdate::PresenceRequired));
+    }
+}
+
 #[test(tokio::test)]
 async fn test_webauthn_large_blob_read_returns_planted_blob() {
     let mut device = get_virtual_device();
@@ -167,7 +174,7 @@ async fn plant_large_blob_array(
         .expect("authenticatorLargeBlobs(set) succeeds without PIN");
 }
 
-/// Encode one largeBlobMap entry per CTAP 2.1 §6.10.3.
+/// Encode one largeBlobMap entry per CTAP 2.2 §6.10.3.
 fn encode_entry(key: &[u8; 32], nonce: &[u8; 12], plaintext: &[u8]) -> Vec<u8> {
     use aes_gcm::aead::Aead;
     use aes_gcm::{Aes256Gcm, Key, KeyInit, Nonce};
@@ -208,7 +215,7 @@ fn encode_entry(key: &[u8; 32], nonce: &[u8; 12], plaintext: &[u8]) -> Vec<u8> {
     buf
 }
 
-/// Wrap entries in a CBOR array + 16-byte left-SHA-256 trailer (CTAP 2.1 §6.10.3).
+/// Wrap entries in a CBOR array + 16-byte left-SHA-256 trailer (CTAP 2.2 §6.10.2).
 fn encode_serialized_array(entries: &[Vec<u8>]) -> Vec<u8> {
     use sha2::{Digest, Sha256};
     assert!(
@@ -222,4 +229,263 @@ fn encode_serialized_array(entries: &[Vec<u8>]) -> Vec<u8> {
     let h = Sha256::digest(&out);
     out.extend_from_slice(&h[..16]);
     out
+}
+
+async fn register_with_large_blob(
+    channel: &mut libwebauthn::transport::hid::channel::HidChannel<'_>,
+    user_handle: &str,
+    challenge: &[u8; 32],
+) -> Ctap2PublicKeyCredentialDescriptor {
+    let user_id: [u8; 32] = thread_rng().gen();
+    let make = MakeCredentialRequest {
+        origin: RP.into(),
+        challenge: challenge.to_vec(),
+        relying_party: Ctap2PublicKeyCredentialRpEntity::new(RP, RP),
+        user: Ctap2PublicKeyCredentialUserEntity::new(&user_id, user_handle, user_handle),
+        resident_key: Some(ResidentKeyRequirement::Required),
+        user_verification: UserVerificationRequirement::Discouraged,
+        algorithms: vec![Ctap2CredentialType::default()],
+        exclude: None,
+        extensions: Some(MakeCredentialsRequestExtensions {
+            large_blob: Some(MakeCredentialLargeBlobExtensionInput {
+                support: MakeCredentialLargeBlobExtension::Required,
+            }),
+            ..Default::default()
+        }),
+        timeout: TIMEOUT,
+        top_origin: None,
+    };
+    let response = channel
+        .webauthn_make_credential(&make)
+        .await
+        .expect("MakeCredential should succeed");
+    assert_eq!(
+        response
+            .unsigned_extensions_output
+            .large_blob
+            .as_ref()
+            .and_then(|lb| lb.supported),
+        Some(true),
+        "device must report largeBlob.supported=true"
+    );
+    (&response.authenticator_data)
+        .try_into()
+        .expect("credential descriptor")
+}
+
+fn ga_request(
+    credential: &Ctap2PublicKeyCredentialDescriptor,
+    challenge: &[u8; 32],
+    ext: GetAssertionLargeBlobExtension,
+) -> GetAssertionRequest {
+    GetAssertionRequest {
+        relying_party_id: RP.into(),
+        origin: RP.into(),
+        challenge: challenge.to_vec(),
+        allow: vec![credential.clone()],
+        user_verification: UserVerificationRequirement::Discouraged,
+        extensions: Some(GetAssertionRequestExtensions {
+            appid: None,
+            cred_blob: false,
+            prf: None,
+            large_blob: Some(ext),
+        }),
+        timeout: TIMEOUT,
+        top_origin: None,
+    }
+}
+
+/// End-to-end round trip via the production write+read paths. Drives WebAuthn
+/// `largeBlob.write` → `largeBlob.read` against the virt authenticator and
+/// asserts that the read returns exactly the bytes written.
+#[test(tokio::test)]
+async fn test_webauthn_large_blob_write_then_read_returns_blob() {
+    let mut device = get_virtual_device();
+    let mut channel = device.channel().await.unwrap();
+    let challenge: [u8; 32] = thread_rng().gen();
+
+    let state_recv = channel.get_ux_update_receiver();
+    // MakeCredential + GetAssertion(write) + GetAssertion(read) = 3 PresenceRequired updates.
+    let update_handle = tokio::spawn(handle_updates_n(state_recv, 3));
+
+    let credential = register_with_large_blob(&mut channel, "alice", &challenge).await;
+    let plaintext = b"webauthn largeBlob via WebAuthn API".to_vec();
+
+    let write_resp = channel
+        .webauthn_get_assertion(&ga_request(
+            &credential,
+            &challenge,
+            GetAssertionLargeBlobExtension::Write(plaintext.clone()),
+        ))
+        .await
+        .expect("Write assertion should succeed");
+    let written = write_resp.assertions[0]
+        .unsigned_extensions_output
+        .as_ref()
+        .and_then(|u| u.large_blob.as_ref())
+        .and_then(|lb| lb.written);
+    assert_eq!(written, Some(true), "largeBlob.written should be true");
+
+    let read_resp = channel
+        .webauthn_get_assertion(&ga_request(
+            &credential,
+            &challenge,
+            GetAssertionLargeBlobExtension::Read,
+        ))
+        .await
+        .expect("Read assertion should succeed");
+    let blob = read_resp.assertions[0]
+        .unsigned_extensions_output
+        .as_ref()
+        .and_then(|u| u.large_blob.as_ref())
+        .and_then(|lb| lb.blob.as_ref())
+        .expect("blob present after write");
+    assert_eq!(blob.as_slice(), plaintext.as_slice());
+
+    update_handle.await.unwrap();
+}
+
+/// `largeBlob.write` followed by a second `largeBlob.write` of different bytes:
+/// per CTAP 2.2 §6.10.6 the second write replaces (not appends to) the first.
+#[test(tokio::test)]
+async fn test_webauthn_large_blob_write_replaces_existing_entry() {
+    let mut device = get_virtual_device();
+    let mut channel = device.channel().await.unwrap();
+    let challenge: [u8; 32] = thread_rng().gen();
+
+    let state_recv = channel.get_ux_update_receiver();
+    let update_handle = tokio::spawn(handle_updates_n(state_recv, 4));
+
+    let credential = register_with_large_blob(&mut channel, "bob", &challenge).await;
+
+    let first = b"first blob payload".to_vec();
+    let second = b"second, longer blob payload that supersedes the first".to_vec();
+
+    channel
+        .webauthn_get_assertion(&ga_request(
+            &credential,
+            &challenge,
+            GetAssertionLargeBlobExtension::Write(first.clone()),
+        ))
+        .await
+        .expect("first write");
+
+    channel
+        .webauthn_get_assertion(&ga_request(
+            &credential,
+            &challenge,
+            GetAssertionLargeBlobExtension::Write(second.clone()),
+        ))
+        .await
+        .expect("second write");
+
+    let read_resp = channel
+        .webauthn_get_assertion(&ga_request(
+            &credential,
+            &challenge,
+            GetAssertionLargeBlobExtension::Read,
+        ))
+        .await
+        .expect("read");
+    let blob = read_resp.assertions[0]
+        .unsigned_extensions_output
+        .as_ref()
+        .and_then(|u| u.large_blob.as_ref())
+        .and_then(|lb| lb.blob.as_ref())
+        .expect("blob present after second write");
+    assert_eq!(blob.as_slice(), second.as_slice(), "second write replaced");
+
+    update_handle.await.unwrap();
+}
+
+/// Delete on a credential with no prior largeBlob returns written=false per the strict
+/// CTAP 2.2 §6.10.6 "Return an error" branch (line 303).
+#[test(tokio::test)]
+async fn test_webauthn_large_blob_delete_without_existing_entry_reports_false() {
+    let mut device = get_virtual_device();
+    let mut channel = device.channel().await.unwrap();
+    let challenge: [u8; 32] = thread_rng().gen();
+
+    let state_recv = channel.get_ux_update_receiver();
+    let update_handle = tokio::spawn(handle_updates_n(state_recv, 2));
+
+    let credential = register_with_large_blob(&mut channel, "dave", &challenge).await;
+
+    let del_resp = channel
+        .webauthn_get_assertion(&ga_request(
+            &credential,
+            &challenge,
+            GetAssertionLargeBlobExtension::Delete,
+        ))
+        .await
+        .expect("Delete assertion should still return the assertion");
+    assert_eq!(
+        del_resp.assertions[0]
+            .unsigned_extensions_output
+            .as_ref()
+            .and_then(|u| u.large_blob.as_ref())
+            .and_then(|lb| lb.written),
+        Some(false),
+        "delete with no existing entry reports written=false"
+    );
+
+    update_handle.await.unwrap();
+}
+
+/// Delete after write erases the entry; subsequent read returns no blob.
+#[test(tokio::test)]
+async fn test_webauthn_large_blob_delete_removes_entry() {
+    let mut device = get_virtual_device();
+    let mut channel = device.channel().await.unwrap();
+    let challenge: [u8; 32] = thread_rng().gen();
+
+    let state_recv = channel.get_ux_update_receiver();
+    let update_handle = tokio::spawn(handle_updates_n(state_recv, 4));
+
+    let credential = register_with_large_blob(&mut channel, "carol", &challenge).await;
+    let payload = b"to be deleted".to_vec();
+
+    channel
+        .webauthn_get_assertion(&ga_request(
+            &credential,
+            &challenge,
+            GetAssertionLargeBlobExtension::Write(payload),
+        ))
+        .await
+        .expect("write");
+
+    let del_resp = channel
+        .webauthn_get_assertion(&ga_request(
+            &credential,
+            &challenge,
+            GetAssertionLargeBlobExtension::Delete,
+        ))
+        .await
+        .expect("delete");
+    assert_eq!(
+        del_resp.assertions[0]
+            .unsigned_extensions_output
+            .as_ref()
+            .and_then(|u| u.large_blob.as_ref())
+            .and_then(|lb| lb.written),
+        Some(true),
+        "delete reports written=true"
+    );
+
+    let read_resp = channel
+        .webauthn_get_assertion(&ga_request(
+            &credential,
+            &challenge,
+            GetAssertionLargeBlobExtension::Read,
+        ))
+        .await
+        .expect("read after delete");
+    let blob_after = read_resp.assertions[0]
+        .unsigned_extensions_output
+        .as_ref()
+        .and_then(|u| u.large_blob.as_ref())
+        .and_then(|lb| lb.blob.as_ref());
+    assert!(blob_after.is_none(), "blob absent after delete");
+
+    update_handle.await.unwrap();
 }
