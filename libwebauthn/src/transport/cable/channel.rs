@@ -55,9 +55,13 @@ impl CableChannel {
             return Ok(());
         }
 
-        // If already terminated, return error immediately
+        // If already terminated, return error immediately. Mirror the
+        // post-`changed()` branch below so that an early-terminated channel
+        // surfaces the same variant as one that terminates while we wait;
+        // the caller can't observe the timing difference and the asymmetry
+        // was accidental.
         if *rx.borrow() == ConnectionState::Terminated {
-            return Err(Error::Transport(TransportError::ConnectionLost));
+            return Err(Error::Transport(TransportError::ConnectionFailed));
         }
 
         // Wait for state change
