@@ -333,6 +333,12 @@ pub trait Ctap2UserVerifiableRequest {
     fn persistent_token_rejected(&self) -> bool {
         false
     }
+    /// True if the request requires a full pinUvAuthToken (not just a shared secret). Drives
+    /// `user_verification` to skip the `OnlyForSharedSecret` downgrade on UV=Discouraged.
+    /// Default false: HMAC/PRF-style requests are satisfied by shared-secret-only.
+    fn needs_pin_uv_auth_token(&self, _info: &Ctap2GetInfoResponse) -> bool {
+        false
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

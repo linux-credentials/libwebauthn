@@ -213,10 +213,14 @@ where
                 return Ok(UsedPinUvAuthToken::LegacyUV);
             }
         } else if rp_uv_discouraged && needs_shared_secret {
-            // We are not using LegacyUV, but have full support, however RP
-            // discouraged UV, but the request requires a shared secret.
-            // Then we are downgrading the 'supported' uv_operation to OnlyForSharedSecret
-            uv_operation = Ctap2UserVerificationOperation::OnlyForSharedSecret;
+            // RP picked UV=Discouraged but the request needs a shared secret. The
+            // historical downgrade is "OnlyForSharedSecret" (no full token). For
+            // requests that need a full pinUvAuthToken (e.g. largeBlob.write
+            // needs the `lbw` permission per CTAP 2.2 §6.10.2 line 113), keep
+            // the standard token-acquiring flow even when UV is Discouraged.
+            if !ctap2_request.needs_pin_uv_auth_token(get_info_response) {
+                uv_operation = Ctap2UserVerificationOperation::OnlyForSharedSecret;
+            }
         }
 
         let Some(uv_proto) = select_uv_proto(

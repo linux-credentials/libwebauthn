@@ -63,6 +63,7 @@ pub struct GetAssertionRequestExtensionsJSON {
 pub struct LargeBlobInputJson {
     pub support: Option<String>,
     pub read: Option<bool>,
+    pub write: Option<Base64UrlString>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

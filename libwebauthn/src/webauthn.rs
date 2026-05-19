@@ -22,19 +22,21 @@ use tracing::{debug, error, info, instrument, trace, warn};
 use crate::fido::FidoProtocol;
 use crate::ops::u2f::{RegisterRequest, SignRequest, UpgradableResponse};
 use crate::ops::webauthn::{
-    decrypt_first_matching, fetch_large_blob_entries, max_fragment_length, DowngradableRequest,
-    GetAssertionLargeBlobExtension, GetAssertionLargeBlobExtensionOutput, GetAssertionRequest,
-    GetAssertionResponse, GetAssertionResponseUnsignedExtensions, UserVerificationRequirement,
+    decrypt_first_matching, delete_authenticator_large_blob, fetch_large_blob_entries,
+    max_fragment_length, write_authenticator_large_blob, DowngradableRequest,
+    GetAssertionLargeBlobExtension,
+    GetAssertionLargeBlobExtensionOutput, GetAssertionRequest, GetAssertionResponse,
+    GetAssertionResponseUnsignedExtensions, UserVerificationRequirement,
 };
 use crate::ops::webauthn::{MakeCredentialRequest, MakeCredentialResponse};
 use crate::proto::ctap1::Ctap1;
 use crate::proto::ctap2::preflight::{ctap2_preflight, ctap2_preflight_with_appid};
 use crate::proto::ctap2::{
-    Ctap2, Ctap2ClientPinRequest, Ctap2GetAssertionRequest, Ctap2MakeCredentialRequest,
-    Ctap2UserVerificationOperation,
+    Ctap2, Ctap2ClientPinRequest, Ctap2GetAssertionRequest, Ctap2GetAssertionResponse,
+    Ctap2MakeCredentialRequest, Ctap2UserVerificationOperation,
 };
 pub use crate::transport::error::TransportError;
-use crate::transport::Channel;
+use crate::transport::{AuthTokenData, Channel};
 pub use crate::webauthn::error::{CtapError, Error, PlatformError};
 use crate::UvUpdate;
 
@@ -254,6 +256,21 @@ async fn get_assertion_fido2<C: Channel>(
     channel: &mut C,
     op: &GetAssertionRequest,
 ) -> Result<GetAssertionResponse, Error> {
+    // WebAuthn L3 §10.1.5: largeBlob.write/delete requires exactly one allowCredentials entry.
+    let large_blob_ext = op.extensions.as_ref().and_then(|e| e.large_blob.as_ref());
+    if matches!(
+        large_blob_ext,
+        Some(GetAssertionLargeBlobExtension::Write(_))
+            | Some(GetAssertionLargeBlobExtension::Delete)
+    ) && op.allow.len() != 1
+    {
+        warn!(
+            count = op.allow.len(),
+            "largeBlob.write/delete requires exactly one allowCredentials entry"
+        );
+        return Err(Error::Platform(PlatformError::NotSupported));
+    }
+
     let get_info_response = channel.ctap2_get_info().await?;
     let mut ctap2_request =
         Ctap2GetAssertionRequest::from_webauthn_request(op, &get_info_response)?;
@@ -330,57 +347,115 @@ async fn get_assertion_fido2<C: Channel>(
         ctap_responses.push(channel.ctap2_get_next_assertion(op.timeout).await?);
     }
 
-    // largeBlob.read via authenticatorLargeBlobs(get). Failures are non-fatal: per WebAuthn L3
-    // §10.1.5 the `blob` field is absent when the read cannot complete. Resolved here, before the
-    // CTAP response is converted to Assertion, so the per-credential largeBlobKey stays in scope.
-    let large_blob_read_requested = op.extensions.as_ref().and_then(|e| e.large_blob.as_ref())
-        == Some(&GetAssertionLargeBlobExtension::Read);
-    let large_blob_outputs: Vec<Option<Vec<u8>>> = if large_blob_read_requested {
-        let max_fragment = max_fragment_length(get_info_response.max_msg_size);
-        // The largeBlobArray is device-wide: fetch and parse once, decrypt per credential.
-        let entries = if ctap_responses.iter().any(|r| r.large_blob_key.is_some()) {
-            match fetch_large_blob_entries(channel, max_fragment, op.timeout).await {
-                Ok(entries) => Some(entries),
-                Err(e) => {
-                    warn!(?e, "authenticatorLargeBlobs(get) failed; no blob returned");
-                    None
-                }
-            }
-        } else {
-            None
-        };
-        ctap_responses
-            .iter()
-            .map(|resp| {
-                let entries = entries.as_ref()?;
-                let key_buf = resp.large_blob_key.as_ref()?;
-                let Ok(key) = <[u8; 32]>::try_from(key_buf.as_slice()) else {
-                    warn!(
-                        len = key_buf.len(),
-                        "largeBlobKey has unexpected length (expected 32); skipping"
-                    );
-                    return None;
-                };
-                match decrypt_first_matching(entries, &key) {
-                    Ok(blob) => blob,
+    // largeBlob extension (WebAuthn L3 §10.1.5):
+    //   Read   → authenticatorLargeBlobs(get): decrypt and surface the per-credential blob.
+    //   Write  → authenticatorLargeBlobs(get+set): RMW + chunked upload of the updated array.
+    //   Delete → same as Write but with the entry erased (no new entry appended).
+    // Failures are non-fatal: per L3, `blob` is absent on read failure and
+    // `written` is `false` on write/delete failure. Resolved here before the
+    // CTAP responses are converted to Assertion so the largeBlobKey stays
+    // within this scope.
+    let max_fragment = max_fragment_length(get_info_response.max_msg_size);
+    let large_blob_outputs = match large_blob_ext {
+        Some(GetAssertionLargeBlobExtension::Read) => {
+            // The largeBlobArray is device-wide: fetch and parse once, decrypt per credential.
+            let entries = if ctap_responses.iter().any(|r| r.large_blob_key.is_some()) {
+                match fetch_large_blob_entries(channel, max_fragment, op.timeout).await {
+                    Ok(entries) => Some(entries),
                     Err(e) => {
-                        warn!(?e, "largeBlob decrypt failed; no blob returned");
+                        warn!(?e, "authenticatorLargeBlobs(get) failed; no blob returned");
                         None
                     }
                 }
-            })
-            .collect()
-    } else {
-        Vec::new()
+            } else {
+                None
+            };
+            ctap_responses
+                .iter()
+                .map(|resp| {
+                    let blob = match (entries.as_ref(), extract_large_blob_key(resp)) {
+                        (Some(entries), Some(key)) => match decrypt_first_matching(entries, &key) {
+                            Ok(blob) => blob,
+                            Err(e) => {
+                                warn!(?e, "largeBlob decrypt failed; no blob returned");
+                                None
+                            }
+                        },
+                        _ => None,
+                    };
+                    GetAssertionLargeBlobExtensionOutput { blob, written: None }
+                })
+                .collect::<Vec<_>>()
+        }
+        Some(GetAssertionLargeBlobExtension::Write(payload)) => {
+            // L3 §10.1.5: write applies to the single matched credential. We
+            // enforced allow.len()==1 above, and ctap_responses then has
+            // exactly one element.
+            let auth_data = channel.get_auth_data().cloned();
+            let written = match ctap_responses.first() {
+                Some(resp) => {
+                    write_or_delete_for_first(
+                        channel,
+                        resp,
+                        auth_data,
+                        max_fragment,
+                        op.timeout,
+                        WriteOrDelete::Write(payload.as_slice()),
+                    )
+                    .await
+                }
+                None => false,
+            };
+            let mut outs: Vec<_> = vec![
+                GetAssertionLargeBlobExtensionOutput {
+                    blob: None,
+                    written: Some(written),
+                };
+                ctap_responses.len()
+            ];
+            // Only the first (and only) assertion carries the `written` flag.
+            for o in outs.iter_mut().skip(1) {
+                o.written = None;
+            }
+            outs
+        }
+        Some(GetAssertionLargeBlobExtension::Delete) => {
+            let auth_data = channel.get_auth_data().cloned();
+            let written = match ctap_responses.first() {
+                Some(resp) => {
+                    write_or_delete_for_first(
+                        channel,
+                        resp,
+                        auth_data,
+                        max_fragment,
+                        op.timeout,
+                        WriteOrDelete::Delete,
+                    )
+                    .await
+                }
+                None => false,
+            };
+            let mut outs: Vec<_> = vec![
+                GetAssertionLargeBlobExtensionOutput {
+                    blob: None,
+                    written: Some(written),
+                };
+                ctap_responses.len()
+            ];
+            for o in outs.iter_mut().skip(1) {
+                o.written = None;
+            }
+            outs
+        }
+        None => Vec::new(),
     };
 
     let mut assertions: Vec<_> = ctap_responses
         .into_iter()
         .map(|r| r.into_assertion_output(op, channel.get_auth_data()))
         .collect();
-    if large_blob_read_requested {
-        for (assertion, blob) in assertions.iter_mut().zip(large_blob_outputs) {
-            let entry = GetAssertionLargeBlobExtensionOutput { blob };
+    if !large_blob_outputs.is_empty() {
+        for (assertion, entry) in assertions.iter_mut().zip(large_blob_outputs) {
             match assertion.unsigned_extensions_output.as_mut() {
                 Some(unsigned) => unsigned.large_blob = Some(entry),
                 None => {
@@ -395,6 +470,73 @@ async fn get_assertion_fido2<C: Channel>(
     }
 
     Ok(assertions.as_slice().into())
+}
+
+enum WriteOrDelete<'a> {
+    Write(&'a [u8]),
+    Delete,
+}
+
+fn extract_large_blob_key(resp: &Ctap2GetAssertionResponse) -> Option<[u8; 32]> {
+    let buf = resp.large_blob_key.as_ref()?;
+    match <[u8; 32]>::try_from(buf.as_slice()) {
+        Ok(k) => Some(k),
+        Err(_) => {
+            warn!(
+                len = buf.len(),
+                "largeBlobKey has unexpected length (expected 32); skipping"
+            );
+            None
+        }
+    }
+}
+
+/// Drive `write_authenticator_large_blob` / `delete_authenticator_large_blob` for the single
+/// credential of a write/delete assertion. Returns the `written` flag per WebAuthn L3 §10.1.5.
+async fn write_or_delete_for_first<C: Channel>(
+    channel: &mut C,
+    resp: &Ctap2GetAssertionResponse,
+    auth_data: Option<AuthTokenData>,
+    max_fragment: u32,
+    timeout: std::time::Duration,
+    op: WriteOrDelete<'_>,
+) -> bool {
+    let Some(key) = extract_large_blob_key(resp) else {
+        warn!("largeBlobKey absent from assertion; cannot write/delete");
+        return false;
+    };
+    // CTAP 2.2 §6.10.2 lines 100-115: the authenticator enforces pinUvAuthParam
+    // only if it is UV-protected. On an unprotected authenticator (no clientPin,
+    // no built-in UV) user_verification stores no token, so we send the chunks
+    // without auth params and let the authenticator's "skip auth block" path run.
+    let pin_uv_auth: Option<(&[u8], _)> = auth_data.as_ref().and_then(|d| {
+        d.pin_uv_auth_token
+            .as_deref()
+            .map(|t| (t, d.protocol_version))
+    });
+    let result = match op {
+        WriteOrDelete::Write(payload) => {
+            write_authenticator_large_blob(
+                channel,
+                &key,
+                payload,
+                max_fragment,
+                pin_uv_auth,
+                timeout,
+            )
+            .await
+        }
+        WriteOrDelete::Delete => {
+            delete_authenticator_large_blob(channel, &key, max_fragment, pin_uv_auth, timeout).await
+        }
+    };
+    match result {
+        Ok(()) => true,
+        Err(e) => {
+            warn!(?e, "authenticatorLargeBlobs(set) failed; written=false");
+            false
+        }
+    }
 }
 
 async fn get_assertion_u2f<C: Channel>(

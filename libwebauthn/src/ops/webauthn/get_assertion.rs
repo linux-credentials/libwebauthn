@@ -336,9 +336,12 @@ impl TryFrom<HmacGetSecretInputJson> for HMACGetSecretInput {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GetAssertionLargeBlobExtension {
+    /// Per WebAuthn L3 §10.1.5 (read=true): fetch the credential's blob.
     Read,
-    // Not yet supported
-    // Write(Vec<u8>),
+    /// Per WebAuthn L3 §10.1.5 (write=ArrayBuffer): store this blob against the credential.
+    Write(Vec<u8>),
+    /// CTAP 2.2 §6.10.6 erase branch. Not exposed via WebAuthn L3 JSON IDL.
+    Delete,
 }
 
 impl TryFrom<LargeBlobInputJson> for GetAssertionLargeBlobExtension {
@@ -350,13 +353,19 @@ impl TryFrom<LargeBlobInputJson> for GetAssertionLargeBlobExtension {
                 "largeBlob.support is only valid at registration".to_string(),
             ));
         }
+        // WebAuthn L3 §10.1.5: read and write are mutually exclusive.
+        if value.read == Some(true) && value.write.is_some() {
+            return Err(GetAssertionPrepareError::NotSupported(
+                "largeBlob.read and largeBlob.write are mutually exclusive".to_string(),
+            ));
+        }
+        if let Some(write) = value.write {
+            return Ok(GetAssertionLargeBlobExtension::Write(write.to_vec()));
+        }
         match value.read {
             Some(true) => Ok(GetAssertionLargeBlobExtension::Read),
-            Some(false) => Err(GetAssertionPrepareError::NotSupported(
-                "largeBlob writes not supported".to_string(),
-            )),
-            None => Err(GetAssertionPrepareError::NotSupported(
-                "largeBlob read not requested".to_string(),
+            _ => Err(GetAssertionPrepareError::NotSupported(
+                "largeBlob input must set read=true or write".to_string(),
             )),
         }
     }
@@ -366,9 +375,8 @@ impl TryFrom<LargeBlobInputJson> for GetAssertionLargeBlobExtension {
 pub struct GetAssertionLargeBlobExtensionOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub blob: Option<Vec<u8>>,
-    // Not yet supported
-    // #[serde(skip_serializing_if = "Option::is_none")]
-    // pub written: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub written: Option<bool>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -543,7 +551,7 @@ impl Assertion {
                         .blob
                         .as_ref()
                         .map(|b| Base64UrlString::from(b.as_slice())),
-                    written: None, // Write not yet supported
+                    written: large_blob.written,
                 });
             }
 
