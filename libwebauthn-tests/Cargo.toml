@@ -12,7 +12,7 @@ cosey = "0.3.2"
 ctaphid = { version = "0.3.1", default-features = false }
 ctaphid-dispatch = "0.3"
 delog = { version = "0.1", features = ["std-log"] }
-fido-authenticator = { git = "https://github.com/Nitrokey/fido-authenticator.git", tag = "v0.1.1-nitrokey.27", features = ["dispatch", "log-all"] }
+fido-authenticator = { git = "https://github.com/Nitrokey/fido-authenticator.git", tag = "v0.1.1-nitrokey.27", features = ["chunked", "dispatch", "log-all"] }
 interchange = "0.3.0"
 littlefs2 = "0.6.0"
 num_enum = "0.7.1"
@@ -22,8 +22,12 @@ trussed = { version = "0.1", features = ["virt"] }
 trussed-staging = { version = "0.3.0", features = ["chunked", "hkdf", "virt", "fs-info"] }
 
 [dev-dependencies]
+aes-gcm = "0.10"
 base64-url = "3.0.0"
+flate2 = "1.0"
 serde_bytes = "0.11.5"
+serde_cbor_2 = "0.13"
+sha2 = "0.10"
 tempfile = "3.21"
 test-log = "0.2"
 tokio = { version = "1.45", features = ["full"] }
