@@ -7,7 +7,7 @@ use crate::{
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use serde_bytes::ByteBuf;
 use serde_derive::{Deserialize, Serialize};
-use serde_repr::{Deserialize_repr, Serialize_repr};
+use serde_repr::Serialize_repr;
 
 mod get_info;
 pub use get_info::Ctap2GetInfoResponse;
@@ -172,14 +172,92 @@ pub struct Ctap2PublicKeyCredentialDescriptor {
     pub transports: Option<Vec<Ctap2Transport>>,
 }
 
-#[repr(i32)]
-#[derive(Debug, Clone, Copy, FromPrimitive, PartialEq, Serialize_repr, Deserialize_repr)]
-pub enum Ctap2COSEAlgorithmIdentifier {
-    ES256 = -7,
-    EDDSA = -8,
-    TOPT = -9,
-    #[serde(other)]
-    Unknown = -999,
+/// COSE algorithm identifier from the IANA COSE Algorithms registry.
+///
+/// Stored as a transparent `i32` so registered and unregistered values both
+/// flow through unchanged. Use the associated constants for known values and
+/// [`is_known`](Self::is_known) to test recognition.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Ctap2COSEAlgorithmIdentifier(pub i32);
+
+impl Ctap2COSEAlgorithmIdentifier {
+    pub const ES256: Self = Self(-7);
+    pub const EDDSA: Self = Self(-8);
+    /// ESP256 (RFC 9864), equivalent to ES256 with explicit hash binding.
+    pub const ESP256: Self = Self(-9);
+    pub const ES384: Self = Self(-35);
+    pub const ES512: Self = Self(-36);
+    pub const PS256: Self = Self(-37);
+    pub const PS384: Self = Self(-38);
+    pub const PS512: Self = Self(-39);
+    pub const ES256K: Self = Self(-47);
+    pub const RS256: Self = Self(-257);
+    pub const RS384: Self = Self(-258);
+    pub const RS512: Self = Self(-259);
+    pub const RS1: Self = Self(-65535);
+
+    pub fn is_known(self) -> bool {
+        matches!(
+            self,
+            Self::ES256
+                | Self::EDDSA
+                | Self::ESP256
+                | Self::ES384
+                | Self::ES512
+                | Self::PS256
+                | Self::PS384
+                | Self::PS512
+                | Self::ES256K
+                | Self::RS256
+                | Self::RS384
+                | Self::RS512
+                | Self::RS1
+        )
+    }
+}
+
+impl From<i32> for Ctap2COSEAlgorithmIdentifier {
+    fn from(value: i32) -> Self {
+        Self(value)
+    }
+}
+
+impl From<Ctap2COSEAlgorithmIdentifier> for i32 {
+    fn from(value: Ctap2COSEAlgorithmIdentifier) -> Self {
+        value.0
+    }
+}
+
+impl From<Ctap2COSEAlgorithmIdentifier> for i64 {
+    fn from(value: Ctap2COSEAlgorithmIdentifier) -> Self {
+        i64::from(value.0)
+    }
+}
+
+impl std::fmt::Debug for Ctap2COSEAlgorithmIdentifier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = match *self {
+            Self::ES256 => Some("ES256"),
+            Self::EDDSA => Some("EDDSA"),
+            Self::ESP256 => Some("ESP256"),
+            Self::ES384 => Some("ES384"),
+            Self::ES512 => Some("ES512"),
+            Self::PS256 => Some("PS256"),
+            Self::PS384 => Some("PS384"),
+            Self::PS512 => Some("PS512"),
+            Self::ES256K => Some("ES256K"),
+            Self::RS256 => Some("RS256"),
+            Self::RS384 => Some("RS384"),
+            Self::RS512 => Some("RS512"),
+            Self::RS1 => Some("RS1"),
+            _ => None,
+        };
+        match name {
+            Some(n) => write!(f, "Ctap2COSEAlgorithmIdentifier::{}", n),
+            None => write!(f, "Ctap2COSEAlgorithmIdentifier({})", self.0),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -212,8 +290,7 @@ impl Ctap2CredentialType {
     }
 
     pub fn is_known(&self) -> bool {
-        self.algorithm != Ctap2COSEAlgorithmIdentifier::Unknown
-            && self.public_key_type != Ctap2PublicKeyCredentialType::Unknown
+        self.algorithm.is_known() && self.public_key_type != Ctap2PublicKeyCredentialType::Unknown
     }
 }
 
@@ -331,7 +408,7 @@ mod tests {
     }
 
     #[test]
-    pub fn deserialize_unknown_credential_type_algorithm() {
+    pub fn deserialize_preserves_unrecognised_algorithm() {
         // python $ cbor2.dumps({"alg":-42,"type":"public-key"}).hex()
         let serialized: Vec<u8> =
             hex::decode("a263616c67382964747970656a7075626c69632d6b6579").unwrap();
@@ -339,7 +416,7 @@ mod tests {
         assert_eq!(
             credential_type,
             Ctap2CredentialType {
-                algorithm: Ctap2COSEAlgorithmIdentifier::Unknown,
+                algorithm: Ctap2COSEAlgorithmIdentifier(-42),
                 public_key_type: Ctap2PublicKeyCredentialType::PublicKey,
             }
         );
@@ -352,5 +429,39 @@ mod tests {
         let serialized: Vec<u8> = hex::decode("a263616c6726647479706567756e6b6e6f776e").unwrap();
         let credential_type: Ctap2CredentialType = serde_cbor::from_slice(&serialized).unwrap();
         assert!(!credential_type.is_known());
+    }
+
+    #[test]
+    pub fn unrecognised_algorithm_roundtrips_through_cbor() {
+        // -12345 has no IANA assignment; the wire value must survive
+        // CBOR encode/decode without being rewritten to a sentinel.
+        let credential_type = Ctap2CredentialType {
+            algorithm: Ctap2COSEAlgorithmIdentifier(-12345),
+            public_key_type: Ctap2PublicKeyCredentialType::PublicKey,
+        };
+        let serialized = cbor::to_vec(&credential_type).unwrap();
+        let back: Ctap2CredentialType = serde_cbor::from_slice(&serialized).unwrap();
+        assert_eq!(back.algorithm, Ctap2COSEAlgorithmIdentifier(-12345));
+        assert!(!back.algorithm.is_known());
+    }
+
+    #[test]
+    pub fn rs256_constant_matches_iana_value() {
+        assert_eq!(
+            Ctap2COSEAlgorithmIdentifier::RS256,
+            Ctap2COSEAlgorithmIdentifier(-257)
+        );
+        assert!(Ctap2COSEAlgorithmIdentifier::RS256.is_known());
+    }
+
+    #[test]
+    pub fn esp256_is_recognised() {
+        // -9 is ESP256 per RFC 9864; libwebauthn previously mis-named this
+        // codepoint TOPT.
+        assert_eq!(
+            Ctap2COSEAlgorithmIdentifier::ESP256,
+            Ctap2COSEAlgorithmIdentifier(-9)
+        );
+        assert!(Ctap2COSEAlgorithmIdentifier::ESP256.is_known());
     }
 }

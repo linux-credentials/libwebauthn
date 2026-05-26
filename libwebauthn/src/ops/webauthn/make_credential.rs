@@ -90,7 +90,7 @@ impl WebAuthnIDLResponse for MakeCredentialResponse {
             .attested_credential
             .as_ref()
             .map(|cred| Self::get_public_key_algorithm(&cred.credential_public_key))
-            .unwrap_or(Ctap2COSEAlgorithmIdentifier::ES256 as i64);
+            .unwrap_or_else(|| i64::from(Ctap2COSEAlgorithmIdentifier::ES256));
 
         // Serialize public key to COSE key format
         let public_key = self
@@ -135,9 +135,9 @@ impl MakeCredentialResponse {
     /// Get the COSE algorithm identifier from the public key variant
     fn get_public_key_algorithm(key: &cosey::PublicKey) -> i64 {
         match key {
-            cosey::PublicKey::P256Key(_) => Ctap2COSEAlgorithmIdentifier::ES256 as i64,
+            cosey::PublicKey::P256Key(_) => i64::from(Ctap2COSEAlgorithmIdentifier::ES256),
             cosey::PublicKey::EcdhEsHkdf256Key(_) => -25, // ECDH-ES + HKDF-256
-            cosey::PublicKey::Ed25519Key(_) => Ctap2COSEAlgorithmIdentifier::EDDSA as i64,
+            cosey::PublicKey::Ed25519Key(_) => i64::from(Ctap2COSEAlgorithmIdentifier::EDDSA),
             cosey::PublicKey::TotpKey(_) => 0, // No standard algorithm for TOTP
         }
     }
@@ -918,7 +918,7 @@ mod tests {
         assert_eq!(
             req.algorithms,
             vec![Ctap2CredentialType {
-                algorithm: Ctap2COSEAlgorithmIdentifier::Unknown, // FIXME(#148): Passhtrough unknown algorithms
+                algorithm: Ctap2COSEAlgorithmIdentifier(-12345),
                 public_key_type: Ctap2PublicKeyCredentialType::Unknown,
             }]
         );
@@ -1156,7 +1156,7 @@ mod tests {
         // Verify algorithm is ES256 (-7) for P256 key
         assert_eq!(
             response_obj.get("publicKeyAlgorithm").unwrap(),
-            Ctap2COSEAlgorithmIdentifier::ES256 as i64
+            i64::from(Ctap2COSEAlgorithmIdentifier::ES256)
         );
     }
 
@@ -1173,7 +1173,7 @@ mod tests {
         // Verify attestation response
         assert_eq!(
             model.response.public_key_algorithm,
-            Ctap2COSEAlgorithmIdentifier::ES256 as i64
+            i64::from(Ctap2COSEAlgorithmIdentifier::ES256)
         );
         assert!(model.response.transports.is_empty());
     }
