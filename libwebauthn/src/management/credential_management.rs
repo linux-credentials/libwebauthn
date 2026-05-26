@@ -169,7 +169,7 @@ where
         let cred = Ctap2CredentialData::new(
             unwrap_field!(resp.user),
             unwrap_field!(resp.credential_id),
-            unwrap_field!(resp.public_key),
+            unwrap_field!(resp.public_key).into_bytes(),
             unwrap_field!(resp.cred_protect),
             resp.large_blob_key.map(|x| x.into_vec()),
         );
@@ -202,7 +202,7 @@ where
         let cred = Ctap2CredentialData::new(
             unwrap_field!(resp.user),
             unwrap_field!(resp.credential_id),
-            unwrap_field!(resp.public_key),
+            unwrap_field!(resp.public_key).into_bytes(),
             unwrap_field!(resp.cred_protect),
             resp.large_blob_key.map(|x| x.into_vec()),
         );

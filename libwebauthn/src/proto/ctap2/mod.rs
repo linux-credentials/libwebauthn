@@ -1,9 +1,12 @@
 extern crate async_trait;
 
 pub mod cbor;
+pub mod cose;
 
 mod model;
 mod protocol;
+
+pub use cose::CoseEncodedKey;
 
 pub use model::Ctap2GetInfoResponse;
 #[cfg(test)]

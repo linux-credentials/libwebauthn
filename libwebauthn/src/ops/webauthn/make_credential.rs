@@ -26,8 +26,8 @@ use crate::{
     proto::{
         ctap1::{Ctap1RegisteredKey, Ctap1Version},
         ctap2::{
-            cbor, Ctap2AttestationStatement, Ctap2COSEAlgorithmIdentifier, Ctap2CredentialType,
-            Ctap2GetInfoResponse, Ctap2MakeCredentialsResponseExtensions,
+            cbor, cose, Ctap2AttestationStatement, Ctap2COSEAlgorithmIdentifier,
+            Ctap2CredentialType, Ctap2GetInfoResponse, Ctap2MakeCredentialsResponseExtensions,
             Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialRpEntity,
             Ctap2PublicKeyCredentialUserEntity,
         },
@@ -67,42 +67,33 @@ impl WebAuthnIDLResponse for MakeCredentialResponse {
         &self,
         request: &Self::Context,
     ) -> Result<Self::IdlModel, ResponseSerializationError> {
-        // Get credential ID from attested credential data
-        let credential_id_bytes = self
+        // The AT flag MUST be set on makeCredential responses per CTAP §6.1.
+        let attested = self
             .authenticator_data
             .attested_credential
             .as_ref()
-            .map(|cred| cred.credential_id.clone())
-            .unwrap_or_default();
+            .ok_or_else(|| {
+                ResponseSerializationError::AuthenticatorDataError(
+                    "missing attested credential data".into(),
+                )
+            })?;
 
-        let id = base64_url::encode(&credential_id_bytes);
-        let raw_id = Base64UrlString::from(credential_id_bytes);
+        let id = base64_url::encode(&attested.credential_id);
+        let raw_id = Base64UrlString::from(attested.credential_id.clone());
 
-        // Serialize authenticator data
         let authenticator_data_bytes = self
             .authenticator_data
             .to_response_bytes()
             .map_err(|e| ResponseSerializationError::AuthenticatorDataError(e.to_string()))?;
 
-        // Get public key algorithm from attested credential data
-        let public_key_algorithm = self
-            .authenticator_data
-            .attested_credential
-            .as_ref()
-            .map(|cred| Self::get_public_key_algorithm(&cred.credential_public_key))
-            .unwrap_or_else(|| i64::from(Ctap2COSEAlgorithmIdentifier::ES256));
+        let public_key_algorithm = i64::from(
+            cose::read_alg(&attested.credential_public_key)
+                .map_err(|e| ResponseSerializationError::PublicKeyError(e.to_string()))?,
+        );
 
-        // Serialize public key to COSE key format
-        let public_key = self
-            .authenticator_data
-            .attested_credential
-            .as_ref()
-            .map(|cred| {
-                cbor::to_vec(&cred.credential_public_key)
-                    .map(Base64UrlString::from)
-                    .map_err(|e| ResponseSerializationError::PublicKeyError(e.to_string()))
-            })
-            .transpose()?;
+        let public_key = Some(Base64UrlString::from(
+            attested.credential_public_key.clone(),
+        ));
 
         // Build attestation object (CBOR map with authData, fmt, attStmt)
         let attestation_object_bytes = self.build_attestation_object(&authenticator_data_bytes)?;
@@ -132,16 +123,6 @@ impl WebAuthnIDLResponse for MakeCredentialResponse {
 }
 
 impl MakeCredentialResponse {
-    /// Get the COSE algorithm identifier from the public key variant
-    fn get_public_key_algorithm(key: &cosey::PublicKey) -> i64 {
-        match key {
-            cosey::PublicKey::P256Key(_) => i64::from(Ctap2COSEAlgorithmIdentifier::ES256),
-            cosey::PublicKey::EcdhEsHkdf256Key(_) => -25, // ECDH-ES + HKDF-256
-            cosey::PublicKey::Ed25519Key(_) => i64::from(Ctap2COSEAlgorithmIdentifier::EDDSA),
-            cosey::PublicKey::TotpKey(_) => 0, // No standard algorithm for TOTP
-        }
-    }
-
     fn build_attestation_object(
         &self,
         authenticator_data_bytes: &[u8],
@@ -1083,16 +1064,18 @@ mod tests {
         let credential_id = vec![0x01, 0x02, 0x03, 0x04];
         let aaguid = [0u8; 16];
 
-        // Create a P256 public key for testing
-        let public_key = cosey::PublicKey::P256Key(cosey::P256PublicKey {
+        // Minimal COSE_Key for a P-256 ES256 credential, used as opaque
+        // bytes by the test harness.
+        let cose_public_key = cosey::PublicKey::P256Key(cosey::P256PublicKey {
             x: Bytes::from_slice(&[0u8; 32]).unwrap(),
             y: Bytes::from_slice(&[0u8; 32]).unwrap(),
         });
+        let credential_public_key = cbor::to_vec(&cose_public_key).unwrap();
 
         let attested_credential = AttestedCredentialData {
             aaguid,
             credential_id,
-            credential_public_key: public_key,
+            credential_public_key,
         };
 
         let authenticator_data = AuthenticatorData {
