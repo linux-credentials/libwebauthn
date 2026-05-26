@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use std::{collections::VecDeque, fmt::Display, time::Duration};
 use tokio::sync::broadcast;
+use tokio::time::sleep;
 
 use crate::{
     proto::{
@@ -19,6 +20,7 @@ pub struct MockChannel {
     responses: VecDeque<CborResponse>,
     auth_token_data: Option<AuthTokenData>,
     ux_update_sender: broadcast::Sender<UvUpdate>,
+    pre_send_delay: Option<Duration>,
 }
 
 impl Default for MockChannel {
@@ -35,12 +37,18 @@ impl MockChannel {
             responses: VecDeque::new(),
             auth_token_data: None,
             ux_update_sender,
+            pre_send_delay: None,
         }
     }
 
     pub fn push_command_pair(&mut self, expected_request: CborRequest, response: CborResponse) {
         self.expected_requests.push_front(expected_request);
         self.responses.push_front(response);
+    }
+
+    /// Make `cbor_send` sleep for `delay` before completing, modeling a transport that defers the actual send behind a handshake.
+    pub fn set_pre_send_delay(&mut self, delay: Duration) {
+        self.pre_send_delay = Some(delay);
     }
 }
 
@@ -93,6 +101,9 @@ impl Channel for MockChannel {
     }
 
     async fn cbor_send(&mut self, request: &CborRequest, _timeout: Duration) -> Result<(), Error> {
+        if let Some(delay) = self.pre_send_delay {
+            sleep(delay).await;
+        }
         let expected = self
             .expected_requests
             .pop_back()
