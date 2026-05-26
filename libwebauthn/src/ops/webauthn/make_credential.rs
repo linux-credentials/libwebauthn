@@ -91,9 +91,12 @@ impl WebAuthnIDLResponse for MakeCredentialResponse {
                 .map_err(|e| ResponseSerializationError::PublicKeyError(e.to_string()))?,
         );
 
-        let public_key = Some(Base64UrlString::from(
-            attested.credential_public_key.clone(),
-        ));
+        // SubjectPublicKeyInfo per WebAuthn L3 §5.2.1.1. `to_spki` returns
+        // `Ok(None)` for algorithms libwebauthn does not implement, which
+        // surfaces as `getPublicKey() === null` to the relying party.
+        let public_key = cose::to_spki(&attested.credential_public_key)
+            .map_err(|e| ResponseSerializationError::PublicKeyError(e.to_string()))?
+            .map(Base64UrlString::from);
 
         // Build attestation object (CBOR map with authData, fmt, attStmt)
         let attestation_object_bytes = self.build_attestation_object(&authenticator_data_bytes)?;
@@ -1159,6 +1162,35 @@ mod tests {
             i64::from(Ctap2COSEAlgorithmIdentifier::ES256)
         );
         assert!(model.response.transports.is_empty());
+    }
+
+    #[test]
+    fn test_response_emits_spki_for_es256() {
+        // The test fixture builds an ES256 P-256 credential, so getPublicKey()
+        // must return DER-encoded SubjectPublicKeyInfo per WebAuthn L3 §5.2.1.1.
+        // The SPKI for ES256 starts with the SEQUENCE / SEQUENCE / OID prefix
+        // 30 59 30 13 06 07 2A 86 48 CE 3D 02 01 (id-ecPublicKey), followed
+        // by the secp256r1 OID and the uncompressed point.
+        let response = create_test_response();
+        let request = create_test_request();
+        let model = response.to_idl_model(&request).unwrap();
+
+        let public_key_bytes = model
+            .response
+            .public_key
+            .expect("ES256 must produce SPKI")
+            .0;
+        assert_eq!(public_key_bytes.len(), 91, "ES256 SPKI is 91 bytes");
+        // SEQUENCE tag + length, then nested SEQUENCE for AlgorithmIdentifier.
+        assert_eq!(&public_key_bytes[..2], &[0x30, 0x59]);
+        // id-ecPublicKey OID: 1.2.840.10045.2.1
+        let id_ec_public_key = [0x06, 0x07, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x02, 0x01];
+        assert!(
+            public_key_bytes
+                .windows(id_ec_public_key.len())
+                .any(|w| w == id_ec_public_key),
+            "SPKI must contain id-ecPublicKey OID"
+        );
     }
 
     #[test]
