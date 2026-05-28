@@ -69,6 +69,8 @@ rand = "0.8.5"
 p256 = { version = "0.13.2", features = ["ecdh", "arithmetic", "serde"] }
 heapless = "0.7"
 cosey = "0.3.2"
+spki = { version = "0.7", default-features = false, features = ["alloc"] }
+der = { version = "0.7", default-features = false, features = ["alloc", "derive", "oid"] }
 aes = "0.8.2"
 hmac = "0.12.1"
 cbc = { version = "0.1", features = ["alloc"] }

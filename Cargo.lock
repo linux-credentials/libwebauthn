@@ -839,7 +839,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "79b71cca7d95d7681a4b3b9cdf63c8dbc3730d0584c2c74e31416d64a90493f4"
 dependencies = [
  "crypto-bigint 0.2.5",
- "der_derive",
+ "der_derive 0.4.1",
 ]
 
 [[package]]
@@ -849,6 +849,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e7c1832837b905bbfb5101e07cc24c8deddf52f93225eee6ead5f4d63d53ddcb"
 dependencies = [
  "const-oid",
+ "der_derive 0.7.3",
  "pem-rfc7468",
  "zeroize",
 ]
@@ -877,6 +878,17 @@ dependencies = [
  "quote",
  "syn 1.0.109",
  "synstructure 0.12.6",
+]
+
+[[package]]
+name = "der_derive"
+version = "0.7.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8034092389675178f570469e6c3b0465d3d30b4505c294a6550db47f3c17ad18"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -1813,6 +1825,7 @@ dependencies = [
  "ctap-types",
  "curve25519-dalek",
  "dbus",
+ "der 0.7.10",
  "futures",
  "heapless",
  "hex",
@@ -1842,6 +1855,7 @@ dependencies = [
  "serde_repr",
  "sha2 0.10.9",
  "snow",
+ "spki",
  "test-log",
  "text_io",
  "thiserror 2.0.18",
