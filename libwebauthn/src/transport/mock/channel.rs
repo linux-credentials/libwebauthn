@@ -1,9 +1,11 @@
 use async_trait::async_trait;
+use std::sync::Arc;
 use std::{collections::VecDeque, fmt::Display, time::Duration};
 use tokio::sync::broadcast;
 use tokio::time::sleep;
 
 use crate::{
+    pin::persistent_token::PersistentTokenStore,
     proto::{
         ctap1::apdu::{ApduRequest, ApduResponse},
         ctap2::cbor::{CborRequest, CborResponse},
@@ -19,6 +21,7 @@ pub struct MockChannel {
     expected_requests: VecDeque<CborRequest>,
     responses: VecDeque<CborResponse>,
     auth_token_data: Option<AuthTokenData>,
+    persistent_token_store: Option<Arc<dyn PersistentTokenStore>>,
     ux_update_sender: broadcast::Sender<UvUpdate>,
     pre_send_delay: Option<Duration>,
 }
@@ -36,6 +39,7 @@ impl MockChannel {
             expected_requests: VecDeque::new(),
             responses: VecDeque::new(),
             auth_token_data: None,
+            persistent_token_store: None,
             ux_update_sender,
             pre_send_delay: None,
         }
@@ -44,6 +48,10 @@ impl MockChannel {
     pub fn push_command_pair(&mut self, expected_request: CborRequest, response: CborResponse) {
         self.expected_requests.push_front(expected_request);
         self.responses.push_front(response);
+    }
+
+    pub fn set_persistent_token_store(&mut self, store: Arc<dyn PersistentTokenStore>) {
+        self.persistent_token_store = Some(store);
     }
 
     /// Make `cbor_send` sleep for `delay` before completing, modeling a transport that defers the actual send behind a handshake.
@@ -63,6 +71,10 @@ impl Ctap2AuthTokenStore for MockChannel {
 
     fn clear_uv_auth_token_store(&mut self) {
         self.auth_token_data = None;
+    }
+
+    fn persistent_token_store(&self) -> Option<Arc<dyn PersistentTokenStore>> {
+        self.persistent_token_store.clone()
     }
 }
 

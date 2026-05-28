@@ -6,9 +6,11 @@ use aes::cipher::{block_padding::NoPadding, BlockDecryptMut};
 use async_trait::async_trait;
 use cbc::cipher::KeyIvInit;
 use hkdf::Hkdf;
+use rand::rngs::OsRng;
+use rand::RngCore;
 use sha2::Sha256;
 use tokio::sync::Mutex;
-use tracing::{debug, error, trace};
+use tracing::{debug, error, trace, warn};
 use zeroize::ZeroizeOnDrop;
 
 use crate::proto::ctap2::{Ctap2GetInfoResponse, Ctap2PinUvAuthProtocol};
@@ -124,7 +126,6 @@ impl PersistentTokenStore for MemoryPersistentTokenStore {
 
 /// Derive the 16-byte AES-128 key for `encIdentifier` from a persistent token, per
 /// CTAP 2.3-PS 6.4: `HKDF-SHA-256(salt = 32 zero bytes, IKM = token, L = 16, info = "encIdentifier")`.
-#[allow(dead_code)] // wired into the acquisition/reuse flow in a later change
 fn enc_identifier_key(token: &[u8]) -> Result<[u8; 16], Error> {
     let hkdf = Hkdf::<Sha256>::new(Some(&ENC_IDENTIFIER_HKDF_SALT), token);
     let mut key = [0u8; 16];
@@ -140,7 +141,6 @@ fn enc_identifier_key(token: &[u8]) -> Result<[u8; 16], Error> {
 
 /// Recover the 128-bit device identifier from an `encIdentifier` (`iv || ct`) using a
 /// persistent token. `ct` is exactly one AES block, so decryption uses no padding.
-#[allow(dead_code)] // wired into the acquisition/reuse flow in a later change
 pub(crate) fn decrypt_enc_identifier(
     token: &[u8],
     enc_identifier: &[u8],
@@ -172,7 +172,6 @@ pub(crate) fn decrypt_enc_identifier(
 /// `encIdentifier`. The IV is fresh on every getInfo, so raw bytes never compare equal
 /// across connections; recognition is decrypt-and-compare against each record's stored
 /// device identifier. Returns the first match, or `None` if no stored token fits.
-#[allow(dead_code)] // wired into the acquisition/reuse flow in a later change
 pub(crate) async fn recognize_authenticator(
     store: &dyn PersistentTokenStore,
     info: &Ctap2GetInfoResponse,
@@ -190,17 +189,70 @@ pub(crate) async fn recognize_authenticator(
     None
 }
 
+/// A fresh, opaque record id: 16 random bytes, hex-encoded. Random rather than derived
+/// from the device, so a record survives device-identifier changes only via reaping.
+fn new_record_id() -> PersistentTokenRecordId {
+    let mut bytes = [0u8; 16];
+    OsRng.fill_bytes(&mut bytes);
+    hex::encode(bytes)
+}
+
+/// Capture a freshly minted pcmr token for cross-session reuse: recover this device's
+/// identifier from `encIdentifier`, then store a new record under a fresh id. Returns the
+/// id. Callers treat failures as best-effort (the current operation still proceeds with
+/// the minted token).
+pub(crate) async fn store_minted_token(
+    store: &dyn PersistentTokenStore,
+    info: &Ctap2GetInfoResponse,
+    token: &[u8],
+    pin_uv_auth_protocol: Ctap2PinUvAuthProtocol,
+) -> Result<PersistentTokenRecordId, Error> {
+    let Some(enc_identifier) = info.enc_identifier.as_ref() else {
+        warn!("perCredMgmtRO advertised but no encIdentifier returned; cannot persist token");
+        return Err(Error::Ctap(CtapError::Other));
+    };
+    let device_identifier = decrypt_enc_identifier(token, enc_identifier)?;
+    let aaguid: [u8; 16] = info.aaguid[..].try_into().map_err(|_| {
+        error!(len = info.aaguid.len(), "AAGUID was not 16 bytes");
+        Error::Ctap(CtapError::Other)
+    })?;
+    let id = new_record_id();
+    let record = PersistentTokenRecord {
+        persistent_token: token.to_vec(),
+        pin_uv_auth_protocol,
+        device_identifier,
+        aaguid,
+    };
+    store.put(&id, &record).await;
+    debug!(?id, "Stored freshly minted persistent token");
+    Ok(id)
+}
+
+/// Test-only: build an `encIdentifier` (`iv || ct`) for a device identifier under a
+/// token, using the production key derivation. Shared across test modules.
+#[cfg(test)]
+pub(crate) fn build_enc_identifier(
+    token: &[u8],
+    device_identifier: &[u8; 16],
+    iv: &[u8; 16],
+) -> Vec<u8> {
+    use aes::cipher::BlockEncryptMut;
+    type Aes128CbcEncryptor = cbc::Encryptor<aes::Aes128>;
+    let key = enc_identifier_key(token).expect("encIdentifier key derivation");
+    let encryptor = Aes128CbcEncryptor::new_from_slices(&key, iv).expect("valid key/iv");
+    let ciphertext = encryptor.encrypt_padded_vec_mut::<NoPadding>(device_identifier);
+    let mut enc = iv.to_vec();
+    enc.extend_from_slice(&ciphertext);
+    enc
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
 
-    use aes::cipher::{block_padding::NoPadding as TestNoPadding, BlockEncryptMut};
-    use cbc::cipher::KeyIvInit as TestKeyIvInit;
     use serde_bytes::ByteBuf;
 
     use crate::proto::ctap2::Ctap2GetInfoResponse;
-
-    type Aes128CbcEncryptor = cbc::Encryptor<aes::Aes128>;
 
     fn sample_record() -> PersistentTokenRecord {
         PersistentTokenRecord {
@@ -209,17 +261,6 @@ mod test {
             device_identifier: [0x11; 16],
             aaguid: [0x22; 16],
         }
-    }
-
-    /// The authenticator side: produce `iv || ct` for a device identifier under a token,
-    /// using the same key derivation the recognition path uses.
-    fn build_enc_identifier(token: &[u8], device_identifier: &[u8; 16], iv: &[u8; 16]) -> Vec<u8> {
-        let key = enc_identifier_key(token).unwrap();
-        let encryptor = Aes128CbcEncryptor::new_from_slices(&key, iv).unwrap();
-        let ciphertext = encryptor.encrypt_padded_vec_mut::<TestNoPadding>(device_identifier);
-        let mut enc = iv.to_vec();
-        enc.extend_from_slice(&ciphertext);
-        enc
     }
 
     fn record_with(token: Vec<u8>, device_identifier: [u8; 16]) -> PersistentTokenRecord {
