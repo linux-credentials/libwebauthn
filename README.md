@@ -34,6 +34,7 @@ _Looking for the D-Bus API proposal?_ Check out [credentialsd][credentialsd].
   - 🟢 GetPinToken
   - 🟢 GetPinUvAuthTokenUsingPinWithPermissions
   - 🟢 GetPinUvAuthTokenUsingUvWithPermissions
+  - 🟢 Persistent pinUvAuthToken for read-only credential management (pcmr, CTAP 2.2+)
 - [Passkey Authentication][passkeys]
   - 🟢 Discoverable credentials (resident keys)
   - 🟢 Hybrid transport (caBLE v2): QR-initiated transactions
@@ -99,6 +100,7 @@ $ cargo run --example change_pin_hid
 $ cargo run --example bio_enrollment_hid
 $ cargo run --example authenticator_config_hid
 $ cargo run --example cred_management_hid
+$ cargo run --example persistent_cred_management_hid
 ```
 
 ## Contributing
