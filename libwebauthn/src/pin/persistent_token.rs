@@ -2,12 +2,25 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
+use aes::cipher::{block_padding::NoPadding, BlockDecryptMut};
 use async_trait::async_trait;
+use cbc::cipher::KeyIvInit;
+use hkdf::Hkdf;
+use sha2::Sha256;
 use tokio::sync::Mutex;
-use tracing::{debug, trace};
+use tracing::{debug, error, trace};
 use zeroize::ZeroizeOnDrop;
 
-use crate::proto::ctap2::Ctap2PinUvAuthProtocol;
+use crate::proto::ctap2::{Ctap2GetInfoResponse, Ctap2PinUvAuthProtocol};
+use crate::proto::CtapError;
+use crate::webauthn::error::{Error, PlatformError};
+
+type Aes128CbcDecryptor = cbc::Decryptor<aes::Aes128>;
+
+/// HKDF salt for `encIdentifier`/`encCredStoreState`: 32 zero bytes (CTAP 2.3-PS 6.4).
+const ENC_IDENTIFIER_HKDF_SALT: [u8; 32] = [0u8; 32];
+/// HKDF info string binding the derived key to the `encIdentifier` use.
+const ENC_IDENTIFIER_HKDF_INFO: &[u8] = b"encIdentifier";
 
 /// Opaque identifier for a stored persistent-token record. Random per record.
 pub type PersistentTokenRecordId = String;
@@ -109,9 +122,85 @@ impl PersistentTokenStore for MemoryPersistentTokenStore {
     }
 }
 
+/// Derive the 16-byte AES-128 key for `encIdentifier` from a persistent token, per
+/// CTAP 2.3-PS 6.4: `HKDF-SHA-256(salt = 32 zero bytes, IKM = token, L = 16, info = "encIdentifier")`.
+#[allow(dead_code)] // wired into the acquisition/reuse flow in a later change
+fn enc_identifier_key(token: &[u8]) -> Result<[u8; 16], Error> {
+    let hkdf = Hkdf::<Sha256>::new(Some(&ENC_IDENTIFIER_HKDF_SALT), token);
+    let mut key = [0u8; 16];
+    hkdf.expand(ENC_IDENTIFIER_HKDF_INFO, &mut key)
+        .map_err(|e| {
+            error!("HKDF expand error deriving encIdentifier key: {e}");
+            Error::Platform(PlatformError::CryptoError(format!(
+                "HKDF expand error: {e}"
+            )))
+        })?;
+    Ok(key)
+}
+
+/// Recover the 128-bit device identifier from an `encIdentifier` (`iv || ct`) using a
+/// persistent token. `ct` is exactly one AES block, so decryption uses no padding.
+#[allow(dead_code)] // wired into the acquisition/reuse flow in a later change
+pub(crate) fn decrypt_enc_identifier(
+    token: &[u8],
+    enc_identifier: &[u8],
+) -> Result<[u8; 16], Error> {
+    if enc_identifier.len() != 32 {
+        error!(
+            len = enc_identifier.len(),
+            "encIdentifier is not a 16-byte IV followed by one 16-byte ciphertext block"
+        );
+        return Err(Error::Ctap(CtapError::Other));
+    }
+    let (iv, ciphertext) = enc_identifier.split_at(16);
+    let key = enc_identifier_key(token)?;
+    let Ok(decryptor) = Aes128CbcDecryptor::new_from_slices(&key, iv) else {
+        error!("Invalid key or IV for AES-128-CBC encIdentifier decryption");
+        return Err(Error::Ctap(CtapError::Other));
+    };
+    let Ok(plaintext) = decryptor.decrypt_padded_vec_mut::<NoPadding>(ciphertext) else {
+        error!("Decrypt error while recovering device identifier");
+        return Err(Error::Ctap(CtapError::Other));
+    };
+    plaintext.try_into().map_err(|_| {
+        error!("Recovered device identifier was not 16 bytes");
+        Error::Ctap(CtapError::Other)
+    })
+}
+
+/// Find the stored record whose persistent token reproduces this authenticator's
+/// `encIdentifier`. The IV is fresh on every getInfo, so raw bytes never compare equal
+/// across connections; recognition is decrypt-and-compare against each record's stored
+/// device identifier. Returns the first match, or `None` if no stored token fits.
+#[allow(dead_code)] // wired into the acquisition/reuse flow in a later change
+pub(crate) async fn recognize_authenticator(
+    store: &dyn PersistentTokenStore,
+    info: &Ctap2GetInfoResponse,
+) -> Option<(PersistentTokenRecordId, PersistentTokenRecord)> {
+    let enc_identifier = info.enc_identifier.as_ref()?;
+    for (id, record) in store.list().await {
+        match decrypt_enc_identifier(&record.persistent_token, enc_identifier) {
+            Ok(device_identifier) if device_identifier == record.device_identifier => {
+                debug!(?id, "Recognized authenticator from persistent token store");
+                return Some((id, record));
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
+
+    use aes::cipher::{block_padding::NoPadding as TestNoPadding, BlockEncryptMut};
+    use cbc::cipher::KeyIvInit as TestKeyIvInit;
+    use serde_bytes::ByteBuf;
+
+    use crate::proto::ctap2::Ctap2GetInfoResponse;
+
+    type Aes128CbcEncryptor = cbc::Encryptor<aes::Aes128>;
 
     fn sample_record() -> PersistentTokenRecord {
         PersistentTokenRecord {
@@ -119,6 +208,33 @@ mod test {
             pin_uv_auth_protocol: Ctap2PinUvAuthProtocol::Two,
             device_identifier: [0x11; 16],
             aaguid: [0x22; 16],
+        }
+    }
+
+    /// The authenticator side: produce `iv || ct` for a device identifier under a token,
+    /// using the same key derivation the recognition path uses.
+    fn build_enc_identifier(token: &[u8], device_identifier: &[u8; 16], iv: &[u8; 16]) -> Vec<u8> {
+        let key = enc_identifier_key(token).unwrap();
+        let encryptor = Aes128CbcEncryptor::new_from_slices(&key, iv).unwrap();
+        let ciphertext = encryptor.encrypt_padded_vec_mut::<TestNoPadding>(device_identifier);
+        let mut enc = iv.to_vec();
+        enc.extend_from_slice(&ciphertext);
+        enc
+    }
+
+    fn record_with(token: Vec<u8>, device_identifier: [u8; 16]) -> PersistentTokenRecord {
+        PersistentTokenRecord {
+            persistent_token: token,
+            pin_uv_auth_protocol: Ctap2PinUvAuthProtocol::Two,
+            device_identifier,
+            aaguid: [0x22; 16],
+        }
+    }
+
+    fn info_with_enc_identifier(enc_identifier: Vec<u8>) -> Ctap2GetInfoResponse {
+        Ctap2GetInfoResponse {
+            enc_identifier: Some(ByteBuf::from(enc_identifier)),
+            ..Default::default()
         }
     }
 
@@ -169,5 +285,116 @@ mod test {
     fn record_is_zeroize_on_drop() {
         fn assert_zeroize_on_drop<T: ZeroizeOnDrop>() {}
         assert_zeroize_on_drop::<PersistentTokenRecord>();
+    }
+
+    #[test]
+    fn decrypt_enc_identifier_round_trips() {
+        let token = vec![0x07; 32];
+        let device_identifier = [0x42; 16];
+        let enc = build_enc_identifier(&token, &device_identifier, &[0x99; 16]);
+        assert_eq!(
+            decrypt_enc_identifier(&token, &enc).unwrap(),
+            device_identifier
+        );
+    }
+
+    #[test]
+    fn decrypt_enc_identifier_rejects_bad_length() {
+        let token = vec![0x07; 32];
+        assert!(decrypt_enc_identifier(&token, &[0u8; 31]).is_err());
+        assert!(decrypt_enc_identifier(&token, &[0u8; 33]).is_err());
+        assert!(decrypt_enc_identifier(&token, &[]).is_err());
+    }
+
+    #[tokio::test]
+    async fn recognizes_matching_record() {
+        let store = MemoryPersistentTokenStore::new();
+        let token = vec![0x07; 32];
+        let device_identifier = [0x42; 16];
+        store
+            .put(
+                &"id-1".to_string(),
+                &record_with(token.clone(), device_identifier),
+            )
+            .await;
+
+        // A second getInfo uses a fresh IV, so the bytes differ but recognition holds.
+        let info = info_with_enc_identifier(build_enc_identifier(
+            &token,
+            &device_identifier,
+            &[0x33; 16],
+        ));
+        let (id, record) = recognize_authenticator(&store, &info).await.unwrap();
+        assert_eq!(id, "id-1");
+        assert_eq!(record.device_identifier, device_identifier);
+    }
+
+    #[tokio::test]
+    async fn rejects_wrong_token() {
+        let store = MemoryPersistentTokenStore::new();
+        let real_token = vec![0x07; 32];
+        let device_identifier = [0x42; 16];
+        // Stored record carries a different token, so its key cannot reproduce the id.
+        store
+            .put(
+                &"id-1".to_string(),
+                &record_with(vec![0xFF; 32], device_identifier),
+            )
+            .await;
+
+        let info = info_with_enc_identifier(build_enc_identifier(
+            &real_token,
+            &device_identifier,
+            &[0x33; 16],
+        ));
+        assert!(recognize_authenticator(&store, &info).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn rejects_stale_device_identifier() {
+        let store = MemoryPersistentTokenStore::new();
+        let token = vec![0x07; 32];
+        // Right token, but the stored device identifier is stale (e.g. after a reset).
+        store
+            .put(&"id-1".to_string(), &record_with(token.clone(), [0x00; 16]))
+            .await;
+
+        let info = info_with_enc_identifier(build_enc_identifier(&token, &[0x42; 16], &[0x33; 16]));
+        assert!(recognize_authenticator(&store, &info).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn picks_correct_record_among_many() {
+        let store = MemoryPersistentTokenStore::new();
+        store
+            .put(
+                &"other".to_string(),
+                &record_with(vec![0x01; 32], [0xAA; 16]),
+            )
+            .await;
+        let token = vec![0x07; 32];
+        let device_identifier = [0x42; 16];
+        store
+            .put(
+                &"target".to_string(),
+                &record_with(token.clone(), device_identifier),
+            )
+            .await;
+
+        let info = info_with_enc_identifier(build_enc_identifier(
+            &token,
+            &device_identifier,
+            &[0x33; 16],
+        ));
+        let (id, _) = recognize_authenticator(&store, &info).await.unwrap();
+        assert_eq!(id, "target");
+    }
+
+    #[tokio::test]
+    async fn none_without_enc_identifier() {
+        let store = MemoryPersistentTokenStore::new();
+        store.put(&"id-1".to_string(), &sample_record()).await;
+        let info = Ctap2GetInfoResponse::default();
+        assert!(recognize_authenticator(&store, &info).await.is_none());
     }
 }
