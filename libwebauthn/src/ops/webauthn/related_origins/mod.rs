@@ -1,8 +1,7 @@
-//! Related-origins validation (WebAuthn L3 §5.11).
-//!
-//! The HTTP fetch of the `webauthn` well-known document is abstracted behind
-//! [`RelatedOriginsHttpClient`]; a reqwest-backed default lives in [`http`]
-//! behind the `related-origins-client` cargo feature.
+//! Related-origins validation (WebAuthn L3 §5.11). Matching lives here in the
+//! core. The allowed origins for an rp.id come from a [`RelatedOriginsSource`],
+//! the default [`WellKnownRelatedOriginsSource`] fetching the well-known
+//! document over an [`HttpClient`].
 
 use std::collections::BTreeSet;
 
@@ -14,59 +13,95 @@ use super::idl::origin::{Origin, Scheme};
 use super::idl::rpid::RelyingPartyId;
 use super::psl::PublicSuffixList;
 
-#[cfg(feature = "related-origins-client")]
-pub mod http;
+#[cfg(feature = "reqwest-related-origins-source")]
+mod reqwest_impl;
 
-#[cfg(feature = "related-origins-client")]
-pub use http::{HttpPolicy, ReqwestRelatedOriginsClient};
+#[cfg(feature = "reqwest-related-origins-source")]
+pub use reqwest_impl::{HttpPolicy, ReqwestHttpClient, ReqwestRelatedOriginsSource};
 
-/// WebAuthn L3 §5.11 minimum; capped at 5 to bound abuse surface.
-const MAX_REGISTRABLE_LABELS: usize = 5;
+/// Cap on distinct registrable-domain labels considered during matching
+/// (WebAuthn L3 §5.11). Cannot hold a value below the spec floor of five.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MaxRegistrableLabels(usize);
 
-#[derive(Debug, Clone)]
-pub struct WellKnownResponse {
-    pub content_type: Option<String>,
-    pub body: Vec<u8>,
+impl MaxRegistrableLabels {
+    /// Absolute cap, or `None` if below the floor of five.
+    pub const fn new(n: usize) -> Option<Self> {
+        if n >= 5 {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+
+    /// `n` labels beyond the floor of five.
+    pub const fn extra(n: usize) -> Self {
+        Self(5usize.saturating_add(n))
+    }
 }
 
-/// Fetcher for `https://{rp_id}/.well-known/webauthn`, per WebAuthn L3 §5.11.1
-/// step 2. Implementations MUST send no credentials, no Referer, refuse
-/// non-`https://` redirects, cap the body size, and bound the request duration.
-/// Implementations MUST return `Err(WellKnownFetchError::Status)` for any
-/// status code other than 200 (after following redirects). Implementations MUST
-/// report the wire `Content-Type` header value unmodified (or `None` if absent)
-/// and MUST NOT synthesise an `application/json` content type for non-JSON
-/// responses.
-#[async_trait]
-pub trait RelatedOriginsHttpClient: Send + Sync {
-    async fn fetch_well_known(
-        &self,
-        rp_id: &RelyingPartyId,
-    ) -> Result<WellKnownResponse, WellKnownFetchError>;
+impl Default for MaxRegistrableLabels {
+    fn default() -> Self {
+        Self(5)
+    }
 }
 
-/// Failure modes for [`RelatedOriginsHttpClient::fetch_well_known`].
+impl From<MaxRegistrableLabels> for usize {
+    fn from(value: MaxRegistrableLabels) -> Self {
+        value.0
+    }
+}
+
+/// Transport failure modes for [`HttpClient::get`].
 #[derive(thiserror::Error, Debug, Clone)]
-pub enum WellKnownFetchError {
-    /// Transport-level failure: TLS, DNS, timeout, rejected redirect, body
-    /// stream interrupt, client build error, etc.
+pub enum HttpClientError {
+    /// TLS, DNS, timeout, rejected redirect, stream interrupt, client build, etc.
     #[error("transport error: {0}")]
     Transport(String),
-    /// Endpoint replied with a non-200 status (after following redirects).
-    #[error("HTTP status {0}")]
-    Status(u16),
     /// Body exceeded the implementation's configured size cap before completion.
-    #[error("body exceeded configured size cap")]
+    #[error("response body exceeded the configured size cap")]
     BodyTooLarge,
-    /// Implementation does not perform fetches (see [`NoRelatedOriginsClient`]).
-    #[error("client does not support related-origin fetches")]
-    NotSupported,
 }
 
+/// Minimal HTTP GET for fetching the well-known document. Implementations MUST
+/// send no credentials or Referer, follow only `https://` redirects, and cap the
+/// body size and duration. Status is returned as data, the body unparsed.
+#[async_trait]
+pub trait HttpClient: Send + Sync {
+    async fn get(&self, url: &Url) -> Result<http::Response<Vec<u8>>, HttpClientError>;
+}
+
+/// Supplies the set of allowed origins for an RP id (WebAuthn L3 §5.11).
+/// [`WellKnownRelatedOriginsSource`] is the default, fetching the well-known
+/// document; a caller that already holds the list may implement this directly.
+#[async_trait]
+pub trait RelatedOriginsSource: Send + Sync {
+    async fn allowed_origins(
+        &self,
+        rp_id: &RelyingPartyId,
+    ) -> Result<Vec<String>, RelatedOriginsError>;
+}
+
+/// How related-origins is handled for a request.
+pub enum RelatedOrigins<'a> {
+    /// Do not consult related origins; a mismatching rp.id is rejected.
+    Disabled,
+    /// Resolve allowed origins through `source` and match, considering at most
+    /// `max_labels` distinct registrable-domain labels.
+    Enabled {
+        source: &'a dyn RelatedOriginsSource,
+        max_labels: MaxRegistrableLabels,
+    },
+}
+
+/// Failure modes when resolving or matching related origins.
 #[derive(thiserror::Error, Debug, Clone)]
 pub enum RelatedOriginsError {
-    #[error("well-known fetch failed: {0}")]
-    Fetch(#[from] WellKnownFetchError),
+    #[error("http error: {0}")]
+    Http(#[from] HttpClientError),
+    /// Endpoint replied with a non-200 status (after following redirects).
+    #[error("unexpected HTTP status {0}")]
+    UnexpectedStatus(u16),
     #[error("unexpected content type: {0:?}")]
     UnexpectedContentType(Option<String>),
     /// Step 2.b: body did not decode as JSON.
@@ -86,37 +121,70 @@ struct WellKnownDocument {
     origins: Vec<String>,
 }
 
-/// Runs the WebAuthn L3 §5.11.1 related-origins validation procedure.
-pub async fn validate_related_origins(
+/// [`RelatedOriginsSource`] that fetches `https://{rp_id}/.well-known/webauthn`
+/// over an [`HttpClient`] and returns its `origins` array (WebAuthn L3 §5.11.1
+/// step 2). Generic over the transport.
+pub struct WellKnownRelatedOriginsSource<C: HttpClient> {
+    http: C,
+}
+
+impl<C: HttpClient> WellKnownRelatedOriginsSource<C> {
+    /// Wrap an [`HttpClient`] as a well-known related-origins source.
+    pub fn from_client(http: C) -> Self {
+        Self { http }
+    }
+}
+
+#[async_trait]
+impl<C: HttpClient> RelatedOriginsSource for WellKnownRelatedOriginsSource<C> {
+    async fn allowed_origins(
+        &self,
+        rp_id: &RelyingPartyId,
+    ) -> Result<Vec<String>, RelatedOriginsError> {
+        let url = Url::parse(&format!("https://{}/.well-known/webauthn", rp_id.0))
+            .map_err(|e| RelatedOriginsError::MalformedDocument(format!("invalid rp id: {e}")))?;
+        let resp = self.http.get(&url).await?;
+        if resp.status() != http::StatusCode::OK {
+            return Err(RelatedOriginsError::UnexpectedStatus(resp.status().as_u16()));
+        }
+        let content_type = resp
+            .headers()
+            .get(http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
+        let content_type_ok = content_type
+            .as_deref()
+            .map(is_application_json)
+            .unwrap_or(false);
+        if !content_type_ok {
+            return Err(RelatedOriginsError::UnexpectedContentType(content_type));
+        }
+
+        let value: serde_json::Value = serde_json::from_slice(resp.body())
+            .map_err(|e| RelatedOriginsError::MalformedJson(e.to_string()))?;
+        if !value.is_object() {
+            return Err(RelatedOriginsError::MalformedJson(
+                "top-level value is not a JSON object".into(),
+            ));
+        }
+        let doc: WellKnownDocument = serde_json::from_value(value)
+            .map_err(|e| RelatedOriginsError::MalformedDocument(e.to_string()))?;
+        Ok(doc.origins)
+    }
+}
+
+/// Runs the WebAuthn L3 §5.11.1 matching procedure: returns `Ok(())` if
+/// `caller_origin` is same-origin with one of `origins`, considering at most
+/// `max_labels` distinct registrable-domain labels.
+pub fn validate_related_origins(
     caller_origin: &Origin,
-    rp_id: &RelyingPartyId,
+    origins: &[String],
     psl: &dyn PublicSuffixList,
-    http: &dyn RelatedOriginsHttpClient,
+    max_labels: MaxRegistrableLabels,
 ) -> RelatedOriginsResult {
-    let resp = http.fetch_well_known(rp_id).await?;
-    let content_type_ok = resp
-        .content_type
-        .as_deref()
-        .map(is_application_json)
-        .unwrap_or(false);
-    if !content_type_ok {
-        return Err(RelatedOriginsError::UnexpectedContentType(
-            resp.content_type,
-        ));
-    }
-
-    let value: serde_json::Value = serde_json::from_slice(&resp.body)
-        .map_err(|e| RelatedOriginsError::MalformedJson(e.to_string()))?;
-    if !value.is_object() {
-        return Err(RelatedOriginsError::MalformedJson(
-            "top-level value is not a JSON object".into(),
-        ));
-    }
-    let doc: WellKnownDocument = serde_json::from_value(value)
-        .map_err(|e| RelatedOriginsError::MalformedDocument(e.to_string()))?;
-
+    let cap: usize = max_labels.into();
     let mut labels_seen: BTreeSet<String> = BTreeSet::new();
-    for origin_item in &doc.origins {
+    for origin_item in origins {
         let Ok(url) = Url::parse(origin_item) else {
             continue;
         };
@@ -127,13 +195,13 @@ pub async fn validate_related_origins(
             Some(l) if !l.is_empty() => l,
             _ => continue,
         };
-        if labels_seen.len() >= MAX_REGISTRABLE_LABELS && !labels_seen.contains(&label) {
+        if labels_seen.len() >= cap && !labels_seen.contains(&label) {
             continue;
         }
         if same_origin(caller_origin, &url) {
             return Ok(());
         }
-        if labels_seen.len() < MAX_REGISTRABLE_LABELS {
+        if labels_seen.len() < cap {
             labels_seen.insert(label);
         }
     }
@@ -151,7 +219,7 @@ pub(crate) fn registrable_origin_label(host: &str, psl: &dyn PublicSuffixList) -
     Some(label.to_string())
 }
 
-/// Effective domain of `url` per HTML §6.2; `None` for opaque or host-less URLs.
+/// Effective domain of `url` per HTML §6.2, or `None` for opaque or host-less URLs.
 fn effective_domain_of(url: &Url) -> Option<String> {
     match url.host()? {
         Host::Domain(d) => Some(d.to_string()),
@@ -160,7 +228,7 @@ fn effective_domain_of(url: &Url) -> Option<String> {
     }
 }
 
-/// Tuple-origin equality (scheme, host, port) per WebAuthn L3 §5.11.1 step 4.f and HTML §7.5; userinfo, path, query and fragment on `listed` are ignored.
+/// Tuple-origin (scheme, host, port) equality per WebAuthn L3 §5.11.1 step 4.f.
 fn same_origin(caller: &Origin, listed: &Url) -> bool {
     if caller.scheme.as_str() != listed.scheme() {
         return false;
@@ -189,45 +257,10 @@ fn is_application_json(value: &str) -> bool {
     essence.eq_ignore_ascii_case("application/json")
 }
 
-/// `RelatedOriginsHttpClient` that always refuses; preserves strict rp.id matching when callers do not opt into related-origin fetches.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct NoRelatedOriginsClient;
-
-#[async_trait]
-impl RelatedOriginsHttpClient for NoRelatedOriginsClient {
-    async fn fetch_well_known(
-        &self,
-        _: &RelyingPartyId,
-    ) -> Result<WellKnownResponse, WellKnownFetchError> {
-        Err(WellKnownFetchError::NotSupported)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::psl::MockPublicSuffixList;
     use super::*;
-
-    struct MockClient {
-        response: Result<WellKnownResponse, WellKnownFetchError>,
-    }
-
-    #[async_trait]
-    impl RelatedOriginsHttpClient for MockClient {
-        async fn fetch_well_known(
-            &self,
-            _: &RelyingPartyId,
-        ) -> Result<WellKnownResponse, WellKnownFetchError> {
-            self.response.clone()
-        }
-    }
-
-    fn json_ct(body: &str) -> WellKnownResponse {
-        WellKnownResponse {
-            content_type: Some("application/json".into()),
-            body: body.as_bytes().to_vec(),
-        }
-    }
 
     fn caller(s: &str) -> Origin {
         Origin::try_from(s).unwrap()
@@ -236,6 +269,35 @@ mod tests {
     fn rp(s: &str) -> RelyingPartyId {
         RelyingPartyId::try_from(s).unwrap()
     }
+
+    fn origins(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// Matches a caller origin against `items` with the default cap (5).
+    fn validate(caller_s: &str, items: &[&str]) -> RelatedOriginsResult {
+        validate_related_origins(
+            &caller(caller_s),
+            &origins(items),
+            &MockPublicSuffixList,
+            MaxRegistrableLabels::default(),
+        )
+    }
+
+    // ---- MaxRegistrableLabels ----
+
+    #[test]
+    fn max_registrable_labels_enforces_floor() {
+        assert_eq!(MaxRegistrableLabels::new(4), None);
+        assert_eq!(MaxRegistrableLabels::new(0), None);
+        assert_eq!(usize::from(MaxRegistrableLabels::new(5).unwrap()), 5);
+        assert_eq!(usize::from(MaxRegistrableLabels::new(50).unwrap()), 50);
+        assert_eq!(usize::from(MaxRegistrableLabels::extra(0)), 5);
+        assert_eq!(usize::from(MaxRegistrableLabels::extra(3)), 8);
+        assert_eq!(usize::from(MaxRegistrableLabels::default()), 5);
+    }
+
+    // ---- registrable_origin_label ----
 
     #[test]
     fn registrable_origin_label_basic() {
@@ -258,487 +320,362 @@ mod tests {
         assert_eq!(registrable_origin_label("127.0.0.1", &psl), None);
     }
 
-    #[tokio::test]
-    async fn same_origin_caller_listed_first() {
-        let body = r#"{"origins":["https://example.com"]}"#;
-        let http = MockClient {
-            response: Ok(json_ct(body)),
-        };
-        let res = validate_related_origins(
-            &caller("https://example.com"),
-            &rp("example.com"),
-            &MockPublicSuffixList,
-            &http,
-        )
-        .await;
-        assert!(matches!(res, Ok(())));
+    // ---- matching (validate_related_origins) ----
+
+    #[test]
+    fn same_origin_caller_listed_first() {
+        assert!(matches!(
+            validate("https://example.com", &["https://example.com"]),
+            Ok(())
+        ));
     }
 
-    #[tokio::test]
-    async fn same_origin_with_port_match() {
-        let body = r#"{"origins":["https://example.com:8443"]}"#;
-        let http = MockClient {
-            response: Ok(json_ct(body)),
-        };
-        let res = validate_related_origins(
-            &caller("https://example.com:8443"),
-            &rp("example.com"),
-            &MockPublicSuffixList,
-            &http,
-        )
-        .await;
-        assert!(matches!(res, Ok(())));
+    #[test]
+    fn same_origin_with_port_match() {
+        assert!(matches!(
+            validate("https://example.com:8443", &["https://example.com:8443"]),
+            Ok(())
+        ));
     }
 
-    #[tokio::test]
-    async fn same_origin_with_port_mismatch_rejected() {
-        let body = r#"{"origins":["https://example.com:8443"]}"#;
-        let http = MockClient {
-            response: Ok(json_ct(body)),
-        };
-        let res = validate_related_origins(
-            &caller("https://example.com"),
-            &rp("example.com"),
-            &MockPublicSuffixList,
-            &http,
-        )
-        .await;
-        assert!(matches!(res, Err(RelatedOriginsError::NoMatchingOrigin)));
+    #[test]
+    fn same_origin_with_port_mismatch_rejected() {
+        assert!(matches!(
+            validate("https://example.com", &["https://example.com:8443"]),
+            Err(RelatedOriginsError::NoMatchingOrigin)
+        ));
     }
 
-    #[tokio::test]
-    async fn same_origin_default_port_normalised() {
-        let body = r#"{"origins":["https://example.com:443"]}"#;
-        let http = MockClient {
-            response: Ok(json_ct(body)),
-        };
-        let res = validate_related_origins(
-            &caller("https://example.com"),
-            &rp("example.com"),
-            &MockPublicSuffixList,
-            &http,
-        )
-        .await;
-        assert!(matches!(res, Ok(())));
+    #[test]
+    fn same_origin_default_port_normalised() {
+        assert!(matches!(
+            validate("https://example.com", &["https://example.com:443"]),
+            Ok(())
+        ));
     }
 
-    #[tokio::test]
-    async fn caller_listed_after_other_origins() {
+    #[test]
+    fn caller_listed_after_other_origins() {
         // Substituted `.de` with `.net` (MockPublicSuffixList lacks `.de`).
-        let body = r#"{"origins":["https://other.net","https://example.com"]}"#;
-        let http = MockClient {
-            response: Ok(json_ct(body)),
-        };
+        assert!(matches!(
+            validate(
+                "https://example.com",
+                &["https://other.net", "https://example.com"]
+            ),
+            Ok(())
+        ));
+    }
+
+    #[test]
+    fn label_cap_allows_fifth_distinct_label_match() {
+        // The 5th distinct label is still within the cap.
+        assert!(matches!(
+            validate(
+                "https://example.com",
+                &[
+                    "https://a.com",
+                    "https://b.com",
+                    "https://c.com",
+                    "https://d.com",
+                    "https://example.com",
+                ]
+            ),
+            Ok(())
+        ));
+    }
+
+    #[test]
+    fn label_cap_blocks_sixth_distinct_label_match() {
+        // A sixth distinct label is silently skipped, so the would-be match
+        // never reaches the same-origin check.
+        assert!(matches!(
+            validate(
+                "https://example.com",
+                &[
+                    "https://a.com",
+                    "https://b.com",
+                    "https://c.com",
+                    "https://d.com",
+                    "https://e.com",
+                    "https://example.com",
+                ]
+            ),
+            Err(RelatedOriginsError::NoMatchingOrigin)
+        ));
+    }
+
+    #[test]
+    fn higher_cap_allows_sixth_distinct_label_match() {
+        // With a cap of 6 the previously-blocked sixth label matches.
         let res = validate_related_origins(
             &caller("https://example.com"),
-            &rp("example.com"),
+            &origins(&[
+                "https://a.com",
+                "https://b.com",
+                "https://c.com",
+                "https://d.com",
+                "https://e.com",
+                "https://example.com",
+            ]),
             &MockPublicSuffixList,
-            &http,
-        )
-        .await;
+            MaxRegistrableLabels::extra(1),
+        );
         assert!(matches!(res, Ok(())));
     }
 
-    #[tokio::test]
-    async fn label_cap_allows_fifth_distinct_label_match() {
-        // §5.11.1 step 4.e: the 5th distinct label is still within the cap.
-        let body = r#"{"origins":[
-            "https://a.com",
-            "https://b.com",
-            "https://c.com",
-            "https://d.com",
-            "https://example.com"
-        ]}"#;
-        let http = MockClient {
-            response: Ok(json_ct(body)),
-        };
-        let res = validate_related_origins(
-            &caller("https://example.com"),
-            &rp("example.com"),
-            &MockPublicSuffixList,
-            &http,
-        )
-        .await;
-        assert!(matches!(res, Ok(())));
+    #[test]
+    fn label_cap_allows_repeats_of_seen_label() {
+        // Once `example` has been recorded, further `example`-label origins
+        // still proceed to the same-origin check.
+        assert!(matches!(
+            validate(
+                "https://login.example.com",
+                &[
+                    "https://a.example.com",
+                    "https://b.example.com",
+                    "https://c.example.com",
+                    "https://d.example.com",
+                    "https://e.example.com",
+                    "https://login.example.com",
+                ]
+            ),
+            Ok(())
+        ));
     }
 
-    #[tokio::test]
-    async fn label_cap_blocks_sixth_distinct_label_match() {
-        // §5.11.1 step 4.e: a sixth distinct label is silently skipped, so the
-        // would-be match never reaches step 4.f.
-        let body = r#"{"origins":[
-            "https://a.com",
-            "https://b.com",
-            "https://c.com",
-            "https://d.com",
-            "https://e.com",
-            "https://example.com"
-        ]}"#;
-        let http = MockClient {
-            response: Ok(json_ct(body)),
-        };
-        let res = validate_related_origins(
-            &caller("https://example.com"),
-            &rp("example.com"),
-            &MockPublicSuffixList,
-            &http,
-        )
-        .await;
-        assert!(matches!(res, Err(RelatedOriginsError::NoMatchingOrigin)));
+    #[test]
+    fn https_caller_vs_http_listed_rejected() {
+        // Scheme differs, so the listed http origin is never same-origin.
+        assert!(matches!(
+            validate("https://example.com", &["http://example.com"]),
+            Err(RelatedOriginsError::NoMatchingOrigin)
+        ));
     }
 
-    #[tokio::test]
-    async fn label_cap_allows_repeats_of_seen_label() {
-        // §5.11.1 step 4.e "contains label" exception: once `example` has been
-        // recorded, further `example`-label origins still proceed to step 4.f.
-        let body = r#"{"origins":[
-            "https://a.example.com",
-            "https://b.example.com",
-            "https://c.example.com",
-            "https://d.example.com",
-            "https://e.example.com",
-            "https://login.example.com"
-        ]}"#;
-        let http = MockClient {
-            response: Ok(json_ct(body)),
-        };
-        let res = validate_related_origins(
-            &caller("https://login.example.com"),
-            &rp("example.com"),
-            &MockPublicSuffixList,
-            &http,
-        )
-        .await;
-        assert!(matches!(res, Ok(())));
+    #[test]
+    fn unparseable_origin_item_skipped() {
+        assert!(matches!(
+            validate(
+                "https://example.com",
+                &["not a url", "https://example.com"]
+            ),
+            Ok(())
+        ));
     }
 
-    #[tokio::test]
-    async fn same_origin_https_vs_http_rejected() {
-        // `http://example.com` is rejected by `Origin::try_from` (non-localhost),
-        // so the listed entry can never be same-origin with the https caller.
-        let body = r#"{"origins":["http://example.com"]}"#;
-        let http = MockClient {
-            response: Ok(json_ct(body)),
-        };
-        let res = validate_related_origins(
-            &caller("https://example.com"),
-            &rp("example.com"),
-            &MockPublicSuffixList,
-            &http,
-        )
-        .await;
-        assert!(matches!(res, Err(RelatedOriginsError::NoMatchingOrigin)));
+    #[test]
+    fn non_https_origin_item_skipped_not_rejected() {
+        assert!(matches!(
+            validate(
+                "https://example.com",
+                &["data:text/plain,foo", "https://example.com"]
+            ),
+            Ok(())
+        ));
     }
 
-    #[tokio::test]
-    async fn unparseable_origin_item_skipped() {
-        let body = r#"{"origins":["not a url","https://example.com"]}"#;
-        let http = MockClient {
-            response: Ok(json_ct(body)),
-        };
-        let res = validate_related_origins(
-            &caller("https://example.com"),
-            &rp("example.com"),
-            &MockPublicSuffixList,
-            &http,
-        )
-        .await;
-        assert!(matches!(res, Ok(())));
-    }
-
-    #[tokio::test]
-    async fn non_https_origin_item_skipped_not_rejected() {
-        let body = r#"{"origins":["data:text/plain,foo","https://example.com"]}"#;
-        let http = MockClient {
-            response: Ok(json_ct(body)),
-        };
-        let res = validate_related_origins(
-            &caller("https://example.com"),
-            &rp("example.com"),
-            &MockPublicSuffixList,
-            &http,
-        )
-        .await;
-        assert!(matches!(res, Ok(())));
-    }
-
-    #[tokio::test]
-    async fn unknown_suffix_origin_skipped() {
+    #[test]
+    fn unknown_suffix_origin_skipped() {
         // `internal.localhost` has no registrable domain in MockPSL.
-        let body = r#"{"origins":["https://internal.localhost","https://example.com"]}"#;
-        let http = MockClient {
-            response: Ok(json_ct(body)),
-        };
-        let res = validate_related_origins(
-            &caller("https://example.com"),
-            &rp("example.com"),
-            &MockPublicSuffixList,
-            &http,
-        )
-        .await;
-        assert!(matches!(res, Ok(())));
+        assert!(matches!(
+            validate(
+                "https://example.com",
+                &["https://internal.localhost", "https://example.com"]
+            ),
+            Ok(())
+        ));
+    }
+
+    #[test]
+    fn bare_etld_origin_skipped() {
+        // Registrable origin label is None for `co.uk`.
+        assert!(matches!(
+            validate(
+                "https://example.co.uk",
+                &["https://co.uk", "https://example.co.uk"]
+            ),
+            Ok(())
+        ));
+    }
+
+    #[test]
+    fn no_match_returns_no_matching_origin() {
+        assert!(matches!(
+            validate("https://example.com", &["https://elsewhere.com"]),
+            Err(RelatedOriginsError::NoMatchingOrigin)
+        ));
+    }
+
+    #[test]
+    fn empty_origins_no_match() {
+        assert!(matches!(
+            validate("https://example.com", &[]),
+            Err(RelatedOriginsError::NoMatchingOrigin)
+        ));
+    }
+
+    #[test]
+    fn listed_origin_with_path_still_matches() {
+        // Same-origin compares (scheme, host, port) only, so a trailing path on
+        // the listed entry must not block the match.
+        assert!(matches!(
+            validate("https://example.com", &["https://example.com/foo"]),
+            Ok(())
+        ));
+    }
+
+    #[test]
+    fn ipv6_listed_origin_skipped_no_registrable_label() {
+        // IPv6 host has no registrable label; the loop skips it.
+        assert!(matches!(
+            validate("https://[::1]", &["https://[::1]"]),
+            Err(RelatedOriginsError::NoMatchingOrigin)
+        ));
+    }
+
+    // ---- well-known source fetch/parse ----
+
+    struct MockHttpClient {
+        status: u16,
+        content_type: Option<String>,
+        body: Vec<u8>,
+    }
+
+    #[async_trait]
+    impl HttpClient for MockHttpClient {
+        async fn get(&self, _url: &Url) -> Result<http::Response<Vec<u8>>, HttpClientError> {
+            let mut builder = http::Response::builder().status(self.status);
+            if let Some(ct) = &self.content_type {
+                builder = builder.header(http::header::CONTENT_TYPE, ct);
+            }
+            Ok(builder.body(self.body.clone()).unwrap())
+        }
+    }
+
+    struct ErrHttpClient(HttpClientError);
+
+    #[async_trait]
+    impl HttpClient for ErrHttpClient {
+        async fn get(&self, _url: &Url) -> Result<http::Response<Vec<u8>>, HttpClientError> {
+            Err(self.0.clone())
+        }
+    }
+
+    async fn fetch(
+        status: u16,
+        content_type: Option<&str>,
+        body: &str,
+    ) -> Result<Vec<String>, RelatedOriginsError> {
+        let source = WellKnownRelatedOriginsSource::from_client(MockHttpClient {
+            status,
+            content_type: content_type.map(str::to_owned),
+            body: body.as_bytes().to_vec(),
+        });
+        source.allowed_origins(&rp("example.com")).await
     }
 
     #[tokio::test]
-    async fn bare_etld_origin_skipped() {
-        // §5.11.1 step 4.c returns None for `co.uk`.
-        let body = r#"{"origins":["https://co.uk","https://example.co.uk"]}"#;
-        let http = MockClient {
-            response: Ok(json_ct(body)),
-        };
-        let res = validate_related_origins(
-            &caller("https://example.co.uk"),
-            &rp("example.co.uk"),
-            &MockPublicSuffixList,
-            &http,
-        )
-        .await;
-        assert!(matches!(res, Ok(())));
+    async fn well_known_returns_origins() {
+        let res = fetch(200, Some("application/json"), r#"{"origins":["https://example.com"]}"#).await;
+        assert_eq!(res.unwrap(), vec!["https://example.com".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn non_200_status_rejected() {
+        assert!(matches!(
+            fetch(404, Some("application/json"), r#"{"origins":[]}"#).await,
+            Err(RelatedOriginsError::UnexpectedStatus(404))
+        ));
     }
 
     #[tokio::test]
     async fn wrong_content_type_rejected() {
-        let http = MockClient {
-            response: Ok(WellKnownResponse {
-                content_type: Some("text/html".into()),
-                body: b"{\"origins\":[]}".to_vec(),
-            }),
-        };
-        let res = validate_related_origins(
-            &caller("https://example.com"),
-            &rp("example.com"),
-            &MockPublicSuffixList,
-            &http,
-        )
-        .await;
         assert!(matches!(
-            res,
+            fetch(200, Some("text/html"), r#"{"origins":[]}"#).await,
             Err(RelatedOriginsError::UnexpectedContentType(_))
         ));
     }
 
     #[tokio::test]
     async fn missing_content_type_rejected() {
-        let http = MockClient {
-            response: Ok(WellKnownResponse {
-                content_type: None,
-                body: b"{\"origins\":[]}".to_vec(),
-            }),
-        };
-        let res = validate_related_origins(
-            &caller("https://example.com"),
-            &rp("example.com"),
-            &MockPublicSuffixList,
-            &http,
-        )
-        .await;
         assert!(matches!(
-            res,
+            fetch(200, None, r#"{"origins":[]}"#).await,
             Err(RelatedOriginsError::UnexpectedContentType(None))
         ));
     }
 
     #[tokio::test]
     async fn content_type_with_charset_accepted() {
-        let http = MockClient {
-            response: Ok(WellKnownResponse {
-                content_type: Some("application/json; charset=utf-8".into()),
-                body: br#"{"origins":["https://elsewhere.com"]}"#.to_vec(),
-            }),
-        };
-        let res = validate_related_origins(
-            &caller("https://example.com"),
-            &rp("example.com"),
-            &MockPublicSuffixList,
-            &http,
+        let res = fetch(
+            200,
+            Some("application/json; charset=utf-8"),
+            r#"{"origins":["https://elsewhere.com"]}"#,
         )
         .await;
-        assert!(matches!(res, Err(RelatedOriginsError::NoMatchingOrigin)));
+        assert_eq!(res.unwrap(), vec!["https://elsewhere.com".to_string()]);
     }
 
     #[tokio::test]
     async fn content_type_case_insensitive() {
-        let http = MockClient {
-            response: Ok(WellKnownResponse {
-                content_type: Some("Application/JSON".into()),
-                body: br#"{"origins":["https://example.com"]}"#.to_vec(),
-            }),
-        };
-        let res = validate_related_origins(
-            &caller("https://example.com"),
-            &rp("example.com"),
-            &MockPublicSuffixList,
-            &http,
+        let res = fetch(
+            200,
+            Some("Application/JSON"),
+            r#"{"origins":["https://example.com"]}"#,
         )
         .await;
-        assert!(matches!(res, Ok(())));
+        assert_eq!(res.unwrap(), vec!["https://example.com".to_string()]);
     }
 
     #[tokio::test]
     async fn malformed_json_rejected() {
-        let http = MockClient {
-            response: Ok(json_ct("{not json}")),
-        };
-        let res = validate_related_origins(
-            &caller("https://example.com"),
-            &rp("example.com"),
-            &MockPublicSuffixList,
-            &http,
-        )
-        .await;
-        assert!(matches!(res, Err(RelatedOriginsError::MalformedJson(_))));
+        assert!(matches!(
+            fetch(200, Some("application/json"), "{not json}").await,
+            Err(RelatedOriginsError::MalformedJson(_))
+        ));
     }
 
     #[tokio::test]
     async fn non_object_json_rejected() {
-        let http = MockClient {
-            response: Ok(json_ct("[1,2,3]")),
-        };
-        let res = validate_related_origins(
-            &caller("https://example.com"),
-            &rp("example.com"),
-            &MockPublicSuffixList,
-            &http,
-        )
-        .await;
-        assert!(matches!(res, Err(RelatedOriginsError::MalformedJson(_))));
+        assert!(matches!(
+            fetch(200, Some("application/json"), "[1,2,3]").await,
+            Err(RelatedOriginsError::MalformedJson(_))
+        ));
     }
 
     #[tokio::test]
     async fn missing_origins_key_rejected() {
-        let http = MockClient {
-            response: Ok(json_ct("{}")),
-        };
-        let res = validate_related_origins(
-            &caller("https://example.com"),
-            &rp("example.com"),
-            &MockPublicSuffixList,
-            &http,
-        )
-        .await;
         assert!(matches!(
-            res,
+            fetch(200, Some("application/json"), "{}").await,
             Err(RelatedOriginsError::MalformedDocument(_))
         ));
     }
 
     #[tokio::test]
     async fn origins_not_array_rejected() {
-        let http = MockClient {
-            response: Ok(json_ct(r#"{"origins":"https://example.com"}"#)),
-        };
-        let res = validate_related_origins(
-            &caller("https://example.com"),
-            &rp("example.com"),
-            &MockPublicSuffixList,
-            &http,
-        )
-        .await;
         assert!(matches!(
-            res,
+            fetch(200, Some("application/json"), r#"{"origins":"https://example.com"}"#).await,
             Err(RelatedOriginsError::MalformedDocument(_))
         ));
     }
 
     #[tokio::test]
     async fn origins_array_of_non_strings_rejected() {
-        let http = MockClient {
-            response: Ok(json_ct(r#"{"origins":[1,2,3]}"#)),
-        };
-        let res = validate_related_origins(
-            &caller("https://example.com"),
-            &rp("example.com"),
-            &MockPublicSuffixList,
-            &http,
-        )
-        .await;
         assert!(matches!(
-            res,
+            fetch(200, Some("application/json"), r#"{"origins":[1,2,3]}"#).await,
             Err(RelatedOriginsError::MalformedDocument(_))
         ));
     }
 
     #[tokio::test]
-    async fn empty_origins_array_no_match() {
-        let http = MockClient {
-            response: Ok(json_ct(r#"{"origins":[]}"#)),
-        };
-        let res = validate_related_origins(
-            &caller("https://example.com"),
-            &rp("example.com"),
-            &MockPublicSuffixList,
-            &http,
-        )
-        .await;
-        assert!(matches!(res, Err(RelatedOriginsError::NoMatchingOrigin)));
-    }
-
-    #[tokio::test]
-    async fn fetch_error_propagates_as_fetch() {
-        let http = MockClient {
-            response: Err(WellKnownFetchError::Transport("simulated".into())),
-        };
-        let res = validate_related_origins(
-            &caller("https://example.com"),
-            &rp("example.com"),
-            &MockPublicSuffixList,
-            &http,
-        )
-        .await;
+    async fn transport_error_propagates_as_http() {
+        let source =
+            WellKnownRelatedOriginsSource::from_client(ErrHttpClient(HttpClientError::Transport(
+                "simulated".into(),
+            )));
+        let res = source.allowed_origins(&rp("example.com")).await;
         assert!(matches!(
             res,
-            Err(RelatedOriginsError::Fetch(WellKnownFetchError::Transport(
-                _
-            )))
+            Err(RelatedOriginsError::Http(HttpClientError::Transport(_)))
         ));
-    }
-
-    #[tokio::test]
-    async fn no_match_returns_no_matching_origin() {
-        let http = MockClient {
-            response: Ok(json_ct(r#"{"origins":["https://elsewhere.com"]}"#)),
-        };
-        let res = validate_related_origins(
-            &caller("https://example.com"),
-            &rp("example.com"),
-            &MockPublicSuffixList,
-            &http,
-        )
-        .await;
-        assert!(matches!(res, Err(RelatedOriginsError::NoMatchingOrigin)));
-    }
-
-    #[tokio::test]
-    async fn listed_origin_with_path_still_matches() {
-        // §5.11.1 step 4.f: same-origin compares (scheme, host, port) only, so
-        // a trailing path on the listed entry must not block the match.
-        let body = r#"{"origins":["https://example.com/foo"]}"#;
-        let http = MockClient {
-            response: Ok(json_ct(body)),
-        };
-        let res = validate_related_origins(
-            &caller("https://example.com"),
-            &rp("example.com"),
-            &MockPublicSuffixList,
-            &http,
-        )
-        .await;
-        assert!(matches!(res, Ok(())));
-    }
-
-    #[tokio::test]
-    async fn ipv6_listed_origin_skipped_no_registrable_label() {
-        // IPv6 host has no registrable label; loop skips at step 4.c/4.d.
-        let http = MockClient {
-            response: Ok(json_ct(r#"{"origins":["https://[::1]"]}"#)),
-        };
-        let res = validate_related_origins(
-            &caller("https://[::1]"),
-            &rp("example.com"),
-            &MockPublicSuffixList,
-            &http,
-        )
-        .await;
-        assert!(matches!(res, Err(RelatedOriginsError::NoMatchingOrigin)));
     }
 }
