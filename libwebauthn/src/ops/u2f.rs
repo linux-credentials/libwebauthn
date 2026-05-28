@@ -114,7 +114,7 @@ impl UpgradableResponse<MakeCredentialResponse, MakeCredentialRequest> for Regis
         let attested_cred_data = AttestedCredentialData {
             aaguid: [0u8; 16], // aaguid zeros
             credential_id: self.key_handle.clone(),
-            credential_public_key: cose_public_key,
+            credential_public_key: cose_encoded_public_key,
         };
 
         // Initialize authenticatorData:

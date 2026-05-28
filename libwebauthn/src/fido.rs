@@ -1,5 +1,4 @@
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
-use cosey::PublicKey;
 use serde::{
     de::{DeserializeOwned, Error as DesError, Visitor},
     Deserialize, Deserializer, Serialize,
@@ -62,7 +61,12 @@ bitflags! {
 pub struct AttestedCredentialData {
     pub aaguid: [u8; 16],
     pub credential_id: Vec<u8>,
-    pub credential_public_key: PublicKey,
+    /// Credential public key in COSE_Key CBOR encoding (RFC 9052).
+    ///
+    /// Stored verbatim so the authenticator data signature over it
+    /// remains valid for relying-party verification. The platform does
+    /// not crypto-validate this key.
+    pub credential_public_key: Vec<u8>,
 }
 
 impl From<&AttestedCredentialData> for Ctap2PublicKeyCredentialDescriptor {
@@ -120,16 +124,7 @@ where
                 Error::Platform(PlatformError::InvalidDeviceResponse)
             })?;
             res.extend(&att_data.credential_id);
-            let cose_encoded_public_key =
-                cbor::to_vec(&att_data.credential_public_key)
-            .map_err(|e| {
-                error!(
-                    %e,
-                    "Failed to create AuthenticatorData output vec at attested_credential.credential_public_key"  
-                );
-                Error::Platform(PlatformError::InvalidDeviceResponse)
-            })?;
-            res.extend(cose_encoded_public_key);
+            res.extend(&att_data.credential_public_key);
         }
 
         if self.extensions.is_some() || self.flags.contains(AuthenticatorDataFlags::EXTENSION_DATA)
@@ -229,8 +224,20 @@ impl<'de, T: DeserializeOwned> Deserialize<'de> for AuthenticatorData<T> {
                             DesError::custom(format!("failed to read credential_id: {e}"))
                         })?;
 
-                        let credential_public_key: PublicKey =
+                        // Capture the COSE_Key bytes verbatim so the RP's
+                        // signature check over authData stays valid. Parse
+                        // through cbor::Value only to advance the cursor by
+                        // exactly one CBOR item.
+                        let cose_start = cursor.position() as usize;
+                        let _: cbor::Value =
                             cbor::from_cursor(&mut cursor).map_err(DesError::custom)?;
+                        let cose_end = cursor.position() as usize;
+                        let credential_public_key = data
+                            .get(cose_start..cose_end)
+                            .ok_or_else(|| {
+                                DesError::custom("cursor reported COSE_Key span outside authData")
+                            })?
+                            .to_vec();
 
                         Some(AttestedCredentialData {
                             aaguid,
@@ -273,7 +280,6 @@ impl<'de, T: DeserializeOwned> Deserialize<'de> for AuthenticatorData<T> {
 
 #[cfg(test)]
 mod tests {
-    use cosey::{Bytes, Ed25519PublicKey};
     use serde_bytes::ByteBuf;
 
     use crate::proto::ctap2::cbor;
@@ -301,9 +307,6 @@ mod tests {
         ];
         let credential_id = vec![0x01, 0x01, 0x03, 0x03, 0x05, 0x05, 0x07, 0x07];
         let pub_key_bytes = b"]\"\xff\xc5\x932x(\xd6-:1\xbb}\x8c$7\xf1&\xd4\xb4&\x02\x02\xa3\xd9\xe2\xba1\x1f\xec\xba";
-        let credential_public_key = cosey::PublicKey::Ed25519Key(Ed25519PublicKey {
-            x: Bytes::from_slice(pub_key_bytes).unwrap(),
-        });
         /*
          * A4                                      # map(4)
          *    01                                   # unsigned(1) kty
@@ -321,7 +324,7 @@ mod tests {
         let attested_credential = AttestedCredentialData {
             aaguid,
             credential_id: credential_id.clone(),
-            credential_public_key,
+            credential_public_key: cose_bytes.clone(),
         };
         type T = String;
         let extensions: T = "test cbor serializable thing".to_string();
@@ -376,5 +379,56 @@ mod tests {
             attested_credential_reparsed.credential_public_key
         );
         assert_eq!(extensions, auth_data_reparsed.extensions.unwrap());
+    }
+
+    #[test]
+    fn auth_data_parses_with_non_p256_credential_public_key() {
+        // Build a synthetic COSE_Key for RS256 (kty=3 RSA, alg=-257, n, e).
+        // Previous versions of libwebauthn couldn't parse authData carrying
+        // anything other than P-256 or Ed25519 because cosey::PublicKey is
+        // a closed enum. With opaque byte storage this now round-trips.
+        use crate::proto::ctap2::cose;
+        use serde_cbor_2::Value;
+
+        let rsa_cose = cbor::to_vec(&Value::Map(
+            [
+                (Value::Integer(1), Value::Integer(3)),
+                (Value::Integer(3), Value::Integer(-257)),
+                (Value::Integer(-1), Value::Bytes(vec![0xAA; 256])),
+                (Value::Integer(-2), Value::Bytes(vec![0x01, 0x00, 0x01])),
+            ]
+            .into_iter()
+            .collect(),
+        ))
+        .unwrap();
+
+        let rp_id_hash = [0x77u8; 32];
+        let aaguid = [0x42u8; 16];
+        let credential_id = vec![0xC1, 0xC2, 0xC3];
+        let attested_credential = AttestedCredentialData {
+            aaguid,
+            credential_id: credential_id.clone(),
+            credential_public_key: rsa_cose.clone(),
+        };
+        type T = String;
+        let auth_data: AuthenticatorData<T> = AuthenticatorData {
+            rp_id_hash,
+            flags: AuthenticatorDataFlags::USER_PRESENT
+                | AuthenticatorDataFlags::ATTESTED_CREDENTIALS,
+            signature_count: 1,
+            attested_credential: Some(attested_credential),
+            extensions: None,
+        };
+
+        let bytes = auth_data.to_response_bytes().unwrap();
+        let wrapped = cbor::to_vec(&ByteBuf::from(bytes)).unwrap();
+        let parsed: AuthenticatorData<T> = cbor::from_slice(&wrapped).unwrap();
+
+        let credential = parsed.attested_credential.expect("AT flag was set");
+        assert_eq!(credential.credential_public_key, rsa_cose);
+        assert_eq!(
+            cose::read_alg(&credential.credential_public_key).unwrap(),
+            crate::proto::ctap2::Ctap2COSEAlgorithmIdentifier::RS256
+        );
     }
 }

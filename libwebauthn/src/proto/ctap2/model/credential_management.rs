@@ -2,7 +2,7 @@ use super::{
     Ctap2PinUvAuthProtocol, Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialRpEntity,
     Ctap2PublicKeyCredentialUserEntity,
 };
-use cosey::PublicKey;
+use crate::proto::ctap2::CoseEncodedKey;
 use serde_bytes::ByteBuf;
 use serde_indexed::{DeserializeIndexed, SerializeIndexed};
 use serde_repr::{Deserialize_repr, Serialize_repr};
@@ -103,7 +103,7 @@ pub struct Ctap2CredentialManagementResponse {
     // publicKey (0x08) 	COSE_Key 	Public key of the credential.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(index = 0x08)]
-    pub public_key: Option<PublicKey>,
+    pub public_key: Option<CoseEncodedKey>,
 
     // totalCredentials (0x09) 	Unsigned Integer 	Total number of credentials present on the authenticator for the RP in question
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -232,7 +232,8 @@ impl Ctap2CredentialManagementMetadata {
 pub struct Ctap2CredentialData {
     pub user: Ctap2PublicKeyCredentialUserEntity,
     pub credential_id: Ctap2PublicKeyCredentialDescriptor,
-    pub public_key: PublicKey,
+    /// Credential public key in COSE_Key CBOR encoding (RFC 9052).
+    pub public_key: Vec<u8>,
     pub cred_protect: u64,
     /// This is not there in the Preview mode
     pub large_blob_key: Option<Vec<u8>>,
@@ -242,7 +243,7 @@ impl Ctap2CredentialData {
     pub fn new(
         user: Ctap2PublicKeyCredentialUserEntity,
         credential_id: Ctap2PublicKeyCredentialDescriptor,
-        public_key: PublicKey,
+        public_key: Vec<u8>,
         cred_protect: u64,
         large_blob_key: Option<Vec<u8>>,
     ) -> Self {
