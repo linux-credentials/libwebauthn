@@ -295,7 +295,12 @@ impl Ctap2UserVerifiableRequest for Ctap2CredentialManagementRequest {
     }
 
     fn permissions(&self) -> Ctap2AuthTokenPermissionRole {
-        Ctap2AuthTokenPermissionRole::CREDENTIAL_MANAGEMENT
+        if self.use_persistent_token {
+            // pcmr MUST be the sole permission requested (CTAP 2.3-PS 6.5.5.7).
+            Ctap2AuthTokenPermissionRole::PERSISTENT_CREDENTIAL_MANAGEMENT_READ_ONLY
+        } else {
+            Ctap2AuthTokenPermissionRole::CREDENTIAL_MANAGEMENT
+        }
     }
 
     fn permissions_rpid(&self) -> Option<&str> {
@@ -321,5 +326,17 @@ impl Ctap2UserVerifiableRequest for Ctap2CredentialManagementRequest {
 
     fn needs_shared_secret(&self, _get_info_response: &Ctap2GetInfoResponse) -> bool {
         false
+    }
+
+    fn set_persistent_token_use(&mut self, info: &Ctap2GetInfoResponse, store_available: bool) {
+        self.use_persistent_token = store_available
+            && info.supports_persistent_credential_management_read_only()
+            && self
+                .subcommand
+                .is_some_and(|subcommand| subcommand.is_read_only());
+    }
+
+    fn wants_persistent_token(&self) -> bool {
+        self.use_persistent_token
     }
 }
