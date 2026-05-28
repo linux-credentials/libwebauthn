@@ -39,10 +39,10 @@ nfc-backend-libnfc = [
 # external crates (e.g. libwebauthn-tests) can plug in a virtual HID transport
 # for end-to-end tests.
 virt = []
-# Provides the reqwest-backed default RelatedOriginsHttpClient. Off by default so
-# the core crate stays HTTP-client-free; consumers that want the default impl
-# opt in, others bring their own client.
-related-origins-client = ["dep:reqwest"]
+# Provides the reqwest-backed HttpClient and ReqwestRelatedOriginsSource. Off by
+# default so the core crate stays HTTP-client-free. Consumers that want the
+# default fetch opt in, others implement HttpClient or RelatedOriginsSource.
+reqwest-related-origins-source = ["dep:reqwest"]
 
 [dependencies]
 base64-url = "3.0.0"
@@ -51,6 +51,7 @@ tracing = "0.1.29"
 idna = "1.0.3"
 publicsuffix = "2.3"
 url = "2.5"
+http = "1"
 maplit = "1.0.2"
 sha2 = "0.10.2"
 uuid = { version = "1.5.0", features = ["serde", "v4"] }
@@ -141,27 +142,27 @@ required-features = ["nfc"]
 [[example]]
 name = "webauthn_hid"
 path = "examples/ceremony/webauthn_hid.rs"
-required-features = ["related-origins-client"]
+required-features = ["reqwest-related-origins-source"]
 
 [[example]]
 name = "webauthn_ble"
 path = "examples/ceremony/webauthn_ble.rs"
-required-features = ["related-origins-client"]
+required-features = ["reqwest-related-origins-source"]
 
 [[example]]
 name = "webauthn_nfc"
 path = "examples/ceremony/webauthn_nfc.rs"
-required-features = ["nfc", "related-origins-client"]
+required-features = ["nfc", "reqwest-related-origins-source"]
 
 [[example]]
 name = "webauthn_cable"
 path = "examples/ceremony/webauthn_cable.rs"
-required-features = ["related-origins-client"]
+required-features = ["reqwest-related-origins-source"]
 
 [[example]]
 name = "webauthn_cable_wss"
 path = "examples/ceremony/webauthn_cable_wss.rs"
-required-features = ["related-origins-client"]
+required-features = ["reqwest-related-origins-source"]
 
 [[example]]
 name = "webauthn_extensions_hid"

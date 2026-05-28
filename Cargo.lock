@@ -1965,6 +1965,7 @@ dependencies = [
  "hidapi",
  "hkdf",
  "hmac 0.12.1",
+ "http",
  "idna",
  "maplit",
  "mockall",
