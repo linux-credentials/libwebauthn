@@ -1,6 +1,8 @@
 use std::fmt::{Debug, Display};
+use std::sync::Arc;
 use std::time::Duration;
 
+use crate::pin::persistent_token::PersistentTokenStore;
 use crate::proto::ctap2::{
     Ctap2AuthTokenPermissionRole, Ctap2PinUvAuthProtocol, Ctap2UserVerificationOperation,
 };
@@ -163,5 +165,11 @@ pub trait Ctap2AuthTokenStore {
                 || stored_data.uv_operation == Ctap2UserVerificationOperation::GetPinToken;
         }
         false
+    }
+
+    /// Caller-supplied persistent pinUvAuthToken (pcmr) store, if one is configured.
+    /// Defaults to `None`; only channels wired with a store override this.
+    fn persistent_token_store(&self) -> Option<Arc<dyn PersistentTokenStore>> {
+        None
     }
 }
