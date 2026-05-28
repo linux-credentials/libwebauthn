@@ -67,7 +67,7 @@ impl WebAuthnIDLResponse for MakeCredentialResponse {
         &self,
         request: &Self::Context,
     ) -> Result<Self::IdlModel, ResponseSerializationError> {
-        // The AT flag MUST be set on makeCredential responses per CTAP §6.1.
+        // The AT flag MUST be set on makeCredential responses per CTAP 2.2 §6.1.
         let attested = self
             .authenticator_data
             .attested_credential
