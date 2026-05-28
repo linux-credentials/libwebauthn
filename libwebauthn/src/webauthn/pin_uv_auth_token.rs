@@ -22,7 +22,7 @@ use crate::{PinNotSetUpdate, PinRequiredUpdate, UvUpdate};
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 
 pub(crate) enum UsedPinUvAuthToken {
-    FromStorage,
+    FromEphemeralStorage,
     NewlyCalculated(Ctap2UserVerificationOperation),
     LegacyUV,
     SharedSecretOnly,
@@ -84,7 +84,7 @@ where
         );
         if let Some(uv_auth_token) = channel.get_uv_auth_token(&token_identifier) {
             ctap2_request.calculate_and_set_uv_auth(uv_proto.as_ref(), uv_auth_token)?;
-            return Ok(UsedPinUvAuthToken::FromStorage);
+            return Ok(UsedPinUvAuthToken::FromEphemeralStorage);
         }
     }
 
