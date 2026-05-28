@@ -13,16 +13,13 @@ use crate::{
         idl::{
             create::PublicKeyCredentialCreationOptionsJSON,
             get::PrfValuesJson,
-            origin::is_registrable_domain_suffix_or_equal,
             response::{
                 AuthenticationExtensionsClientOutputsJSON, AuthenticatorAttestationResponseJSON,
                 CredentialPropertiesOutputJSON, LargeBlobOutputJSON, PRFOutputJSON, PRFValuesJSON,
                 RegistrationResponseJSON, ResponseSerializationError, WebAuthnIDLResponse,
             },
-            Base64UrlString, FromIdlModel, JsonError, WebAuthnIDL,
+            rp_id_authorised, Base64UrlString, FromIdlModel, JsonError, RequestSettings,
         },
-        psl::PublicSuffixList,
-        related_origins::{validate_related_origins, RelatedOriginsHttpClient},
         Operation, PrfInputValue, PrfOutputValue, RelyingPartyId, RequestOrigin,
     },
     proto::{
@@ -368,31 +365,23 @@ impl MakeCredentialRequest {
 }
 
 #[async_trait]
-impl FromIdlModel<PublicKeyCredentialCreationOptionsJSON, MakeCredentialRequestParsingError>
-    for MakeCredentialRequest
-{
+impl FromIdlModel<PublicKeyCredentialCreationOptionsJSON> for MakeCredentialRequest {
+    type Error = MakeCredentialPrepareError;
+
     async fn from_idl_model(
         request_origin: &RequestOrigin,
-        psl: &dyn PublicSuffixList,
-        http: &dyn RelatedOriginsHttpClient,
+        settings: &RequestSettings<'_>,
         inner: PublicKeyCredentialCreationOptionsJSON,
-    ) -> Result<Self, MakeCredentialRequestParsingError> {
+    ) -> Result<Self, MakeCredentialPrepareError> {
         let effective_rp_id = request_origin.origin.host.as_str();
         let rp_id = RelyingPartyId::try_from(inner.rp.id.as_str()).map_err(|err| {
-            MakeCredentialRequestParsingError::InvalidRelyingPartyId(err.to_string())
+            MakeCredentialPrepareError::InvalidRelyingPartyId(err.to_string())
         })?;
-        if !is_registrable_domain_suffix_or_equal(&rp_id.0, effective_rp_id, psl) {
-            if let Err(err) =
-                validate_related_origins(&request_origin.origin, &rp_id, psl, http).await
-            {
-                debug!(rp_id = %rp_id.0, %err, "Related-origins validation failed");
-                return Err(
-                    MakeCredentialRequestParsingError::MismatchingRelyingPartyId(
-                        rp_id.0,
-                        effective_rp_id.to_string(),
-                    ),
-                );
-            }
+        if !rp_id_authorised(request_origin, &rp_id, settings).await {
+            return Err(MakeCredentialPrepareError::MismatchingRelyingPartyId(
+                rp_id.0,
+                effective_rp_id.to_string(),
+            ));
         }
         let mut relying_party = inner.rp;
         relying_party.id = rp_id.0;
@@ -443,7 +432,7 @@ impl FromIdlModel<PublicKeyCredentialCreationOptionsJSON, MakeCredentialRequestP
 }
 
 #[derive(thiserror::Error, Debug)]
-pub enum MakeCredentialRequestParsingError {
+pub enum MakeCredentialPrepareError {
     /// The client must throw an "EncodingError" DOMException.
     #[error("Invalid JSON format: {0}")]
     EncodingError(#[from] JsonError),
@@ -453,9 +442,17 @@ pub enum MakeCredentialRequestParsingError {
     MismatchingRelyingPartyId(String, String),
 }
 
-impl WebAuthnIDL<MakeCredentialRequestParsingError> for MakeCredentialRequest {
-    type Error = MakeCredentialRequestParsingError;
-    type IdlModel = PublicKeyCredentialCreationOptionsJSON;
+impl MakeCredentialRequest {
+    /// Builds a [`MakeCredentialRequest`] from its WebAuthn IDL JSON, validating
+    /// the caller origin against rp.id per `settings`.
+    pub async fn prepare(
+        request_origin: &RequestOrigin,
+        json: &str,
+        settings: &RequestSettings<'_>,
+    ) -> Result<Self, MakeCredentialPrepareError> {
+        let model: PublicKeyCredentialCreationOptionsJSON = serde_json::from_str(json)?;
+        Self::from_idl_model(request_origin, settings, model).await
+    }
 }
 
 #[derive(Debug, Default, Clone, Deserialize, PartialEq)]
@@ -701,53 +698,66 @@ mod tests {
 
     use async_trait::async_trait;
 
-    use crate::ops::webauthn::psl::MockPublicSuffixList;
+    use crate::ops::webauthn::psl::{MockPublicSuffixList, PublicSuffixList};
     use crate::ops::webauthn::related_origins::{
-        RelatedOriginsHttpClient, WellKnownFetchError, WellKnownResponse,
+        HttpClientError, MaxRegistrableLabels, RelatedOrigins, RelatedOriginsError,
+        RelatedOriginsSource,
     };
-    use crate::ops::webauthn::{MakeCredentialRequest, NoRelatedOriginsClient, RequestOrigin};
+    use crate::ops::webauthn::{MakeCredentialRequest, RequestOrigin};
     use crate::proto::ctap2::Ctap2PublicKeyCredentialType;
 
     use super::*;
 
-    /// Test-only HTTP client backed by a fixed response. `panicking` proves the
-    /// suffix-check short-circuit by failing the test if the fetch is invoked.
-    struct MockHttpClient {
-        response: Option<Result<WellKnownResponse, WellKnownFetchError>>,
+    // Fixed-result source; `panicking` proves the suffix-check short-circuit by
+    // failing if consulted.
+    struct MockSource {
+        result: Option<Result<Vec<String>, RelatedOriginsError>>,
     }
 
-    impl MockHttpClient {
-        fn ok_body(body: &str) -> Self {
+    impl MockSource {
+        fn origins(items: &[&str]) -> Self {
             Self {
-                response: Some(Ok(WellKnownResponse {
-                    content_type: Some("application/json".into()),
-                    body: body.as_bytes().to_vec(),
-                })),
+                result: Some(Ok(items.iter().map(|s| s.to_string()).collect())),
             }
         }
 
-        fn err(e: WellKnownFetchError) -> Self {
-            Self {
-                response: Some(Err(e)),
-            }
+        fn err(e: RelatedOriginsError) -> Self {
+            Self { result: Some(Err(e)) }
         }
 
         fn panicking() -> Self {
-            Self { response: None }
+            Self { result: None }
         }
     }
 
     #[async_trait]
-    impl RelatedOriginsHttpClient for MockHttpClient {
-        async fn fetch_well_known(
+    impl RelatedOriginsSource for MockSource {
+        async fn allowed_origins(
             &self,
             _: &RelyingPartyId,
-        ) -> Result<WellKnownResponse, WellKnownFetchError> {
-            match &self.response {
+        ) -> Result<Vec<String>, RelatedOriginsError> {
+            match &self.result {
                 Some(r) => r.clone(),
-                None => panic!("fetch_well_known should not be called"),
+                None => panic!("allowed_origins should not be called"),
             }
         }
+    }
+
+    async fn from_json(
+        origin: &RequestOrigin,
+        psl: &dyn PublicSuffixList,
+        related_origins: RelatedOrigins<'_>,
+        json: &str,
+    ) -> Result<MakeCredentialRequest, MakeCredentialPrepareError> {
+        MakeCredentialRequest::prepare(
+            origin,
+            json,
+            &RequestSettings {
+                public_suffix_list: psl,
+                related_origins,
+            },
+        )
+        .await
     }
 
     pub const REQUEST_BASE_JSON: &str = r#"
@@ -813,26 +823,26 @@ mod tests {
         let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
         let req_json = json_field_rm(REQUEST_BASE_JSON, field);
 
-        let result = MakeCredentialRequest::from_json(
+        let result = from_json(
             &request_origin,
             &MockPublicSuffixList,
-            &NoRelatedOriginsClient,
+            RelatedOrigins::Disabled,
             &req_json,
         )
         .await;
         assert!(matches!(
             result,
-            Err(MakeCredentialRequestParsingError::EncodingError(_))
+            Err(MakeCredentialPrepareError::EncodingError(_))
         ));
     }
 
     #[tokio::test]
     async fn test_request_from_json_base() {
         let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
-        let req: MakeCredentialRequest = MakeCredentialRequest::from_json(
+        let req: MakeCredentialRequest = from_json(
             &request_origin,
             &MockPublicSuffixList,
-            &NoRelatedOriginsClient,
+            RelatedOrigins::Disabled,
             REQUEST_BASE_JSON,
         )
         .await
@@ -867,16 +877,16 @@ mod tests {
         let req_json: String = json_field_rm(REQUEST_BASE_JSON, "challenge");
         let req_json = json_field_add(&req_json, "challenge", r#""""#);
 
-        let result = MakeCredentialRequest::from_json(
+        let result = from_json(
             &request_origin,
             &MockPublicSuffixList,
-            &NoRelatedOriginsClient,
+            RelatedOrigins::Disabled,
             &req_json,
         )
         .await;
         assert!(matches!(
             result,
-            Err(MakeCredentialRequestParsingError::EncodingError(_))
+            Err(MakeCredentialPrepareError::EncodingError(_))
         ));
     }
 
@@ -888,10 +898,10 @@ mod tests {
         let ext = format!(r#"{{"prf": {{"eval": {{"first": "{first}", "second": "{second}"}}}}}}"#);
         let req_json = json_field_add(REQUEST_BASE_JSON, "extensions", &ext);
 
-        let req: MakeCredentialRequest = MakeCredentialRequest::from_json(
+        let req: MakeCredentialRequest = from_json(
             &request_origin,
             &MockPublicSuffixList,
-            &NoRelatedOriginsClient,
+            RelatedOrigins::Disabled,
             &req_json,
         )
         .await
@@ -911,10 +921,10 @@ mod tests {
         let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
         let req_json = json_field_add(REQUEST_BASE_JSON, "extensions", r#"{"prf": {}}"#);
 
-        let req: MakeCredentialRequest = MakeCredentialRequest::from_json(
+        let req: MakeCredentialRequest = from_json(
             &request_origin,
             &MockPublicSuffixList,
-            &NoRelatedOriginsClient,
+            RelatedOrigins::Disabled,
             &req_json,
         )
         .await
@@ -931,10 +941,10 @@ mod tests {
         let ext = format!(r#"{{"prf": {{"eval": {{"first": "{short}"}}}}}}"#);
         let req_json = json_field_add(REQUEST_BASE_JSON, "extensions", &ext);
 
-        let req: MakeCredentialRequest = MakeCredentialRequest::from_json(
+        let req: MakeCredentialRequest = from_json(
             &request_origin,
             &MockPublicSuffixList,
-            &NoRelatedOriginsClient,
+            RelatedOrigins::Disabled,
             &req_json,
         )
         .await
@@ -958,10 +968,10 @@ mod tests {
             r#"{"appidExclude": "https://www.example.org/u2f/origins.json"}"#,
         );
 
-        let req: MakeCredentialRequest = MakeCredentialRequest::from_json(
+        let req: MakeCredentialRequest = from_json(
             &request_origin,
             &MockPublicSuffixList,
-            &NoRelatedOriginsClient,
+            RelatedOrigins::Disabled,
             &req_json,
         )
         .await
@@ -981,10 +991,10 @@ mod tests {
             "pubKeyCredParams",
             r#"[{"type": "something", "alg": -12345}]"#,
         );
-        let req: MakeCredentialRequest = MakeCredentialRequest::from_json(
+        let req: MakeCredentialRequest = from_json(
             &request_origin,
             &MockPublicSuffixList,
-            &NoRelatedOriginsClient,
+            RelatedOrigins::Disabled,
             &req_json,
         )
         .await
@@ -1003,10 +1013,10 @@ mod tests {
         let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
         let req_json = json_field_rm(REQUEST_BASE_JSON, "timeout");
 
-        let req: MakeCredentialRequest = MakeCredentialRequest::from_json(
+        let req: MakeCredentialRequest = from_json(
             &request_origin,
             &MockPublicSuffixList,
-            &NoRelatedOriginsClient,
+            RelatedOrigins::Disabled,
             &req_json,
         )
         .await
@@ -1021,10 +1031,10 @@ mod tests {
         let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
         let req_json = json_field_rm(REQUEST_BASE_JSON, "authenticatorSelection");
 
-        let req: MakeCredentialRequest = MakeCredentialRequest::from_json(
+        let req: MakeCredentialRequest = from_json(
             &request_origin,
             &MockPublicSuffixList,
-            &NoRelatedOriginsClient,
+            RelatedOrigins::Disabled,
             &req_json,
         )
         .await
@@ -1048,10 +1058,10 @@ mod tests {
             r#"{"residentKey": "discouraged"}"#,
         );
 
-        let req: MakeCredentialRequest = MakeCredentialRequest::from_json(
+        let req: MakeCredentialRequest = from_json(
             &request_origin,
             &MockPublicSuffixList,
-            &NoRelatedOriginsClient,
+            RelatedOrigins::Disabled,
             &req_json,
         )
         .await
@@ -1071,16 +1081,16 @@ mod tests {
             r#"{"id": "example.org.", "name": "example.org"}"#,
         );
 
-        let result = MakeCredentialRequest::from_json(
+        let result = from_json(
             &request_origin,
             &MockPublicSuffixList,
-            &NoRelatedOriginsClient,
+            RelatedOrigins::Disabled,
             &req_json,
         )
         .await;
         assert!(matches!(
             result,
-            Err(MakeCredentialRequestParsingError::InvalidRelyingPartyId(_))
+            Err(MakeCredentialPrepareError::InvalidRelyingPartyId(_))
         ));
     }
 
@@ -1093,16 +1103,16 @@ mod tests {
             r#"{"id": "other.example.org", "name": "example.org"}"#,
         );
 
-        let result = MakeCredentialRequest::from_json(
+        let result = from_json(
             &request_origin,
             &MockPublicSuffixList,
-            &NoRelatedOriginsClient,
+            RelatedOrigins::Disabled,
             &req_json,
         )
         .await;
         assert!(matches!(
             result,
-            Err(MakeCredentialRequestParsingError::MismatchingRelyingPartyId(_, _))
+            Err(MakeCredentialPrepareError::MismatchingRelyingPartyId(_, _))
         ));
     }
 
@@ -1115,10 +1125,10 @@ mod tests {
             r#"{"id": "example.org", "name": "example.org"}"#,
         );
 
-        let req = MakeCredentialRequest::from_json(
+        let req = from_json(
             &request_origin,
             &MockPublicSuffixList,
-            &NoRelatedOriginsClient,
+            RelatedOrigins::Disabled,
             &req_json,
         )
         .await
@@ -1136,16 +1146,16 @@ mod tests {
             r#"{"id": "co.uk", "name": "co.uk"}"#,
         );
 
-        let result = MakeCredentialRequest::from_json(
+        let result = from_json(
             &request_origin,
             &MockPublicSuffixList,
-            &NoRelatedOriginsClient,
+            RelatedOrigins::Disabled,
             &req_json,
         )
         .await;
         assert!(matches!(
             result,
-            Err(MakeCredentialRequestParsingError::MismatchingRelyingPartyId(_, _))
+            Err(MakeCredentialPrepareError::MismatchingRelyingPartyId(_, _))
         ));
     }
 
@@ -1158,10 +1168,10 @@ mod tests {
             r#"{"id": "localhost", "name": "localhost"}"#,
         );
 
-        let req = MakeCredentialRequest::from_json(
+        let req = from_json(
             &request_origin,
             &MockPublicSuffixList,
-            &NoRelatedOriginsClient,
+            RelatedOrigins::Disabled,
             &req_json,
         )
         .await
@@ -1179,10 +1189,10 @@ mod tests {
             r#"{"id": "localhost", "name": "localhost"}"#,
         );
 
-        let req = MakeCredentialRequest::from_json(
+        let req = from_json(
             &request_origin,
             &MockPublicSuffixList,
-            &NoRelatedOriginsClient,
+            RelatedOrigins::Disabled,
             &req_json,
         )
         .await
@@ -1202,12 +1212,15 @@ mod tests {
             "rp",
             r#"{"id": "example.com", "name": "example.com"}"#,
         );
-        let http = MockHttpClient::ok_body(r#"{"origins":["https://app.example.org"]}"#);
+        let source = MockSource::origins(&["https://app.example.org"]);
 
-        let req = MakeCredentialRequest::from_json(
+        let req = from_json(
             &request_origin,
             &MockPublicSuffixList,
-            &http,
+            RelatedOrigins::Enabled {
+                source: &source,
+                max_labels: MaxRegistrableLabels::default(),
+            },
             &req_json,
         )
         .await
@@ -1223,18 +1236,21 @@ mod tests {
             "rp",
             r#"{"id": "example.com", "name": "example.com"}"#,
         );
-        let http = MockHttpClient::ok_body(r#"{"origins":["https://other.org"]}"#);
+        let source = MockSource::origins(&["https://other.org"]);
 
-        let result = MakeCredentialRequest::from_json(
+        let result = from_json(
             &request_origin,
             &MockPublicSuffixList,
-            &http,
+            RelatedOrigins::Enabled {
+                source: &source,
+                max_labels: MaxRegistrableLabels::default(),
+            },
             &req_json,
         )
         .await;
         assert!(matches!(
             result,
-            Err(MakeCredentialRequestParsingError::MismatchingRelyingPartyId(_, _))
+            Err(MakeCredentialPrepareError::MismatchingRelyingPartyId(_, _))
         ));
     }
 
@@ -1246,18 +1262,23 @@ mod tests {
             "rp",
             r#"{"id": "example.com", "name": "example.com"}"#,
         );
-        let http = MockHttpClient::err(WellKnownFetchError::Transport("simulated".into()));
+        let source = MockSource::err(RelatedOriginsError::Http(HttpClientError::Transport(
+            "simulated".into(),
+        )));
 
-        let result = MakeCredentialRequest::from_json(
+        let result = from_json(
             &request_origin,
             &MockPublicSuffixList,
-            &http,
+            RelatedOrigins::Enabled {
+                source: &source,
+                max_labels: MaxRegistrableLabels::default(),
+            },
             &req_json,
         )
         .await;
         assert!(matches!(
             result,
-            Err(MakeCredentialRequestParsingError::MismatchingRelyingPartyId(_, _))
+            Err(MakeCredentialPrepareError::MismatchingRelyingPartyId(_, _))
         ));
     }
 
@@ -1269,12 +1290,15 @@ mod tests {
             "rp",
             r#"{"id": "example.com", "name": "example.com"}"#,
         );
-        let http = MockHttpClient::panicking();
+        let source = MockSource::panicking();
 
-        let req = MakeCredentialRequest::from_json(
+        let req = from_json(
             &request_origin,
             &MockPublicSuffixList,
-            &http,
+            RelatedOrigins::Enabled {
+                source: &source,
+                max_labels: MaxRegistrableLabels::default(),
+            },
             &req_json,
         )
         .await

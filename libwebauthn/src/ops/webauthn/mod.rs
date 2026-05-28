@@ -11,8 +11,8 @@ use crate::webauthn::CtapError;
 pub use client_data::ClientData;
 pub use get_assertion::{
     Assertion, Ctap2HMACGetSecretOutput, GetAssertionHmacOrPrfInput,
-    GetAssertionLargeBlobExtension, GetAssertionLargeBlobExtensionOutput, GetAssertionPrfOutput,
-    GetAssertionRequest, GetAssertionRequestExtensions, GetAssertionResponse,
+    GetAssertionLargeBlobExtension, GetAssertionLargeBlobExtensionOutput, GetAssertionPrepareError,
+    GetAssertionPrfOutput, GetAssertionRequest, GetAssertionRequestExtensions, GetAssertionResponse,
     GetAssertionResponseExtensions, GetAssertionResponseUnsignedExtensions, HMACGetSecretInput,
     HMACGetSecretOutput, PrfInput, PrfInputValue, PrfOutputValue,
 };
@@ -21,14 +21,15 @@ pub use idl::{
     rpid::RelyingPartyId,
     AuthenticationExtensionsClientOutputsJSON, AuthenticationResponseJSON,
     AuthenticatorAssertionResponseJSON, AuthenticatorAttestationResponseJSON, Base64UrlString,
-    JsonFormat, RegistrationResponseJSON, ResponseSerializationError, WebAuthnIDL,
+    JsonFormat, RegistrationResponseJSON, RequestSettings, ResponseSerializationError,
     WebAuthnIDLResponse,
 };
 pub use make_credential::{
     CredentialPropsExtension, CredentialProtectionExtension, CredentialProtectionPolicy,
     MakeCredentialLargeBlobExtension, MakeCredentialLargeBlobExtensionInput,
-    MakeCredentialLargeBlobExtensionOutput, MakeCredentialPrfInput, MakeCredentialPrfOutput,
-    MakeCredentialRequest, MakeCredentialResponse, MakeCredentialsRequestExtensions,
+    MakeCredentialLargeBlobExtensionOutput, MakeCredentialPrepareError, MakeCredentialPrfInput,
+    MakeCredentialPrfOutput, MakeCredentialRequest, MakeCredentialResponse,
+    MakeCredentialsRequestExtensions,
     MakeCredentialsResponseExtensions, MakeCredentialsResponseUnsignedExtensions,
     ResidentKeyRequirement,
 };
@@ -38,11 +39,11 @@ pub use psl::{
     SYSTEM_PSL_PATH,
 };
 pub use related_origins::{
-    validate_related_origins, NoRelatedOriginsClient, RelatedOriginsError,
-    RelatedOriginsHttpClient, WellKnownFetchError, WellKnownResponse,
+    validate_related_origins, HttpClient, HttpClientError, MaxRegistrableLabels, RelatedOrigins,
+    RelatedOriginsError, RelatedOriginsSource, WellKnownRelatedOriginsSource,
 };
-#[cfg(feature = "related-origins-client")]
-pub use related_origins::{HttpPolicy, ReqwestRelatedOriginsClient};
+#[cfg(feature = "reqwest-related-origins-source")]
+pub use related_origins::{HttpPolicy, ReqwestHttpClient, ReqwestRelatedOriginsSource};
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq)]
