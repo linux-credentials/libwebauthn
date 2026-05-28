@@ -189,6 +189,7 @@ bitflags! {
         const BIO_ENROLLMENT = 0x08;
         const LARGE_BLOB_WRITE = 0x10;
         const AUTHENTICATOR_CONFIGURATION = 0x20;
+        const PERSISTENT_CREDENTIAL_MANAGEMENT_READ_ONLY = 0x40;
     }
 }
 
@@ -248,4 +249,18 @@ pub struct Ctap2ClientPinResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(index = 0x05)]
     pub uv_retries: Option<u32>,
+}
+
+#[cfg(test)]
+mod test {
+    use super::Ctap2AuthTokenPermissionRole;
+
+    #[test]
+    fn pcmr_permission_bit() {
+        let pcmr = Ctap2AuthTokenPermissionRole::PERSISTENT_CREDENTIAL_MANAGEMENT_READ_ONLY;
+        // CTAP 2.3-PS section 6.5.5.7: pcmr is 0x40.
+        assert_eq!(pcmr.bits(), 0x40);
+        // Disjoint from every other permission, so the existing subset test isolates it.
+        assert!(!pcmr.intersects(Ctap2AuthTokenPermissionRole::all().difference(pcmr)));
+    }
 }
