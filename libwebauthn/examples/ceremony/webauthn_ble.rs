@@ -1,8 +1,9 @@
 use std::error::Error;
 
 use libwebauthn::ops::webauthn::{
-    DatFilePublicSuffixList, GetAssertionRequest, JsonFormat, MakeCredentialRequest, RequestOrigin,
-    ReqwestRelatedOriginsClient, WebAuthnIDL as _, WebAuthnIDLResponse as _,
+    DatFilePublicSuffixList, GetAssertionRequest, JsonFormat, MakeCredentialRequest,
+    MaxRegistrableLabels, RelatedOrigins, RequestOrigin, RequestSettings,
+    ReqwestRelatedOriginsSource, WebAuthnIDLResponse as _,
 };
 use libwebauthn::proto::ctap2::Ctap2PublicKeyCredentialDescriptor;
 use libwebauthn::transport::ble::list_devices;
@@ -52,9 +53,16 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
                     "attestation": "none"
                 }
                 "#;
-        let related_origins = ReqwestRelatedOriginsClient::new()?;
+        let related_origins = ReqwestRelatedOriginsSource::new()?;
+        let settings = RequestSettings {
+            public_suffix_list: &psl,
+            related_origins: RelatedOrigins::Enabled {
+                source: &related_origins,
+                max_labels: MaxRegistrableLabels::default(),
+            },
+        };
         let make_credentials_request: MakeCredentialRequest =
-            MakeCredentialRequest::from_json(&request_origin, &psl, &related_origins, request_json)
+            MakeCredentialRequest::prepare(&request_origin, request_json, &settings)
                 .await
                 .expect("Failed to parse request JSON");
         println!(
@@ -99,7 +107,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
                 "#
         );
         let get_assertion: GetAssertionRequest =
-            GetAssertionRequest::from_json(&request_origin, &psl, &related_origins, &request_json)
+            GetAssertionRequest::prepare(&request_origin, &request_json, &settings)
                 .await
                 .expect("Failed to parse request JSON");
         println!("WebAuthn GetAssertion request: {:?}", get_assertion);

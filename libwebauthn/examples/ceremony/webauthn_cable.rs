@@ -11,8 +11,9 @@ use qrcode::render::unicode;
 use qrcode::QrCode;
 
 use libwebauthn::ops::webauthn::{
-    DatFilePublicSuffixList, JsonFormat, MakeCredentialRequest, RequestOrigin,
-    ReqwestRelatedOriginsClient, WebAuthnIDL as _, WebAuthnIDLResponse as _,
+    DatFilePublicSuffixList, JsonFormat, MakeCredentialRequest, MaxRegistrableLabels,
+    RelatedOrigins, RequestOrigin, RequestSettings, ReqwestRelatedOriginsSource,
+    WebAuthnIDLResponse as _,
 };
 use libwebauthn::transport::{Channel as _, Device};
 use libwebauthn::webauthn::WebAuthn;
@@ -58,7 +59,14 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
     let psl = DatFilePublicSuffixList::from_system_file().expect(
         "PSL not available; install the publicsuffix-list package or pass an explicit path",
     );
-    let related_origins = ReqwestRelatedOriginsClient::new()?;
+    let related_origins = ReqwestRelatedOriginsSource::new()?;
+    let settings = RequestSettings {
+        public_suffix_list: &psl,
+        related_origins: RelatedOrigins::Enabled {
+            source: &related_origins,
+            max_labels: MaxRegistrableLabels::default(),
+        },
+    };
 
     let mut device: CableQrCodeDevice = CableQrCodeDevice::new_transient(
         QrCodeOperationHint::MakeCredential,
@@ -80,11 +88,10 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
     let state_recv = channel.get_ux_update_receiver();
     tokio::spawn(common::handle_cable_updates(state_recv));
 
-    let request = MakeCredentialRequest::from_json(
+    let request = MakeCredentialRequest::prepare(
         &request_origin,
-        &psl,
-        &related_origins,
         MAKE_CREDENTIAL_REQUEST,
+        &settings,
     )
     .await
     .expect("Failed to parse request JSON");

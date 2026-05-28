@@ -1,13 +1,12 @@
-//! End-to-end related-origins integration tests (WebAuthn L3 §5.11).
-//!
-//! Drives `MakeCredentialRequest::from_json` / `GetAssertionRequest::from_json`
-//! with a mock HTTP client and a tiny inline PSL impl. No network.
+//! End-to-end related-origins integration tests (WebAuthn L3 §5.11). Drives
+//! `prepare` with a mock HTTP client behind the well-known source and a tiny
+//! inline PSL. No network.
 
 use async_trait::async_trait;
 
 use libwebauthn::ops::webauthn::{
-    GetAssertionRequest, MakeCredentialRequest, PublicSuffixList, RelatedOriginsHttpClient,
-    RelyingPartyId, RequestOrigin, WebAuthnIDL, WellKnownFetchError, WellKnownResponse,
+    GetAssertionRequest, HttpClient, HttpClientError, MakeCredentialRequest, MaxRegistrableLabels,
+    PublicSuffixList, RelatedOrigins, RequestOrigin, RequestSettings, WellKnownRelatedOriginsSource,
 };
 
 const KNOWN_SUFFIXES: &[&str] = &["com", "org"];
@@ -35,15 +34,13 @@ struct StaticHttp {
 }
 
 #[async_trait]
-impl RelatedOriginsHttpClient for StaticHttp {
-    async fn fetch_well_known(
-        &self,
-        _: &RelyingPartyId,
-    ) -> Result<WellKnownResponse, WellKnownFetchError> {
-        Ok(WellKnownResponse {
-            content_type: Some("application/json".into()),
-            body: self.body.as_bytes().to_vec(),
-        })
+impl HttpClient for StaticHttp {
+    async fn get(&self, _: &url::Url) -> Result<http::Response<Vec<u8>>, HttpClientError> {
+        Ok(http::Response::builder()
+            .status(200)
+            .header(http::header::CONTENT_TYPE, "application/json")
+            .body(self.body.as_bytes().to_vec())
+            .unwrap())
     }
 }
 
@@ -52,8 +49,8 @@ const MAKE_CREDENTIAL_JSON: &str = r#"
     "rp": {"id": "example.org", "name": "example.org"},
     "user": {
         "id": "dXNlcmlk",
-        "name": "mario.rossi",
-        "displayName": "Mario Rossi"
+        "name": "alice",
+        "displayName": "Alice"
     },
     "challenge": "Y3JlZGVudGlhbHMtZm9yLWxpbnV4L2xpYndlYmF1dGhu",
     "pubKeyCredParams": [{"type": "public-key", "alg": -7}],
@@ -79,22 +76,33 @@ const GET_ASSERTION_JSON: &str = r#"
 }
 "#;
 
-// Caller and rp.id sit on different eTLDs (`example.com` vs `example.org`),
-// matching the §8.3 design example so the related-origins fetch path is
-// actually exercised.
+// Caller and rp.id sit on different eTLDs (`example.com` vs `example.org`) so the
+// related-origins fetch path is actually exercised.
 const WELL_KNOWN_BODY: &str = r#"{"origins":["https://app.example.com","https://example.org"]}"#;
+
+fn settings<'a>(psl: &'a TestPsl, source: &'a WellKnownRelatedOriginsSource<StaticHttp>) -> RequestSettings<'a> {
+    RequestSettings {
+        public_suffix_list: psl,
+        related_origins: RelatedOrigins::Enabled {
+            source,
+            max_labels: MaxRegistrableLabels::default(),
+        },
+    }
+}
 
 #[tokio::test]
 async fn end_to_end_mock_match_via_make_credential() {
     let request_origin: RequestOrigin = "https://app.example.com".parse().unwrap();
-    let http = StaticHttp {
-        body: WELL_KNOWN_BODY,
-    };
+    let psl = TestPsl;
+    let source = WellKnownRelatedOriginsSource::from_client(StaticHttp { body: WELL_KNOWN_BODY });
 
-    let req =
-        MakeCredentialRequest::from_json(&request_origin, &TestPsl, &http, MAKE_CREDENTIAL_JSON)
-            .await
-            .unwrap();
+    let req = MakeCredentialRequest::prepare(
+        &request_origin,
+        MAKE_CREDENTIAL_JSON,
+        &settings(&psl, &source),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(req.relying_party.id, "example.org");
     assert!(req
@@ -105,13 +113,16 @@ async fn end_to_end_mock_match_via_make_credential() {
 #[tokio::test]
 async fn end_to_end_mock_match_via_get_assertion() {
     let request_origin: RequestOrigin = "https://app.example.com".parse().unwrap();
-    let http = StaticHttp {
-        body: WELL_KNOWN_BODY,
-    };
+    let psl = TestPsl;
+    let source = WellKnownRelatedOriginsSource::from_client(StaticHttp { body: WELL_KNOWN_BODY });
 
-    let req = GetAssertionRequest::from_json(&request_origin, &TestPsl, &http, GET_ASSERTION_JSON)
-        .await
-        .unwrap();
+    let req = GetAssertionRequest::prepare(
+        &request_origin,
+        GET_ASSERTION_JSON,
+        &settings(&psl, &source),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(req.relying_party_id, "example.org");
     assert!(req

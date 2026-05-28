@@ -1,8 +1,8 @@
 use std::error::Error;
 
 use libwebauthn::ops::webauthn::{
-    GetAssertionRequest, JsonFormat, MakeCredentialRequest, RequestOrigin,
-    ReqwestRelatedOriginsClient, SystemPublicSuffixList, WebAuthnIDL as _,
+    GetAssertionRequest, JsonFormat, MakeCredentialRequest, MaxRegistrableLabels, RelatedOrigins,
+    RequestOrigin, RequestSettings, ReqwestRelatedOriginsSource, SystemPublicSuffixList,
     WebAuthnIDLResponse as _,
 };
 use libwebauthn::transport::nfc::{get_nfc_device, is_nfc_available};
@@ -31,11 +31,16 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
     let psl = SystemPublicSuffixList::auto().expect(
         "PSL not available; install the publicsuffix-list (or publicsuffix-list-dafsa) package, or pass an explicit path",
     );
-    let related_origins = ReqwestRelatedOriginsClient::new()?;
-    let make_credentials_request = MakeCredentialRequest::from_json(
+    let related_origins = ReqwestRelatedOriginsSource::new()?;
+    let settings = RequestSettings {
+        public_suffix_list: &psl,
+        related_origins: RelatedOrigins::Enabled {
+            source: &related_origins,
+            max_labels: MaxRegistrableLabels::default(),
+        },
+    };
+    let make_credentials_request = MakeCredentialRequest::prepare(
         &request_origin,
-        &psl,
-        &related_origins,
         r#"
         {
             "rp": {
@@ -60,6 +65,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             "attestation": "none"
         }
         "#,
+        &settings,
     )
     .await
     .expect("Failed to parse request JSON");
@@ -78,10 +84,8 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         .expect("Failed to serialize MakeCredential response");
     println!("WebAuthn MakeCredential response (JSON):\n{response_json}");
 
-    let get_assertion = GetAssertionRequest::from_json(
+    let get_assertion = GetAssertionRequest::prepare(
         &request_origin,
-        &psl,
-        &related_origins,
         r#"
         {
             "challenge": "Y3JlZGVudGlhbHMtZm9yLWxpbnV4L2xpYndlYmF1dGhu",
@@ -90,6 +94,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             "userVerification": "discouraged"
         }
         "#,
+        &settings,
     )
     .await
     .expect("Failed to parse request JSON");
