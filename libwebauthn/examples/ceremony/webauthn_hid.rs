@@ -2,8 +2,8 @@ use std::error::Error;
 use std::time::Duration;
 
 use libwebauthn::ops::webauthn::{
-    GetAssertionRequest, JsonFormat, MakeCredentialRequest, RequestOrigin,
-    ReqwestRelatedOriginsClient, SystemPublicSuffixList, WebAuthnIDL as _,
+    GetAssertionRequest, JsonFormat, MakeCredentialRequest, MaxRegistrableLabels, RelatedOrigins,
+    RequestOrigin, RequestSettings, ReqwestRelatedOriginsSource, SystemPublicSuffixList,
     WebAuthnIDLResponse as _,
 };
 use libwebauthn::proto::ctap2::Ctap2PublicKeyCredentialDescriptor;
@@ -33,7 +33,14 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         let psl = SystemPublicSuffixList::auto().expect(
             "PSL not available; install the publicsuffix-list (or publicsuffix-list-dafsa) package, or pass an explicit path",
         );
-        let related_origins = ReqwestRelatedOriginsClient::new()?;
+        let related_origins = ReqwestRelatedOriginsSource::new()?;
+        let settings = RequestSettings {
+            public_suffix_list: &psl,
+            related_origins: RelatedOrigins::Enabled {
+                source: &related_origins,
+                max_labels: MaxRegistrableLabels::default(),
+            },
+        };
         let request_json = r#"
                 {
                     "rp": {
@@ -59,7 +66,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
                 }
                 "#;
         let make_credentials_request: MakeCredentialRequest =
-            MakeCredentialRequest::from_json(&request_origin, &psl, &related_origins, request_json)
+            MakeCredentialRequest::prepare(&request_origin, request_json, &settings)
                 .await
                 .expect("Failed to parse request JSON");
         println!(
@@ -104,7 +111,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
                 "#
         );
         let get_assertion: GetAssertionRequest =
-            GetAssertionRequest::from_json(&request_origin, &psl, &related_origins, &request_json)
+            GetAssertionRequest::prepare(&request_origin, &request_json, &settings)
                 .await
                 .expect("Failed to parse request JSON");
         println!("WebAuthn GetAssertion request: {:?}", get_assertion);
