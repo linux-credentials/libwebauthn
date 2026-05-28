@@ -254,7 +254,7 @@ impl std::fmt::Debug for Ctap2COSEAlgorithmIdentifier {
             _ => None,
         };
         match name {
-            Some(n) => write!(f, "Ctap2COSEAlgorithmIdentifier::{}", n),
+            Some(n) => write!(f, "Ctap2COSEAlgorithmIdentifier::{}({})", n, self.0),
             None => write!(f, "Ctap2COSEAlgorithmIdentifier({})", self.0),
         }
     }
