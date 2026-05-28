@@ -59,6 +59,9 @@ pub enum Ctap2CommandCode {
     AuthenticatorCredentialManagementPreview = 0x41,
     AuthenticatorSelection = 0x0B,
     AuthenticatorConfig = 0x0D,
+    // TODO: authenticatorReset (0x07) is not implemented. When it is added, a successful
+    // reset must evict this device's persistent pcmr record from the persistent token
+    // store, since reset regenerates the device identifier and invalidates the token.
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

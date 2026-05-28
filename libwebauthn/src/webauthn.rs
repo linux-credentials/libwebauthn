@@ -53,6 +53,17 @@ macro_rules! handle_errors {
                 $channel.clear_uv_auth_token_store();
                 continue;
             }
+            Err(Error::Ctap(CtapError::PINAuthInvalid))
+                if matches!($uv_auth_used, UsedPinUvAuthToken::FromPersistentStorage(_)) =>
+            {
+                info!("PINAuthInvalid on a persistent token: evicting the record and retrying.");
+                if let UsedPinUvAuthToken::FromPersistentStorage(id) = &$uv_auth_used {
+                    if let Some(store) = $channel.persistent_token_store() {
+                        store.delete(id).await;
+                    }
+                }
+                continue;
+            }
             Err(Error::Ctap(CtapError::UVInvalid)) => {
                 let attempts_left = $channel
                     .ctap2_client_pin(&Ctap2ClientPinRequest::new_get_uv_retries(), $timeout)

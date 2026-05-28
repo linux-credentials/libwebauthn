@@ -31,6 +31,7 @@ use tracing::{error, instrument, warn};
 use x509_parser::nom::AsBytes;
 
 pub mod persistent_token;
+use persistent_token::recognize_authenticator;
 
 use crate::{
     proto::{
@@ -525,6 +526,16 @@ pub(crate) mod internal {
                 return Err(Error::Platform(PlatformError::PinTooLong));
             }
 
+            // A successful PIN set/change invalidates this authenticator's persistent token
+            // (resetPersistentPinUvAuthToken). Identify our record now, while the current
+            // token still matches encIdentifier, so we can evict it once the change succeeds.
+            let persistent_record_id = match self.persistent_token_store() {
+                Some(store) => recognize_authenticator(store.as_ref(), get_info_response)
+                    .await
+                    .map(|(id, _)| id),
+                None => None,
+            };
+
             let Some(uv_proto) = select_uv_proto(
                 #[cfg(feature = "virt")]
                 self.get_forced_pin_protocol(),
@@ -610,6 +621,13 @@ pub(crate) mod internal {
 
             // On success, this is an all-empty Ctap2ClientPinResponse
             let _ = self.ctap2_client_pin(&req, timeout).await?;
+
+            // The PIN set/change cleared the persistent token; drop our now-stale record.
+            if let Some(id) = persistent_record_id {
+                if let Some(store) = self.persistent_token_store() {
+                    store.delete(&id).await;
+                }
+            }
             Ok(())
         }
     }

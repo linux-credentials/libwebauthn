@@ -216,6 +216,7 @@ pub(crate) async fn store_minted_token(
         error!(len = info.aaguid.len(), "AAGUID was not 16 bytes");
         Error::Ctap(CtapError::Other)
     })?;
+    reap_superseded_records(store, &device_identifier).await;
     let id = new_record_id();
     let record = PersistentTokenRecord {
         persistent_token: token.to_vec(),
@@ -226,6 +227,23 @@ pub(crate) async fn store_minted_token(
     store.put(&id, &record).await;
     debug!(?id, "Stored freshly minted persistent token");
     Ok(id)
+}
+
+/// Delete every stored record for this device epoch (matching device identifier). Run at
+/// mint time, this replaces a token superseded out of band, e.g. a PIN change made on
+/// another platform: the device identifier is stable across PIN changes, only the token
+/// resets. Records for other devices carry a different identifier and are left untouched,
+/// so a sibling key of the same model keeps its own token. A record left behind by an
+/// authenticatorReset (which regenerates the identifier) is indistinguishable from a
+/// sibling's and is therefore left for the embedder to prune rather than risk evicting a
+/// live sibling token.
+async fn reap_superseded_records(store: &dyn PersistentTokenStore, device_identifier: &[u8; 16]) {
+    for (id, record) in store.list().await {
+        if &record.device_identifier == device_identifier {
+            debug!(?id, "Reaping superseded persistent token record");
+            store.delete(&id).await;
+        }
+    }
 }
 
 /// Test-only: build an `encIdentifier` (`iv || ct`) for a device identifier under a
@@ -473,5 +491,50 @@ mod test {
         store.put(&"id-1".to_string(), &sample_record()).await;
         let info = Ctap2GetInfoResponse::default();
         assert!(recognize_authenticator(&store, &info).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn mint_reaps_same_device_and_preserves_sibling() {
+        let store = MemoryPersistentTokenStore::new();
+        let device = [0x42; 16];
+        let sibling = [0x99; 16];
+        let aaguid = [0x07; 16];
+
+        // A stale record for this device, plus a sibling key of the same model.
+        store
+            .put(&"old".to_string(), &record_with(vec![0x11; 32], device))
+            .await;
+        store
+            .put(
+                &"sibling".to_string(),
+                &record_with(vec![0x22; 32], sibling),
+            )
+            .await;
+
+        let minted = vec![0x33; 32];
+        let info = Ctap2GetInfoResponse {
+            aaguid: ByteBuf::from(aaguid.to_vec()),
+            enc_identifier: Some(ByteBuf::from(build_enc_identifier(
+                &minted,
+                &device,
+                &[0x55; 16],
+            ))),
+            ..Default::default()
+        };
+
+        let new_id = store_minted_token(&store, &info, &minted, Ctap2PinUvAuthProtocol::One)
+            .await
+            .unwrap();
+
+        let listed = store.list().await;
+        // The old same-device record is reaped; the sibling and the new record remain.
+        assert_eq!(listed.len(), 2);
+        assert!(listed.iter().all(|(id, _)| id != "old"));
+        let new = listed.iter().find(|(id, _)| id == &new_id).unwrap();
+        assert_eq!(new.1.device_identifier, device);
+        assert_eq!(new.1.persistent_token, minted);
+        let sib = listed.iter().find(|(id, _)| id == "sibling").unwrap();
+        assert_eq!(sib.1.device_identifier, sibling);
+        assert_eq!(sib.1.persistent_token, vec![0x22; 32]);
     }
 }
