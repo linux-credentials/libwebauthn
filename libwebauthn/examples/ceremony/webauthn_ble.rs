@@ -2,8 +2,7 @@ use std::error::Error;
 
 use libwebauthn::ops::webauthn::{
     DatFilePublicSuffixList, GetAssertionRequest, JsonFormat, MakeCredentialRequest,
-    MaxRegistrableLabels, OriginValidation, RelatedOrigins, RequestOrigin, RequestSettings,
-    ReqwestRelatedOriginsSource, WebAuthnIDLResponse as _,
+    OriginValidation, RelatedOrigins, RequestOrigin, RequestSettings, WebAuthnIDLResponse as _,
 };
 use libwebauthn::proto::ctap2::Ctap2PublicKeyCredentialDescriptor;
 use libwebauthn::transport::ble::list_devices;
@@ -53,14 +52,10 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
                     "attestation": "none"
                 }
                 "#;
-        let related_origins = ReqwestRelatedOriginsSource::new()?;
         let settings = RequestSettings {
             origin: OriginValidation::Validate {
                 public_suffix_list: &psl,
-                related_origins: RelatedOrigins::Enabled {
-                    source: &related_origins,
-                    max_labels: MaxRegistrableLabels::default(),
-                },
+                related_origins: RelatedOrigins::Disabled,
             },
         };
         let make_credentials_request: MakeCredentialRequest =

@@ -142,27 +142,23 @@ required-features = ["nfc"]
 [[example]]
 name = "webauthn_hid"
 path = "examples/ceremony/webauthn_hid.rs"
-required-features = ["reqwest-related-origins-source"]
 
 [[example]]
 name = "webauthn_ble"
 path = "examples/ceremony/webauthn_ble.rs"
-required-features = ["reqwest-related-origins-source"]
 
 [[example]]
 name = "webauthn_nfc"
 path = "examples/ceremony/webauthn_nfc.rs"
-required-features = ["nfc", "reqwest-related-origins-source"]
+required-features = ["nfc"]
 
 [[example]]
 name = "webauthn_cable"
 path = "examples/ceremony/webauthn_cable.rs"
-required-features = ["reqwest-related-origins-source"]
 
 [[example]]
 name = "webauthn_cable_wss"
 path = "examples/ceremony/webauthn_cable_wss.rs"
-required-features = ["reqwest-related-origins-source"]
 
 [[example]]
 name = "webauthn_extensions_hid"
@@ -175,6 +171,11 @@ path = "examples/features/webauthn_preflight_hid.rs"
 [[example]]
 name = "webauthn_prf_hid"
 path = "examples/features/webauthn_prf_hid.rs"
+
+[[example]]
+name = "webauthn_related_origins_hid"
+path = "examples/features/webauthn_related_origins_hid.rs"
+required-features = ["reqwest-related-origins-source"]
 
 [[example]]
 name = "prf_replay"

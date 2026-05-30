@@ -11,9 +11,8 @@ use qrcode::render::unicode;
 use qrcode::QrCode;
 
 use libwebauthn::ops::webauthn::{
-    DatFilePublicSuffixList, JsonFormat, MakeCredentialRequest, MaxRegistrableLabels,
-    OriginValidation, RelatedOrigins, RequestOrigin, RequestSettings, ReqwestRelatedOriginsSource,
-    WebAuthnIDLResponse as _,
+    DatFilePublicSuffixList, JsonFormat, MakeCredentialRequest, OriginValidation, RelatedOrigins,
+    RequestOrigin, RequestSettings, WebAuthnIDLResponse as _,
 };
 use libwebauthn::transport::{Channel as _, Device};
 use libwebauthn::webauthn::WebAuthn;
@@ -59,14 +58,10 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
     let psl = DatFilePublicSuffixList::from_system_file().expect(
         "PSL not available; install the publicsuffix-list package or pass an explicit path",
     );
-    let related_origins = ReqwestRelatedOriginsSource::new()?;
     let settings = RequestSettings {
         origin: OriginValidation::Validate {
             public_suffix_list: &psl,
-            related_origins: RelatedOrigins::Enabled {
-                source: &related_origins,
-                max_labels: MaxRegistrableLabels::default(),
-            },
+            related_origins: RelatedOrigins::Disabled,
         },
     };
 

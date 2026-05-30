@@ -70,15 +70,15 @@ WebAuthn examples consume and emit JSON per the [WebAuthn IDL][webauthn].
 
 | Transport                        | FIDO U2F                                                                                                                 | WebAuthn (FIDO2) [^ro]                                                                                                                                                          |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **USB (HID)**                    | `cargo run --example u2f_hid`                                                                                            | `cargo run --features reqwest-related-origins-source --example webauthn_hid`                                                                                                            |
-| **Bluetooth (BLE)**              | `cargo run --example u2f_ble`                                                                                            | `cargo run --features reqwest-related-origins-source --example webauthn_ble`                                                                                                            |
-| **NFC** [^nfc]                   | `cargo run --features nfc-backend-pcsc --example u2f_nfc`<br>`cargo run --features nfc-backend-libnfc --example u2f_nfc` | `cargo run --features nfc-backend-pcsc,reqwest-related-origins-source --example webauthn_nfc`<br>`cargo run --features nfc-backend-libnfc,reqwest-related-origins-source --example webauthn_nfc` |
-| **Hybrid (caBLE v2 + CTAP 2.3)** | —                                                                                                                        | `cargo run --features reqwest-related-origins-source --example webauthn_cable`                                                                                                          |
-| **Hybrid (caBLE v2)**            | —                                                                                                                        | `cargo run --features reqwest-related-origins-source --example webauthn_cable_wss`                                                                                                      |
+| **USB (HID)**                    | `cargo run --example u2f_hid`                                                                                            | `cargo run --example webauthn_hid`                                                                                                            |
+| **Bluetooth (BLE)**              | `cargo run --example u2f_ble`                                                                                            | `cargo run --example webauthn_ble`                                                                                                            |
+| **NFC** [^nfc]                   | `cargo run --features nfc-backend-pcsc --example u2f_nfc`<br>`cargo run --features nfc-backend-libnfc --example u2f_nfc` | `cargo run --features nfc-backend-pcsc --example webauthn_nfc`<br>`cargo run --features nfc-backend-libnfc --example webauthn_nfc` |
+| **Hybrid (caBLE v2 + CTAP 2.3)** | —                                                                                                                        | `cargo run --example webauthn_cable`                                                                                                          |
+| **Hybrid (caBLE v2)**            | —                                                                                                                        | `cargo run --example webauthn_cable_wss`                                                                                                      |
 
 [^nfc]: `nfc-backend-pcsc` is pure userspace and recommended on most systems. `nfc-backend-libnfc` requires the `libnfc` system library. Both can be enabled together; the first FIDO device found by either backend is used.
 
-[^ro]: The WebAuthn ceremony examples wire up the bundled reqwest-backed [related-origins](https://www.w3.org/TR/webauthn-3/#sctn-related-origins) source, which lives behind the optional `reqwest-related-origins-source` feature. Consumers that already ship their own HTTP stack can implement `HttpClient` or `RelatedOriginsSource` directly and omit the feature.
+[^ro]: The ceremony examples run with related origins disabled (they are same-origin, so it never applies). The bundled reqwest-backed [related-origins](https://www.w3.org/TR/webauthn-3/#sctn-related-origins) source is shown in the `webauthn_related_origins_hid` example below, behind the optional `reqwest-related-origins-source` feature. Consumers that ship their own HTTP stack can implement `HttpClient` or `RelatedOriginsSource` directly.
 
 Additional HID-only examples cover specific FIDO2 features and authenticator management:
 
@@ -89,6 +89,9 @@ $ cargo run --example webauthn_preflight_hid
 $ cargo run --example webauthn_prf_hid
 $ cargo run --example prf_replay -- CREDENTIAL_ID FIRST_PRF_INPUT
 $ cargo run --example device_selection_hid
+
+# Related origins (reqwest-backed well-known fetch)
+$ cargo run --features reqwest-related-origins-source --example webauthn_related_origins_hid
 
 # CTAP2 authenticator management
 $ cargo run --example change_pin_hid
