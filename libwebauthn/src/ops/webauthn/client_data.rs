@@ -41,6 +41,7 @@ impl ClientData {
     /// Strings are escaped per WebAuthn L3 §5.8.1.2 (CCDToString), via
     /// `serde_json`'s RFC 8259 string encoder. Field order matches the spec:
     /// `type`, `challenge`, `origin`, `topOrigin?`, `crossOrigin`.
+    #[allow(clippy::expect_used)] // serialization of this fixed-shape struct cannot fail
     pub fn to_json(&self) -> String {
         let operation = match self.operation {
             Operation::MakeCredential => "webauthn.create",
