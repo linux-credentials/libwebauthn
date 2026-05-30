@@ -244,6 +244,8 @@ impl<'d> HidChannel<'d> {
                 .open_device(&hidapi)
                 .or(Err(Error::Transport(TransportError::ConnectionFailed)))?),
             #[cfg(feature = "virt")]
+            #[allow(clippy::unreachable)]
+            // virtual devices never go through hid_open
             HidBackendDevice::VirtualDevice(_) => unreachable!(),
         }
     }
@@ -317,6 +319,8 @@ impl<'d> HidChannel<'d> {
                 response
             }
             #[cfg(feature = "virt")]
+            #[allow(clippy::panic)]
+            // virt test-utility: a poisoned lock is unrecoverable
             OpenHidDevice::VirtualDevice(backend) => {
                 let Ok(mut guard) = backend.lock() else {
                     panic!("Poisoned lock on Virtual HID device");
@@ -378,6 +382,8 @@ impl<'d> HidChannel<'d> {
                     })?
                 }
                 #[cfg(feature = "virt")]
+                #[allow(clippy::panic)]
+                // virt test-utility: a poisoned lock is unrecoverable
                 OpenHidDevice::VirtualDevice(backend) => {
                     let Ok(mut guard) = backend.lock() else {
                         panic!("Poisoned lock on Virtual HID device");
