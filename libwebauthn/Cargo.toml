@@ -39,6 +39,10 @@ nfc-backend-libnfc = [
 # external crates (e.g. libwebauthn-tests) can plug in a virtual HID transport
 # for end-to-end tests.
 virt = []
+# Provides the reqwest-backed HttpClient and ReqwestRelatedOriginsSource. Off by
+# default so the core crate stays HTTP-client-free. Consumers that want the
+# default fetch opt in, others implement HttpClient or RelatedOriginsSource.
+reqwest-related-origins-source = ["dep:reqwest"]
 
 [dependencies]
 base64-url = "3.0.0"
@@ -47,6 +51,7 @@ tracing = "0.1.29"
 idna = "1.0.3"
 publicsuffix = "2.3"
 url = "2.5"
+http = "1"
 maplit = "1.0.2"
 sha2 = "0.10.2"
 uuid = { version = "1.5.0", features = ["serde", "v4"] }
@@ -100,6 +105,12 @@ apdu = { version = "0.4.0", optional = true }
 pcsc = { version = "2.9.0", optional = true }
 nfc1 = { version = "=0.6.0", optional = true, default-features = false }
 nfc1-sys = { version = "0.3.9", optional = true, default-features = false }
+reqwest = { version = "0.12", default-features = false, features = [
+    "rustls-tls-native-roots",
+    "http2",
+    "stream",
+    "charset",
+], optional = true }
 
 [dev-dependencies]
 tracing-subscriber = { version = "0.3.3", features = ["env-filter"] }
@@ -160,6 +171,11 @@ path = "examples/features/webauthn_preflight_hid.rs"
 [[example]]
 name = "webauthn_prf_hid"
 path = "examples/features/webauthn_prf_hid.rs"
+
+[[example]]
+name = "webauthn_related_origins_hid"
+path = "examples/features/webauthn_related_origins_hid.rs"
+required-features = ["reqwest-related-origins-source"]
 
 [[example]]
 name = "prf_replay"

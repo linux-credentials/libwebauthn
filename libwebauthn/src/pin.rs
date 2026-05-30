@@ -1,3 +1,18 @@
+//! PIN and user-verification interaction for CTAP2 authenticators. This module
+//! implements the PIN/UV authentication protocols (`PinUvAuthProtocolOne` and
+//! `PinUvAuthProtocolTwo`), which perform ECDH key agreement and AES-CBC
+//! encryption with HMAC authentication. These are the primitives used to derive
+//! a shared secret, encrypt a PIN, and produce the authentication parameters
+//! sent during registration and assertion.
+//!
+//! The public surface exposes [`PinRequestReason`] and [`PinNotSetReason`] so a
+//! caller can tell why a PIN is being requested or why setting one failed, and
+//! [`PinManagement`] for initiating PIN changes. In normal use a caller does not
+//! touch this module directly. PIN requests reach the application through the
+//! [`UvUpdate`](crate::UvUpdate) flow in the crate root, delivered as
+//! [`PinRequiredUpdate`](crate::PinRequiredUpdate) and
+//! [`PinNotSetUpdate`](crate::PinNotSetUpdate).
+
 use std::time::Duration;
 
 use aes::cipher::{block_padding::NoPadding, BlockDecryptMut};

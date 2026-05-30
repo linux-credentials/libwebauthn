@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use async_trait::async_trait;
 use ctap_types::ctap2::credential_management::CredentialProtectionPolicy as Ctap2CredentialProtectionPolicy;
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
@@ -12,15 +13,13 @@ use crate::{
         idl::{
             create::PublicKeyCredentialCreationOptionsJSON,
             get::PrfValuesJson,
-            origin::is_registrable_domain_suffix_or_equal,
             response::{
                 AuthenticationExtensionsClientOutputsJSON, AuthenticatorAttestationResponseJSON,
                 CredentialPropertiesOutputJSON, LargeBlobOutputJSON, PRFOutputJSON, PRFValuesJSON,
                 RegistrationResponseJSON, ResponseSerializationError, WebAuthnIDLResponse,
             },
-            Base64UrlString, FromIdlModel, JsonError, WebAuthnIDL,
+            rp_id_authorised, Base64UrlString, FromIdlModel, JsonError, RequestSettings,
         },
-        psl::PublicSuffixList,
         Operation, PrfInputValue, PrfOutputValue, RelyingPartyId, RequestOrigin,
     },
     proto::{
@@ -365,26 +364,23 @@ impl MakeCredentialRequest {
     }
 }
 
-impl FromIdlModel<PublicKeyCredentialCreationOptionsJSON, MakeCredentialRequestParsingError>
-    for MakeCredentialRequest
-{
-    fn from_idl_model(
+#[async_trait]
+impl FromIdlModel<PublicKeyCredentialCreationOptionsJSON> for MakeCredentialRequest {
+    type Error = MakeCredentialPrepareError;
+
+    async fn from_idl_model(
         request_origin: &RequestOrigin,
-        psl: &dyn PublicSuffixList,
+        settings: &RequestSettings<'_>,
         inner: PublicKeyCredentialCreationOptionsJSON,
-    ) -> Result<Self, MakeCredentialRequestParsingError> {
+    ) -> Result<Self, MakeCredentialPrepareError> {
         let effective_rp_id = request_origin.origin.host.as_str();
-        let rp_id = RelyingPartyId::try_from(inner.rp.id.as_str()).map_err(|err| {
-            MakeCredentialRequestParsingError::InvalidRelyingPartyId(err.to_string())
-        })?;
-        // TODO(#160): Add related-origins fallback per WebAuthn L3 §5.11.
-        if !is_registrable_domain_suffix_or_equal(&rp_id.0, effective_rp_id, psl) {
-            return Err(
-                MakeCredentialRequestParsingError::MismatchingRelyingPartyId(
-                    rp_id.0,
-                    effective_rp_id.to_string(),
-                ),
-            );
+        let rp_id = RelyingPartyId::try_from(inner.rp.id.as_str())
+            .map_err(|err| MakeCredentialPrepareError::InvalidRelyingPartyId(err.to_string()))?;
+        if !rp_id_authorised(request_origin, &rp_id, settings).await {
+            return Err(MakeCredentialPrepareError::MismatchingRelyingPartyId(
+                rp_id.0,
+                effective_rp_id.to_string(),
+            ));
         }
         let mut relying_party = inner.rp;
         relying_party.id = rp_id.0;
@@ -435,7 +431,7 @@ impl FromIdlModel<PublicKeyCredentialCreationOptionsJSON, MakeCredentialRequestP
 }
 
 #[derive(thiserror::Error, Debug)]
-pub enum MakeCredentialRequestParsingError {
+pub enum MakeCredentialPrepareError {
     /// The client must throw an "EncodingError" DOMException.
     #[error("Invalid JSON format: {0}")]
     EncodingError(#[from] JsonError),
@@ -445,9 +441,17 @@ pub enum MakeCredentialRequestParsingError {
     MismatchingRelyingPartyId(String, String),
 }
 
-impl WebAuthnIDL<MakeCredentialRequestParsingError> for MakeCredentialRequest {
-    type Error = MakeCredentialRequestParsingError;
-    type IdlModel = PublicKeyCredentialCreationOptionsJSON;
+impl MakeCredentialRequest {
+    /// Builds a [`MakeCredentialRequest`] from its WebAuthn IDL JSON, validating
+    /// the caller origin against rp.id per `settings`.
+    pub async fn prepare(
+        request_origin: &RequestOrigin,
+        json: &str,
+        settings: &RequestSettings<'_>,
+    ) -> Result<Self, MakeCredentialPrepareError> {
+        let model: PublicKeyCredentialCreationOptionsJSON = serde_json::from_str(json)?;
+        Self::from_idl_model(request_origin, settings, model).await
+    }
 }
 
 #[derive(Debug, Default, Clone, Deserialize, PartialEq)]
@@ -691,11 +695,73 @@ impl DowngradableRequest<RegisterRequest> for MakeCredentialRequest {
 mod tests {
     use std::time::Duration;
 
-    use crate::ops::webauthn::psl::MockPublicSuffixList;
-    use crate::ops::webauthn::{MakeCredentialRequest, RequestOrigin};
+    use async_trait::async_trait;
+
+    use crate::ops::webauthn::psl::{MockPublicSuffixList, PublicSuffixList};
+    use crate::ops::webauthn::related_origins::{
+        HttpClientError, MaxRegistrableLabels, RelatedOrigins, RelatedOriginsError,
+        RelatedOriginsSource,
+    };
+    use crate::ops::webauthn::{MakeCredentialRequest, OriginValidation, RequestOrigin};
     use crate::proto::ctap2::Ctap2PublicKeyCredentialType;
 
     use super::*;
+
+    // Fixed-result source; `panicking` proves the suffix-check short-circuit by
+    // failing if consulted.
+    struct MockSource {
+        result: Option<Result<Vec<String>, RelatedOriginsError>>,
+    }
+
+    impl MockSource {
+        fn origins(items: &[&str]) -> Self {
+            Self {
+                result: Some(Ok(items.iter().map(|s| s.to_string()).collect())),
+            }
+        }
+
+        fn err(e: RelatedOriginsError) -> Self {
+            Self {
+                result: Some(Err(e)),
+            }
+        }
+
+        fn panicking() -> Self {
+            Self { result: None }
+        }
+    }
+
+    #[async_trait]
+    impl RelatedOriginsSource for MockSource {
+        async fn allowed_origins(
+            &self,
+            _: &RelyingPartyId,
+        ) -> Result<Vec<String>, RelatedOriginsError> {
+            match &self.result {
+                Some(r) => r.clone(),
+                None => panic!("allowed_origins should not be called"),
+            }
+        }
+    }
+
+    async fn from_json(
+        origin: &RequestOrigin,
+        psl: &dyn PublicSuffixList,
+        related_origins: RelatedOrigins<'_>,
+        json: &str,
+    ) -> Result<MakeCredentialRequest, MakeCredentialPrepareError> {
+        MakeCredentialRequest::prepare(
+            origin,
+            json,
+            &RequestSettings {
+                origin: OriginValidation::Validate {
+                    public_suffix_list: psl,
+                    related_origins,
+                },
+            },
+        )
+        .await
+    }
 
     pub const REQUEST_BASE_JSON: &str = r#"
     {
@@ -756,76 +822,93 @@ mod tests {
         serde_json::to_string(&v).unwrap()
     }
 
-    fn test_request_from_json_required_field(field: &str) {
+    async fn test_request_from_json_required_field(field: &str) {
         let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
         let req_json = json_field_rm(REQUEST_BASE_JSON, field);
 
-        let result =
-            MakeCredentialRequest::from_json(&request_origin, &MockPublicSuffixList, &req_json);
+        let result = from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            RelatedOrigins::Disabled,
+            &req_json,
+        )
+        .await;
         assert!(matches!(
             result,
-            Err(MakeCredentialRequestParsingError::EncodingError(_))
+            Err(MakeCredentialPrepareError::EncodingError(_))
         ));
     }
 
-    #[test]
-    fn test_request_from_json_base() {
+    #[tokio::test]
+    async fn test_request_from_json_base() {
         let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
-        let req: MakeCredentialRequest = MakeCredentialRequest::from_json(
+        let req: MakeCredentialRequest = from_json(
             &request_origin,
             &MockPublicSuffixList,
+            RelatedOrigins::Disabled,
             REQUEST_BASE_JSON,
         )
+        .await
         .unwrap();
         assert_eq!(req, request_base());
     }
 
-    #[test]
-    fn test_request_from_json_require_rp() {
-        test_request_from_json_required_field("rp");
+    #[tokio::test]
+    async fn test_request_from_json_require_rp() {
+        test_request_from_json_required_field("rp").await;
     }
 
-    #[test]
-    fn test_request_from_json_require_user() {
-        test_request_from_json_required_field("user");
+    #[tokio::test]
+    async fn test_request_from_json_require_user() {
+        test_request_from_json_required_field("user").await;
     }
 
-    #[test]
-    fn test_request_from_json_require_pub_key_cred_params() {
-        test_request_from_json_required_field("pubKeyCredParams");
+    #[tokio::test]
+    async fn test_request_from_json_require_pub_key_cred_params() {
+        test_request_from_json_required_field("pubKeyCredParams").await;
     }
 
-    #[test]
-    fn test_request_from_json_require_challenge() {
-        test_request_from_json_required_field("challenge");
+    #[tokio::test]
+    async fn test_request_from_json_require_challenge() {
+        test_request_from_json_required_field("challenge").await;
     }
 
-    #[test]
+    #[tokio::test]
     #[ignore] // FIXME(#134): Add validation for challenges
-    fn test_request_from_json_challenge_empty() {
+    async fn test_request_from_json_challenge_empty() {
         let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
         let req_json: String = json_field_rm(REQUEST_BASE_JSON, "challenge");
         let req_json = json_field_add(&req_json, "challenge", r#""""#);
 
-        let result =
-            MakeCredentialRequest::from_json(&request_origin, &MockPublicSuffixList, &req_json);
+        let result = from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            RelatedOrigins::Disabled,
+            &req_json,
+        )
+        .await;
         assert!(matches!(
             result,
-            Err(MakeCredentialRequestParsingError::EncodingError(_))
+            Err(MakeCredentialPrepareError::EncodingError(_))
         ));
     }
 
-    #[test]
-    fn test_request_from_json_prf_extension() {
+    #[tokio::test]
+    async fn test_request_from_json_prf_extension() {
         let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
         let first = base64_url::encode(&[1u8; 32]);
         let second = base64_url::encode(&[2u8; 32]);
         let ext = format!(r#"{{"prf": {{"eval": {{"first": "{first}", "second": "{second}"}}}}}}"#);
         let req_json = json_field_add(REQUEST_BASE_JSON, "extensions", &ext);
 
-        let req: MakeCredentialRequest =
-            MakeCredentialRequest::from_json(&request_origin, &MockPublicSuffixList, &req_json)
-                .unwrap();
+        let req: MakeCredentialRequest = from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            RelatedOrigins::Disabled,
+            &req_json,
+        )
+        .await
+        .unwrap();
         let prf = req
             .extensions
             .as_ref()
@@ -836,29 +919,39 @@ mod tests {
         assert_eq!(prf.second, Some(vec![2u8; 32]));
     }
 
-    #[test]
-    fn test_request_from_json_prf_extension_empty() {
+    #[tokio::test]
+    async fn test_request_from_json_prf_extension_empty() {
         let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
         let req_json = json_field_add(REQUEST_BASE_JSON, "extensions", r#"{"prf": {}}"#);
 
-        let req: MakeCredentialRequest =
-            MakeCredentialRequest::from_json(&request_origin, &MockPublicSuffixList, &req_json)
-                .unwrap();
+        let req: MakeCredentialRequest = from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            RelatedOrigins::Disabled,
+            &req_json,
+        )
+        .await
+        .unwrap();
         let prf = req.extensions.unwrap().prf.unwrap();
         assert!(prf.eval.is_none());
     }
 
-    #[test]
-    fn test_request_from_json_prf_extension_short_input() {
+    #[tokio::test]
+    async fn test_request_from_json_prf_extension_short_input() {
         // WebAuthn L3 §10.1.4: PRF salt inputs are BufferSources of any length.
         let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
         let short = base64_url::encode(&[0u8; 16]);
         let ext = format!(r#"{{"prf": {{"eval": {{"first": "{short}"}}}}}}"#);
         let req_json = json_field_add(REQUEST_BASE_JSON, "extensions", &ext);
 
-        let req: MakeCredentialRequest =
-            MakeCredentialRequest::from_json(&request_origin, &MockPublicSuffixList, &req_json)
-                .unwrap();
+        let req: MakeCredentialRequest = from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            RelatedOrigins::Disabled,
+            &req_json,
+        )
+        .await
+        .unwrap();
         let prf = req
             .extensions
             .as_ref()
@@ -869,8 +962,8 @@ mod tests {
         assert!(prf.second.is_none());
     }
 
-    #[test]
-    fn test_request_from_json_appid_exclude_extension() {
+    #[tokio::test]
+    async fn test_request_from_json_appid_exclude_extension() {
         let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
         let req_json = json_field_add(
             REQUEST_BASE_JSON,
@@ -878,9 +971,14 @@ mod tests {
             r#"{"appidExclude": "https://www.example.org/u2f/origins.json"}"#,
         );
 
-        let req: MakeCredentialRequest =
-            MakeCredentialRequest::from_json(&request_origin, &MockPublicSuffixList, &req_json)
-                .unwrap();
+        let req: MakeCredentialRequest = from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            RelatedOrigins::Disabled,
+            &req_json,
+        )
+        .await
+        .unwrap();
         let ext = req.extensions.expect("extensions should be present");
         assert_eq!(
             ext.appid_exclude.as_deref(),
@@ -888,17 +986,22 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_request_from_json_unknown_pub_key_cred_params() {
+    #[tokio::test]
+    async fn test_request_from_json_unknown_pub_key_cred_params() {
         let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
         let req_json = json_field_add(
             REQUEST_BASE_JSON,
             "pubKeyCredParams",
             r#"[{"type": "something", "alg": -12345}]"#,
         );
-        let req: MakeCredentialRequest =
-            MakeCredentialRequest::from_json(&request_origin, &MockPublicSuffixList, &req_json)
-                .unwrap();
+        let req: MakeCredentialRequest = from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            RelatedOrigins::Disabled,
+            &req_json,
+        )
+        .await
+        .unwrap();
         assert_eq!(
             req.algorithms,
             vec![Ctap2CredentialType {
@@ -908,27 +1011,37 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_request_from_json_default_timeout() {
+    #[tokio::test]
+    async fn test_request_from_json_default_timeout() {
         let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
         let req_json = json_field_rm(REQUEST_BASE_JSON, "timeout");
 
-        let req: MakeCredentialRequest =
-            MakeCredentialRequest::from_json(&request_origin, &MockPublicSuffixList, &req_json)
-                .unwrap();
+        let req: MakeCredentialRequest = from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            RelatedOrigins::Disabled,
+            &req_json,
+        )
+        .await
+        .unwrap();
         assert_eq!(req.timeout, DEFAULT_TIMEOUT);
     }
 
     /// Per spec, when authenticatorSelection is missing, userVerification should default to "preferred".
     /// https://www.w3.org/TR/webauthn-3/#dom-authenticatorselectioncriteria-userverification
-    #[test]
-    fn test_request_from_json_default_user_verification_preferred() {
+    #[tokio::test]
+    async fn test_request_from_json_default_user_verification_preferred() {
         let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
         let req_json = json_field_rm(REQUEST_BASE_JSON, "authenticatorSelection");
 
-        let req: MakeCredentialRequest =
-            MakeCredentialRequest::from_json(&request_origin, &MockPublicSuffixList, &req_json)
-                .unwrap();
+        let req: MakeCredentialRequest = from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            RelatedOrigins::Disabled,
+            &req_json,
+        )
+        .await
+        .unwrap();
         assert_eq!(
             req.user_verification,
             UserVerificationRequirement::Preferred
@@ -937,8 +1050,8 @@ mod tests {
 
     /// Per spec, when userVerification is missing inside authenticatorSelection,
     /// it should default to "preferred".
-    #[test]
-    fn test_request_from_json_missing_user_verification_in_authenticator_selection() {
+    #[tokio::test]
+    async fn test_request_from_json_missing_user_verification_in_authenticator_selection() {
         let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
         // Replace authenticatorSelection with one that has no userVerification field
         let mut req_json = json_field_rm(REQUEST_BASE_JSON, "authenticatorSelection");
@@ -948,17 +1061,22 @@ mod tests {
             r#"{"residentKey": "discouraged"}"#,
         );
 
-        let req: MakeCredentialRequest =
-            MakeCredentialRequest::from_json(&request_origin, &MockPublicSuffixList, &req_json)
-                .unwrap();
+        let req: MakeCredentialRequest = from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            RelatedOrigins::Disabled,
+            &req_json,
+        )
+        .await
+        .unwrap();
         assert_eq!(
             req.user_verification,
             UserVerificationRequirement::Preferred
         );
     }
 
-    #[test]
-    fn test_request_from_json_invalid_rp_id() {
+    #[tokio::test]
+    async fn test_request_from_json_invalid_rp_id() {
         let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
         let req_json = json_field_add(
             REQUEST_BASE_JSON,
@@ -966,16 +1084,63 @@ mod tests {
             r#"{"id": "example.org.", "name": "example.org"}"#,
         );
 
-        let result =
-            MakeCredentialRequest::from_json(&request_origin, &MockPublicSuffixList, &req_json);
+        let result = from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            RelatedOrigins::Disabled,
+            &req_json,
+        )
+        .await;
         assert!(matches!(
             result,
-            Err(MakeCredentialRequestParsingError::InvalidRelyingPartyId(_))
+            Err(MakeCredentialPrepareError::InvalidRelyingPartyId(_))
         ));
     }
 
-    #[test]
-    fn test_request_from_json_mismatching_rp_id() {
+    #[tokio::test]
+    async fn origin_trust_accepts_mismatching_rp_id() {
+        let request_origin: RequestOrigin = "https://app.example.org".parse().unwrap();
+        let req_json = json_field_add(
+            REQUEST_BASE_JSON,
+            "rp",
+            r#"{"id": "example.com", "name": "example.com"}"#,
+        );
+        let req = MakeCredentialRequest::prepare(
+            &request_origin,
+            &req_json,
+            &RequestSettings {
+                origin: OriginValidation::Trust,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(req.relying_party.id, "example.com");
+    }
+
+    #[tokio::test]
+    async fn origin_trust_still_rejects_invalid_rp_id() {
+        let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
+        let req_json = json_field_add(
+            REQUEST_BASE_JSON,
+            "rp",
+            r#"{"id": "example.org.", "name": "example.org"}"#,
+        );
+        let result = MakeCredentialRequest::prepare(
+            &request_origin,
+            &req_json,
+            &RequestSettings {
+                origin: OriginValidation::Trust,
+            },
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(MakeCredentialPrepareError::InvalidRelyingPartyId(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_request_from_json_mismatching_rp_id() {
         let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
         let req_json = json_field_add(
             REQUEST_BASE_JSON,
@@ -983,16 +1148,21 @@ mod tests {
             r#"{"id": "other.example.org", "name": "example.org"}"#,
         );
 
-        let result =
-            MakeCredentialRequest::from_json(&request_origin, &MockPublicSuffixList, &req_json);
+        let result = from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            RelatedOrigins::Disabled,
+            &req_json,
+        )
+        .await;
         assert!(matches!(
             result,
-            Err(MakeCredentialRequestParsingError::MismatchingRelyingPartyId(_, _))
+            Err(MakeCredentialPrepareError::MismatchingRelyingPartyId(_, _))
         ));
     }
 
-    #[test]
-    fn test_request_from_json_rp_id_is_parent_registrable_suffix() {
+    #[tokio::test]
+    async fn test_request_from_json_rp_id_is_parent_registrable_suffix() {
         let request_origin: RequestOrigin = "https://login.example.org".parse().unwrap();
         let req_json = json_field_add(
             REQUEST_BASE_JSON,
@@ -1000,15 +1170,20 @@ mod tests {
             r#"{"id": "example.org", "name": "example.org"}"#,
         );
 
-        let req =
-            MakeCredentialRequest::from_json(&request_origin, &MockPublicSuffixList, &req_json)
-                .unwrap();
+        let req = from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            RelatedOrigins::Disabled,
+            &req_json,
+        )
+        .await
+        .unwrap();
         assert_eq!(req.relying_party.id, "example.org");
         assert_eq!(req.origin, "https://login.example.org");
     }
 
-    #[test]
-    fn test_request_from_json_rp_id_is_etld_rejected() {
+    #[tokio::test]
+    async fn test_request_from_json_rp_id_is_etld_rejected() {
         let request_origin: RequestOrigin = "https://example.co.uk".parse().unwrap();
         let req_json = json_field_add(
             REQUEST_BASE_JSON,
@@ -1016,16 +1191,21 @@ mod tests {
             r#"{"id": "co.uk", "name": "co.uk"}"#,
         );
 
-        let result =
-            MakeCredentialRequest::from_json(&request_origin, &MockPublicSuffixList, &req_json);
+        let result = from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            RelatedOrigins::Disabled,
+            &req_json,
+        )
+        .await;
         assert!(matches!(
             result,
-            Err(MakeCredentialRequestParsingError::MismatchingRelyingPartyId(_, _))
+            Err(MakeCredentialPrepareError::MismatchingRelyingPartyId(_, _))
         ));
     }
 
-    #[test]
-    fn test_request_from_json_http_localhost_accepted() {
+    #[tokio::test]
+    async fn test_request_from_json_http_localhost_accepted() {
         let request_origin: RequestOrigin = "http://localhost".parse().unwrap();
         let req_json = json_field_add(
             REQUEST_BASE_JSON,
@@ -1033,15 +1213,20 @@ mod tests {
             r#"{"id": "localhost", "name": "localhost"}"#,
         );
 
-        let req =
-            MakeCredentialRequest::from_json(&request_origin, &MockPublicSuffixList, &req_json)
-                .unwrap();
+        let req = from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            RelatedOrigins::Disabled,
+            &req_json,
+        )
+        .await
+        .unwrap();
         assert_eq!(req.relying_party.id, "localhost");
         assert_eq!(req.origin, "http://localhost");
     }
 
-    #[test]
-    fn test_request_from_json_http_localhost_with_port_accepted() {
+    #[tokio::test]
+    async fn test_request_from_json_http_localhost_with_port_accepted() {
         let request_origin: RequestOrigin = "http://localhost:3000".parse().unwrap();
         let req_json = json_field_add(
             REQUEST_BASE_JSON,
@@ -1049,11 +1234,121 @@ mod tests {
             r#"{"id": "localhost", "name": "localhost"}"#,
         );
 
-        let req =
-            MakeCredentialRequest::from_json(&request_origin, &MockPublicSuffixList, &req_json)
-                .unwrap();
+        let req = from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            RelatedOrigins::Disabled,
+            &req_json,
+        )
+        .await
+        .unwrap();
         assert_eq!(req.relying_party.id, "localhost");
         assert_eq!(req.origin, "http://localhost:3000");
+    }
+
+    // `.de` substituted with `.org` (MockPublicSuffixList lacks `.de`); pattern
+    // (different eTLD between caller origin and rp.id) is identical.
+
+    #[tokio::test]
+    async fn related_origins_match_resolves_mismatch() {
+        let request_origin: RequestOrigin = "https://app.example.org".parse().unwrap();
+        let req_json = json_field_add(
+            REQUEST_BASE_JSON,
+            "rp",
+            r#"{"id": "example.com", "name": "example.com"}"#,
+        );
+        let source = MockSource::origins(&["https://app.example.org"]);
+
+        let req = from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            RelatedOrigins::Enabled {
+                source: &source,
+                max_labels: MaxRegistrableLabels::default(),
+            },
+            &req_json,
+        )
+        .await
+        .unwrap();
+        assert_eq!(req.relying_party.id, "example.com");
+    }
+
+    #[tokio::test]
+    async fn related_origins_no_match_keeps_mismatch_error() {
+        let request_origin: RequestOrigin = "https://app.example.org".parse().unwrap();
+        let req_json = json_field_add(
+            REQUEST_BASE_JSON,
+            "rp",
+            r#"{"id": "example.com", "name": "example.com"}"#,
+        );
+        let source = MockSource::origins(&["https://other.org"]);
+
+        let result = from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            RelatedOrigins::Enabled {
+                source: &source,
+                max_labels: MaxRegistrableLabels::default(),
+            },
+            &req_json,
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(MakeCredentialPrepareError::MismatchingRelyingPartyId(_, _))
+        ));
+    }
+
+    #[tokio::test]
+    async fn related_origins_fetch_error_keeps_mismatch_error() {
+        let request_origin: RequestOrigin = "https://app.example.org".parse().unwrap();
+        let req_json = json_field_add(
+            REQUEST_BASE_JSON,
+            "rp",
+            r#"{"id": "example.com", "name": "example.com"}"#,
+        );
+        let source = MockSource::err(RelatedOriginsError::Http(HttpClientError::Transport(
+            "simulated".into(),
+        )));
+
+        let result = from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            RelatedOrigins::Enabled {
+                source: &source,
+                max_labels: MaxRegistrableLabels::default(),
+            },
+            &req_json,
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(MakeCredentialPrepareError::MismatchingRelyingPartyId(_, _))
+        ));
+    }
+
+    #[tokio::test]
+    async fn related_origins_not_consulted_when_suffix_matches() {
+        let request_origin: RequestOrigin = "https://login.example.com".parse().unwrap();
+        let req_json = json_field_add(
+            REQUEST_BASE_JSON,
+            "rp",
+            r#"{"id": "example.com", "name": "example.com"}"#,
+        );
+        let source = MockSource::panicking();
+
+        let req = from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            RelatedOrigins::Enabled {
+                source: &source,
+                max_labels: MaxRegistrableLabels::default(),
+            },
+            &req_json,
+        )
+        .await
+        .unwrap();
+        assert_eq!(req.relying_party.id, "example.com");
     }
 
     // Tests for response JSON serialization

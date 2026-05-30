@@ -1,3 +1,18 @@
+//! High-level FIDO2 (CTAP2) client API for WebAuthn ceremonies. The [`WebAuthn`]
+//! trait is blanket-implemented for any [`Channel`]. Its
+//! [`webauthn_make_credential`](WebAuthn::webauthn_make_credential) and
+//! [`webauthn_get_assertion`](WebAuthn::webauthn_get_assertion) methods run the
+//! full CTAP2 make-credential and get-assertion ceremonies, including the user
+//! verification flow, PIN and biometric token handling, credential filtering via
+//! preflight, and extension support. When a device does not support FIDO2, the
+//! ceremony falls back to U2F (CTAP1).
+//!
+//! User verification is handled internally by the [`pin_uv_auth_token`] module,
+//! which manages PIN and biometric UV, reuse of a cached pinUvAuthToken, shared
+//! secret establishment, and the fallback from biometric to PIN. Failures are
+//! reported as [`Error`], which distinguishes CTAP protocol errors
+//! ([`CtapError`]), transport errors, and platform errors.
+
 pub mod error;
 pub mod pin_uv_auth_token;
 

@@ -3,6 +3,7 @@ mod get_assertion;
 pub mod idl;
 mod make_credential;
 pub mod psl;
+pub mod related_origins;
 mod timeout;
 
 use super::u2f::{RegisterRequest, SignRequest};
@@ -10,32 +11,39 @@ use crate::webauthn::CtapError;
 pub use client_data::ClientData;
 pub use get_assertion::{
     Assertion, Ctap2HMACGetSecretOutput, GetAssertionHmacOrPrfInput,
-    GetAssertionLargeBlobExtension, GetAssertionLargeBlobExtensionOutput, GetAssertionPrfOutput,
-    GetAssertionRequest, GetAssertionRequestExtensions, GetAssertionResponse,
-    GetAssertionResponseExtensions, GetAssertionResponseUnsignedExtensions, HMACGetSecretInput,
-    HMACGetSecretOutput, PrfInput, PrfInputValue, PrfOutputValue,
+    GetAssertionLargeBlobExtension, GetAssertionLargeBlobExtensionOutput, GetAssertionPrepareError,
+    GetAssertionPrfOutput, GetAssertionRequest, GetAssertionRequestExtensions,
+    GetAssertionResponse, GetAssertionResponseExtensions, GetAssertionResponseUnsignedExtensions,
+    HMACGetSecretInput, HMACGetSecretOutput, PrfInput, PrfInputValue, PrfOutputValue,
 };
 pub use idl::{
     origin::{HostParseError, Origin, OriginHost, OriginParseError, RequestOrigin, Scheme},
     rpid::RelyingPartyId,
     AuthenticationExtensionsClientOutputsJSON, AuthenticationResponseJSON,
     AuthenticatorAssertionResponseJSON, AuthenticatorAttestationResponseJSON, Base64UrlString,
-    JsonFormat, RegistrationResponseJSON, ResponseSerializationError, WebAuthnIDL,
-    WebAuthnIDLResponse,
+    JsonFormat, OriginValidation, RegistrationResponseJSON, RequestSettings,
+    ResponseSerializationError, WebAuthnIDLResponse,
 };
 pub use make_credential::{
     CredentialPropsExtension, CredentialProtectionExtension, CredentialProtectionPolicy,
     MakeCredentialLargeBlobExtension, MakeCredentialLargeBlobExtensionInput,
-    MakeCredentialLargeBlobExtensionOutput, MakeCredentialPrfInput, MakeCredentialPrfOutput,
-    MakeCredentialRequest, MakeCredentialResponse, MakeCredentialsRequestExtensions,
-    MakeCredentialsResponseExtensions, MakeCredentialsResponseUnsignedExtensions,
-    ResidentKeyRequirement,
+    MakeCredentialLargeBlobExtensionOutput, MakeCredentialPrepareError, MakeCredentialPrfInput,
+    MakeCredentialPrfOutput, MakeCredentialRequest, MakeCredentialResponse,
+    MakeCredentialsRequestExtensions, MakeCredentialsResponseExtensions,
+    MakeCredentialsResponseUnsignedExtensions, ResidentKeyRequirement,
 };
 pub use psl::{
     DafsaFileLoadError, DafsaFilePublicSuffixList, DatFileLoadError, DatFilePublicSuffixList,
     PublicSuffixList, SystemLoadError, SystemPublicSuffixList, SYSTEM_PSL_DAFSA_PATH,
     SYSTEM_PSL_PATH,
 };
+pub use related_origins::{
+    validate_related_origins, HttpClient, HttpClientError, MaxRegistrableLabels, RelatedOrigins,
+    RelatedOriginsError, RelatedOriginsSource, StaticRelatedOriginsSource,
+    WellKnownRelatedOriginsSource,
+};
+#[cfg(feature = "reqwest-related-origins-source")]
+pub use related_origins::{HttpPolicy, ReqwestHttpClient, ReqwestRelatedOriginsSource};
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq)]
