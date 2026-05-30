@@ -23,6 +23,7 @@ _Looking for the D-Bus API proposal?_ Check out [credentialsd][credentialsd].
   - 🟢 Verify assertion
   - 🟢 Biometric user verification
   - 🟢 Discoverable credentials (resident keys)
+  - 🟢 Related origins (WebAuthn L3 §5.11)
 - FIDO2 to FIDO U2F downgrade
   - 🟢 Basic functionality
   - 🟢 Support for excludeList and pre-flight requests
