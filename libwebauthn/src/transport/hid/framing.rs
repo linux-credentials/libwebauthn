@@ -141,7 +141,10 @@ impl HidMessageParser {
         if self.packets.is_empty() {
             // First packet must be an initialization packet: high bit of
             // byte 4 set (CTAP 2.2 §11.2.4).
-            if packet[4] & PACKET_INITIAL_CMD_MASK == 0 {
+            let is_initialization = packet
+                .get(4)
+                .is_some_and(|&byte| byte & PACKET_INITIAL_CMD_MASK != 0);
+            if !is_initialization {
                 error!("First packet is not an initialization packet");
                 return Err(IOError::new(
                     IOErrorKind::InvalidData,
@@ -151,15 +154,20 @@ impl HidMessageParser {
         } else {
             // Continuation packets: same CID as the initial packet, SEQ has
             // high bit cleared, SEQ starts at 0 and increments monotonically.
-            let initial = &self.packets[0];
-            if packet[..4] != initial[..4] {
+            let initial_cid = self.packets.first().and_then(|initial| initial.get(..4));
+            if packet.get(..4) != initial_cid {
                 error!("Continuation packet CID does not match initial packet");
                 return Err(IOError::new(
                     IOErrorKind::InvalidData,
                     "Continuation packet CID mismatch",
                 ));
             }
-            let seq = packet[4];
+            let Some(&seq) = packet.get(4) else {
+                return Err(IOError::new(
+                    IOErrorKind::InvalidData,
+                    "Packet length is invalid",
+                ));
+            };
             if seq & PACKET_INITIAL_CMD_MASK != 0 {
                 error!(seq, "Unexpected init packet during continuation");
                 return Err(IOError::new(
