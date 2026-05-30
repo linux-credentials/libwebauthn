@@ -12,9 +12,9 @@ pub use client_data::ClientData;
 pub use get_assertion::{
     Assertion, Ctap2HMACGetSecretOutput, GetAssertionHmacOrPrfInput,
     GetAssertionLargeBlobExtension, GetAssertionLargeBlobExtensionOutput, GetAssertionPrepareError,
-    GetAssertionPrfOutput, GetAssertionRequest, GetAssertionRequestExtensions, GetAssertionResponse,
-    GetAssertionResponseExtensions, GetAssertionResponseUnsignedExtensions, HMACGetSecretInput,
-    HMACGetSecretOutput, PrfInput, PrfInputValue, PrfOutputValue,
+    GetAssertionPrfOutput, GetAssertionRequest, GetAssertionRequestExtensions,
+    GetAssertionResponse, GetAssertionResponseExtensions, GetAssertionResponseUnsignedExtensions,
+    HMACGetSecretInput, HMACGetSecretOutput, PrfInput, PrfInputValue, PrfOutputValue,
 };
 pub use idl::{
     origin::{HostParseError, Origin, OriginHost, OriginParseError, RequestOrigin, Scheme},
@@ -29,9 +29,8 @@ pub use make_credential::{
     MakeCredentialLargeBlobExtension, MakeCredentialLargeBlobExtensionInput,
     MakeCredentialLargeBlobExtensionOutput, MakeCredentialPrepareError, MakeCredentialPrfInput,
     MakeCredentialPrfOutput, MakeCredentialRequest, MakeCredentialResponse,
-    MakeCredentialsRequestExtensions,
-    MakeCredentialsResponseExtensions, MakeCredentialsResponseUnsignedExtensions,
-    ResidentKeyRequirement,
+    MakeCredentialsRequestExtensions, MakeCredentialsResponseExtensions,
+    MakeCredentialsResponseUnsignedExtensions, ResidentKeyRequirement,
 };
 pub use psl::{
     DafsaFileLoadError, DafsaFilePublicSuffixList, DatFileLoadError, DatFilePublicSuffixList,
@@ -40,7 +39,8 @@ pub use psl::{
 };
 pub use related_origins::{
     validate_related_origins, HttpClient, HttpClientError, MaxRegistrableLabels, RelatedOrigins,
-    RelatedOriginsError, RelatedOriginsSource, WellKnownRelatedOriginsSource,
+    RelatedOriginsError, RelatedOriginsSource, StaticRelatedOriginsSource,
+    WellKnownRelatedOriginsSource,
 };
 #[cfg(feature = "reqwest-related-origins-source")]
 pub use related_origins::{HttpPolicy, ReqwestHttpClient, ReqwestRelatedOriginsSource};
