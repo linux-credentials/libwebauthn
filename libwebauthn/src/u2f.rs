@@ -1,3 +1,13 @@
+//! High-level FIDO U2F (CTAP1) client API for registering and authenticating
+//! against an authenticator device. The [`U2F`] trait is blanket-implemented for
+//! any [`Channel`] and offers three async operations: protocol negotiation,
+//! registration, and signing.
+//!
+//! [`RegisterRequest`] and [`SignRequest`] describe the inputs, while the
+//! corresponding response types carry the results back to the caller. The trait
+//! handles the full lifecycle of a U2F exchange, from negotiating the device
+//! protocol through running the request with error handling.
+
 use async_trait::async_trait;
 use tracing::{instrument, warn};
 
