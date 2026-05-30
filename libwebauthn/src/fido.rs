@@ -1,3 +1,17 @@
+//! Protocol abstractions shared between FIDO2 (CTAP2) and FIDO U2F (CTAP1).
+//! This module models the common protocol surface of the two standards,
+//! including protocol negotiation via [`FidoProtocol`], revision tracking via
+//! [`FidoRevision`], and the [`AuthenticatorData`] structure returned by a
+//! device during authentication and attestation ceremonies.
+//!
+//! [`AuthenticatorData`] is the central type. It carries the relying party ID
+//! hash, the user presence and verification flags, the signature counter,
+//! optional attested credential data (the device AAGUID, credential ID, and
+//! credential public key), and any protocol extension outputs. The module
+//! serializes and deserializes these responses per the CTAP2 specification and
+//! preserves the COSE key bytes verbatim, so the device signatures a relying
+//! party verifies stay intact.
+
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use serde::{
     de::{DeserializeOwned, Error as DesError, Visitor},

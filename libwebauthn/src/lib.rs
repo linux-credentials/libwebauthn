@@ -1,3 +1,70 @@
+//! libwebauthn is a Linux platform library implementing the FIDO2/WebAuthn and
+//! FIDO U2F specifications. It provides traits for performing WebAuthn
+//! operations (make credential and get assertion) and U2F operations (register
+//! and sign) against authenticator devices connected over USB, Bluetooth, or
+//! optionally NFC. The core abstractions are the [`WebAuthn`](webauthn::WebAuthn)
+//! and [`U2F`](u2f::U2F) traits that drive the protocol logic, and the
+//! [`Channel`](transport::Channel) trait that abstracts communication with a
+//! physical authenticator.
+//!
+//! While an operation runs, the library may need user verification. It surfaces
+//! this through the [`UvUpdate`] enum and related types such as
+//! [`PinRequiredUpdate`] and [`PinNotSetUpdate`], which let an application
+//! collect input (PIN entry or a presence confirmation) and feed it back into
+//! the ongoing operation. The [`transport`] module manages device discovery and
+//! communication, and the [`pin`] module handles the cryptographic side of PIN
+//! and user verification.
+//!
+//! # Getting started
+//!
+//! A typical flow is to enumerate devices on your transport of choice, open a
+//! [`Channel`](transport::Channel) to each one, and run a ceremony on that
+//! channel. The ceremony traits are blanket-implemented for every channel:
+//! [`WebAuthn`](webauthn::WebAuthn) for make-credential and get-assertion, and
+//! the [`management`] traits ([`CredentialManagement`](management::CredentialManagement),
+//! [`AuthenticatorConfig`](management::AuthenticatorConfig),
+//! [`BioEnrollment`](management::BioEnrollment)) for the administrative
+//! ceremonies. The make-credential and get-assertion requests are built from
+//! their WebAuthn IDL (the JSON the browser API speaks) with
+//! [`MakeCredentialRequest::prepare`](ops::webauthn::MakeCredentialRequest::prepare)
+//! and [`GetAssertionRequest::prepare`](ops::webauthn::GetAssertionRequest::prepare),
+//! which validate the caller origin against the relying party ID.
+//!
+//! ```no_run
+//! use libwebauthn::ops::webauthn::{
+//!     MakeCredentialRequest, RelatedOrigins, RequestOrigin, RequestSettings,
+//!     SystemPublicSuffixList,
+//! };
+//! use libwebauthn::transport::hid::list_devices;
+//! use libwebauthn::transport::Device;
+//! use libwebauthn::webauthn::WebAuthn;
+//!
+//! # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+//! // 1. Enumerate authenticators on your transport of choice (HID shown here).
+//! let devices = list_devices().await?;
+//!
+//! for mut device in devices {
+//!     // 2. Open a channel to the device.
+//!     let mut channel = device.channel().await?;
+//!
+//!     // 3. Build a request from its WebAuthn IDL JSON.
+//!     let origin: RequestOrigin = "https://example.org".try_into().expect("invalid origin");
+//!     let psl = SystemPublicSuffixList::auto().expect("public suffix list unavailable");
+//!     let settings = RequestSettings {
+//!         public_suffix_list: &psl,
+//!         related_origins: RelatedOrigins::Disabled,
+//!     };
+//!     let request_json = r#"{ "rp": { "id": "example.org", "name": "Example" } }"#; // abbreviated
+//!     let request =
+//!         MakeCredentialRequest::prepare(&origin, request_json, &settings).await?;
+//!
+//!     // 4. Run the ceremony on the channel.
+//!     let _response = channel.webauthn_make_credential(&request).await?;
+//! }
+//! # Ok(())
+//! # }
+//! ```
+
 // Production code must not panic. Tests keep unwrap/expect/panic latitude
 // through `not(test)`, and the virt test-utility code through local allows.
 #![cfg_attr(not(test), deny(clippy::unwrap_used))]
