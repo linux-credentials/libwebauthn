@@ -19,6 +19,13 @@ resolver = "2"
 name = "libwebauthn"
 path = "src/lib.rs"
 
+# docs.rs builds with default features only, which omits the NFC transport.
+# Document it too. libnfc is not available in the docs.rs build environment, so
+# the libnfc backend is left out and NFC is documented through the pcsc backend.
+[package.metadata.docs.rs]
+features = ["nfc-backend-pcsc"]
+rustdoc-args = ["--cfg", "docsrs"]
+
 [features]
 default = []
 nfc = ["apdu-core", "apdu"]

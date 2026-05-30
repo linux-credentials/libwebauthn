@@ -1,0 +1,21 @@
+name: docs.rs build
+
+on: [push, pull_request]
+
+jobs:
+  docs:
+    name: docs.rs build
+    runs-on: ubuntu-latest
+    # Same image docs.rs uses, so missing system libraries surface here first.
+    container:
+      image: ghcr.io/rust-lang/crates-build-env/linux:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install nightly toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain nightly --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: Install cargo-docs-rs
+        run: cargo install --locked cargo-docs-rs
+      - name: Build docs the way docs.rs does
+        run: cargo +nightly docs-rs -p libwebauthn
