@@ -61,13 +61,11 @@ impl PrfInputValue {
     /// WebAuthn L3 PRF: salt = SHA-256("WebAuthn PRF" || 0x00 || ev.{first,second}).
     pub fn to_hmac_secret_input(&self) -> HMACGetSecretInput {
         const PREFIX: &[u8] = b"WebAuthn PRF\x00";
-        let hash = |slice: &[u8]| {
+        let hash = |slice: &[u8]| -> [u8; 32] {
             let mut hasher = Sha256::default();
             hasher.update(PREFIX);
             hasher.update(slice);
-            let mut out = [0u8; 32];
-            out.copy_from_slice(&hasher.finalize()[..32]);
-            out
+            hasher.finalize().into()
         };
         HMACGetSecretInput {
             salt1: hash(&self.first),

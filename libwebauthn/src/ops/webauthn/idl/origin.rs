@@ -315,7 +315,7 @@ pub(crate) fn is_registrable_domain_suffix_or_equal(
         return false;
     }
     let boundary = effective_domain.len() - rp_id.len() - 1;
-    if effective_domain.as_bytes()[boundary] != b'.' {
+    if effective_domain.as_bytes().get(boundary) != Some(&b'.') {
         return false;
     }
     if &effective_domain[boundary + 1..] != rp_id {
