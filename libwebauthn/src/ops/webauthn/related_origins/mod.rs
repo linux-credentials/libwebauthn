@@ -3,7 +3,7 @@
 //! the default [`WellKnownRelatedOriginsSource`] fetching the well-known
 //! document over an [`HttpClient`].
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -145,7 +145,9 @@ impl<C: HttpClient> RelatedOriginsSource for WellKnownRelatedOriginsSource<C> {
             .map_err(|e| RelatedOriginsError::MalformedDocument(format!("invalid rp id: {e}")))?;
         let resp = self.http.get(&url).await?;
         if resp.status() != http::StatusCode::OK {
-            return Err(RelatedOriginsError::UnexpectedStatus(resp.status().as_u16()));
+            return Err(RelatedOriginsError::UnexpectedStatus(
+                resp.status().as_u16(),
+            ));
         }
         let content_type = resp
             .headers()
@@ -170,6 +172,43 @@ impl<C: HttpClient> RelatedOriginsSource for WellKnownRelatedOriginsSource<C> {
         let doc: WellKnownDocument = serde_json::from_value(value)
             .map_err(|e| RelatedOriginsError::MalformedDocument(e.to_string()))?;
         Ok(doc.origins)
+    }
+}
+
+/// [`RelatedOriginsSource`] backed by an in-memory map of rp.id to its known
+/// related origins, for callers that already hold the list and want no fetch.
+pub struct StaticRelatedOriginsSource {
+    by_rp_id: HashMap<String, Vec<String>>,
+}
+
+impl StaticRelatedOriginsSource {
+    /// Source for a single rp.id and its known related origins.
+    pub fn new(
+        rp_id: impl Into<String>,
+        origins: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        let mut by_rp_id = HashMap::new();
+        by_rp_id.insert(rp_id.into(), origins.into_iter().map(Into::into).collect());
+        Self { by_rp_id }
+    }
+
+    /// Source backed by a map of rp.id to its known related origins.
+    pub fn from_map(by_rp_id: HashMap<String, Vec<String>>) -> Self {
+        Self { by_rp_id }
+    }
+}
+
+#[async_trait]
+impl RelatedOriginsSource for StaticRelatedOriginsSource {
+    async fn allowed_origins(
+        &self,
+        rp_id: &RelyingPartyId,
+    ) -> Result<Vec<String>, RelatedOriginsError> {
+        Ok(self
+            .by_rp_id
+            .get(rp_id.0.as_str())
+            .cloned()
+            .unwrap_or_default())
     }
 }
 
@@ -455,10 +494,7 @@ mod tests {
     #[test]
     fn unparseable_origin_item_skipped() {
         assert!(matches!(
-            validate(
-                "https://example.com",
-                &["not a url", "https://example.com"]
-            ),
+            validate("https://example.com", &["not a url", "https://example.com"]),
             Ok(())
         ));
     }
@@ -576,7 +612,12 @@ mod tests {
 
     #[tokio::test]
     async fn well_known_returns_origins() {
-        let res = fetch(200, Some("application/json"), r#"{"origins":["https://example.com"]}"#).await;
+        let res = fetch(
+            200,
+            Some("application/json"),
+            r#"{"origins":["https://example.com"]}"#,
+        )
+        .await;
         assert_eq!(res.unwrap(), vec!["https://example.com".to_string()]);
     }
 
@@ -653,7 +694,12 @@ mod tests {
     #[tokio::test]
     async fn origins_not_array_rejected() {
         assert!(matches!(
-            fetch(200, Some("application/json"), r#"{"origins":"https://example.com"}"#).await,
+            fetch(
+                200,
+                Some("application/json"),
+                r#"{"origins":"https://example.com"}"#
+            )
+            .await,
             Err(RelatedOriginsError::MalformedDocument(_))
         ));
     }
@@ -668,14 +714,37 @@ mod tests {
 
     #[tokio::test]
     async fn transport_error_propagates_as_http() {
-        let source =
-            WellKnownRelatedOriginsSource::from_client(ErrHttpClient(HttpClientError::Transport(
-                "simulated".into(),
-            )));
+        let source = WellKnownRelatedOriginsSource::from_client(ErrHttpClient(
+            HttpClientError::Transport("simulated".into()),
+        ));
         let res = source.allowed_origins(&rp("example.com")).await;
         assert!(matches!(
             res,
             Err(RelatedOriginsError::Http(HttpClientError::Transport(_)))
         ));
+    }
+
+    #[tokio::test]
+    async fn static_source_returns_listed_origins() {
+        let single = StaticRelatedOriginsSource::new("example.com", ["https://app.example.org"]);
+        assert_eq!(
+            single.allowed_origins(&rp("example.com")).await.unwrap(),
+            vec!["https://app.example.org".to_string()]
+        );
+        assert!(single
+            .allowed_origins(&rp("other.com"))
+            .await
+            .unwrap()
+            .is_empty());
+
+        let multi = StaticRelatedOriginsSource::from_map(
+            [("a.com".to_string(), vec!["https://x.org".to_string()])]
+                .into_iter()
+                .collect(),
+        );
+        assert_eq!(
+            multi.allowed_origins(&rp("a.com")).await.unwrap(),
+            vec!["https://x.org".to_string()]
+        );
     }
 }
