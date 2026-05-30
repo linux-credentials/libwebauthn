@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use libwebauthn::ops::u2f::{RegisterRequest, SignRequest};
 use libwebauthn::transport::nfc::{get_nfc_device, is_nfc_available};
-use libwebauthn::transport::{Channel as _, Device};
+use libwebauthn::transport::{Channel as _, ChannelSettings, Device};
 use libwebauthn::u2f::U2F;
 
 #[path = "../common/mod.rs"]
@@ -24,7 +24,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
 
     if let Some(mut device) = device {
         println!("Selected NFC authenticator: {}", &device);
-        let mut channel = device.channel().await?;
+        let mut channel = device.channel(ChannelSettings::default()).await?;
 
         const APP_ID: &str = "https://foo.example.org";
         let challenge: &[u8] =

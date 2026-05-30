@@ -7,7 +7,7 @@ use text_io::read;
 use libwebauthn::management::BioEnrollment;
 use libwebauthn::proto::ctap2::{Ctap2, Ctap2GetInfoResponse, Ctap2LastEnrollmentSampleStatus};
 use libwebauthn::transport::hid::list_devices;
-use libwebauthn::transport::{Channel as _, Device};
+use libwebauthn::transport::{Channel as _, ChannelSettings, Device};
 use libwebauthn::webauthn::Error as WebAuthnError;
 
 #[path = "../common/mod.rs"]
@@ -85,7 +85,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
 
     for mut device in devices {
         println!("Selected HID authenticator: {}", device);
-        let mut channel = device.channel().await?;
+        let mut channel = device.channel(ChannelSettings::default()).await?;
         channel.wink(TIMEOUT).await?;
 
         let state_recv = channel.get_ux_update_receiver();

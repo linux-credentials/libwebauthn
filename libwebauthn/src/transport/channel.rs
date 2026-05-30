@@ -27,6 +27,17 @@ pub enum ChannelStatus {
     Closed,
 }
 
+/// Per-channel configuration supplied by the caller when opening a channel via
+/// [`Device::channel`](crate::transport::Device::channel). Transport-agnostic, so the
+/// same options apply to HID, BLE, NFC, and hybrid (caBLE).
+#[derive(Debug, Default, Clone)]
+pub struct ChannelSettings {
+    /// Caller-supplied store for persistent pinUvAuthTokens (pcmr). When set, read-only
+    /// credential management reuses a stored token across sessions instead of
+    /// re-prompting for the PIN. See [`PersistentTokenStore`].
+    pub persistent_token_store: Option<Arc<dyn PersistentTokenStore>>,
+}
+
 #[async_trait]
 pub trait Channel: Send + Sync + Display + Ctap2AuthTokenStore {
     /// UX updates for this channel, must include UV updates.

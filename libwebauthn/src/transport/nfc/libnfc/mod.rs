@@ -2,6 +2,7 @@ use super::channel::{HandlerInCtx, NfcBackend, NfcChannel};
 use super::device::NfcDevice;
 use super::Context;
 use crate::transport::error::TransportError;
+use crate::transport::ChannelSettings;
 use crate::webauthn::Error;
 use apdu::core::HandleError;
 use apdu_core;
@@ -69,7 +70,7 @@ impl Info {
         }
     }
 
-    pub fn channel(&self) -> Result<NfcChannel<Context>, Error> {
+    pub fn channel(&self, settings: ChannelSettings) -> Result<NfcChannel<Context>, Error> {
         let context = nfc1::Context::new().map_err(map_error)?;
 
         let mut chan = Channel::new(self, context)?;
@@ -90,7 +91,7 @@ impl Info {
         debug!("Selected: {:?}", target);
 
         let ctx = Context {};
-        let channel = NfcChannel::new(Box::new(chan), ctx);
+        let channel = NfcChannel::new(Box::new(chan), ctx, settings);
         Ok(channel)
     }
 }

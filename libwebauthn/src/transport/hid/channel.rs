@@ -15,6 +15,7 @@ use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::time::sleep;
 use tracing::{debug, info, instrument, trace, warn, Level};
 
+use crate::pin::persistent_token::PersistentTokenStore;
 use crate::proto::ctap1::apdu::{ApduRequest, ApduResponse};
 use crate::proto::ctap1::{Ctap1, Ctap1RegisterRequest};
 use crate::proto::ctap2::cbor::{CborRequest, CborResponse};
@@ -22,7 +23,9 @@ use crate::proto::ctap2::cbor::{CborRequest, CborResponse};
 use crate::proto::ctap2::Ctap2PinUvAuthProtocol;
 use crate::proto::ctap2::{Ctap2, Ctap2MakeCredentialRequest};
 use crate::proto::CtapError;
-use crate::transport::channel::{AuthTokenData, Channel, ChannelStatus, Ctap2AuthTokenStore};
+use crate::transport::channel::{
+    AuthTokenData, Channel, ChannelSettings, ChannelStatus, Ctap2AuthTokenStore,
+};
 use crate::transport::device::SupportedProtocols;
 use crate::transport::error::TransportError;
 #[cfg(feature = "virt")]
@@ -79,6 +82,7 @@ pub struct HidChannel<'d> {
     open_device: OpenHidDevice,
     init: InitResponse,
     auth_token_data: Option<AuthTokenData>,
+    persistent_token_store: Option<Arc<dyn PersistentTokenStore>>,
     ux_update_sender: broadcast::Sender<UvUpdate>,
     handle: HidChannelHandle,
     #[cfg(feature = "virt")]
@@ -86,7 +90,10 @@ pub struct HidChannel<'d> {
 }
 
 impl<'d> HidChannel<'d> {
-    pub async fn new(device: &'d HidDevice) -> Result<HidChannel<'d>, Error> {
+    pub async fn new(
+        device: &'d HidDevice,
+        settings: ChannelSettings,
+    ) -> Result<HidChannel<'d>, Error> {
         let (ux_update_sender, _) = broadcast::channel(16);
         let (handle_tx, handle_rx) = mpsc::channel(1);
         let handle = HidChannelHandle { tx: handle_tx };
@@ -106,6 +113,7 @@ impl<'d> HidChannel<'d> {
             },
             init: InitResponse::default(),
             auth_token_data: None,
+            persistent_token_store: settings.persistent_token_store,
             ux_update_sender,
             handle,
             #[cfg(feature = "virt")]
@@ -605,5 +613,9 @@ impl Ctap2AuthTokenStore for HidChannel<'_> {
 
     fn clear_uv_auth_token_store(&mut self) {
         self.auth_token_data = None;
+    }
+
+    fn persistent_token_store(&self) -> Option<Arc<dyn PersistentTokenStore>> {
+        self.persistent_token_store.clone()
     }
 }

@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use libwebauthn::pin::PinManagement;
 use libwebauthn::transport::hid::list_devices;
-use libwebauthn::transport::{Channel as _, Device};
+use libwebauthn::transport::{Channel as _, ChannelSettings, Device};
 use text_io::read;
 
 #[path = "../common/mod.rs"]
@@ -21,7 +21,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
 
     for mut device in devices {
         println!("Selected HID authenticator: {}", device);
-        let mut channel = device.channel().await?;
+        let mut channel = device.channel(ChannelSettings::default()).await?;
         channel.wink(TIMEOUT).await?;
 
         print!("PIN: Please enter the _new_ PIN: ");

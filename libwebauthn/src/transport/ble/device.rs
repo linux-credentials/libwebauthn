@@ -7,6 +7,7 @@ use tracing::{info, instrument};
 
 use crate::transport::device::Device;
 use crate::transport::error::TransportError;
+use crate::transport::ChannelSettings;
 use crate::webauthn::error::Error;
 
 use super::btleplug::manager::SupportedRevisions;
@@ -78,9 +79,9 @@ impl fmt::Display for BleDevice {
 
 #[async_trait]
 impl<'d> Device<'d, Ble, BleChannel<'d>> for BleDevice {
-    async fn channel(&'d mut self) -> Result<BleChannel<'d>, Error> {
+    async fn channel(&'d mut self, settings: ChannelSettings) -> Result<BleChannel<'d>, Error> {
         let revisions = self.supported_revisions().await?;
-        let channel = BleChannel::new(self, &revisions).await?;
+        let channel = BleChannel::new(self, &revisions, settings).await?;
         Ok(channel)
     }
 

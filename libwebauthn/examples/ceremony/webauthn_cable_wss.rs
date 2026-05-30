@@ -18,7 +18,7 @@ use libwebauthn::ops::webauthn::{
     RequestOrigin, RequestSettings, SystemPublicSuffixList, WebAuthnIDLResponse as _,
 };
 use libwebauthn::transport::cable::channel::CableChannel;
-use libwebauthn::transport::{Channel as _, Device};
+use libwebauthn::transport::{Channel as _, ChannelSettings, Device};
 use libwebauthn::webauthn::WebAuthn;
 
 #[path = "../common/mod.rs"]
@@ -89,7 +89,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             .build();
         println!("{}", image);
 
-        let mut channel = device.channel().await.unwrap();
+        let mut channel = device.channel(ChannelSettings::default()).await.unwrap();
         println!("Channel established {:?}", channel);
 
         let state_recv = channel.get_ux_update_receiver();
@@ -131,7 +131,10 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         )
         .await
         .unwrap();
-        let mut channel = known_device.channel().await.unwrap();
+        let mut channel = known_device
+            .channel(ChannelSettings::default())
+            .await
+            .unwrap();
         println!("Channel established {:?}", channel);
         run_get_assertion(&mut channel, &request_origin, &psl).await?;
     } else {
@@ -148,7 +151,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             .light_color(unicode::Dense1x2::Dark)
             .build();
         println!("{}", image);
-        let mut channel = device.channel().await.unwrap();
+        let mut channel = device.channel(ChannelSettings::default()).await.unwrap();
         println!("Channel established {:?}", channel);
         run_get_assertion(&mut channel, &request_origin, &psl).await?;
     }

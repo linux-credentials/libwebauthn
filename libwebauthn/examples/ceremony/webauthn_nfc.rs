@@ -5,7 +5,7 @@ use libwebauthn::ops::webauthn::{
     RequestOrigin, RequestSettings, SystemPublicSuffixList, WebAuthnIDLResponse as _,
 };
 use libwebauthn::transport::nfc::{get_nfc_device, is_nfc_available};
-use libwebauthn::transport::{Channel as _, Device};
+use libwebauthn::transport::{Channel as _, ChannelSettings, Device};
 use libwebauthn::webauthn::WebAuthn;
 
 #[path = "../common/mod.rs"]
@@ -24,7 +24,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     };
     println!("Selected NFC authenticator: {}", device);
-    let mut channel = device.channel().await?;
+    let mut channel = device.channel(ChannelSettings::default()).await?;
 
     let request_origin: RequestOrigin = "https://example.org".try_into().expect("Invalid origin");
     let psl = SystemPublicSuffixList::auto().expect(

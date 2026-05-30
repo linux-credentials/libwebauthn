@@ -8,7 +8,7 @@ use libwebauthn::ops::webauthn::{
 use libwebauthn::pin::PinManagement;
 use libwebauthn::proto::ctap2::{Ctap2PinUvAuthProtocol, Ctap2PublicKeyCredentialDescriptor};
 use libwebauthn::transport::hid::channel::HidChannel;
-use libwebauthn::transport::{Channel, Ctap2AuthTokenStore, Device};
+use libwebauthn::transport::{Channel, ChannelSettings, Ctap2AuthTokenStore, Device};
 use libwebauthn::webauthn::{Error as WebAuthnError, PlatformError, WebAuthn};
 use libwebauthn::UvUpdate;
 use libwebauthn::{
@@ -28,14 +28,14 @@ const TIMEOUT: Duration = Duration::from_secs(10);
 #[test(tokio::test)]
 async fn test_webauthn_prf_no_pin_set() {
     let mut device = get_virtual_device();
-    let mut channel = device.channel().await.unwrap();
+    let mut channel = device.channel(ChannelSettings::default()).await.unwrap();
     run_test_battery(&mut channel, false).await;
 }
 
 #[test(tokio::test)]
 async fn test_webauthn_prf_with_pin_set() {
     let mut device = get_virtual_device();
-    let mut channel = device.channel().await.unwrap();
+    let mut channel = device.channel(ChannelSettings::default()).await.unwrap();
     channel
         .change_pin(String::from("1234"), TIMEOUT)
         .await
@@ -46,7 +46,7 @@ async fn test_webauthn_prf_with_pin_set() {
 #[test(tokio::test)]
 async fn test_webauthn_prf_with_pin_set_forced_pin_protocol_one() {
     let mut device = get_virtual_device();
-    let mut channel = device.channel().await.unwrap();
+    let mut channel = device.channel(ChannelSettings::default()).await.unwrap();
     channel.set_forced_pin_protocol(Ctap2PinUvAuthProtocol::One);
     channel
         .change_pin(String::from("1234"), TIMEOUT)
@@ -58,7 +58,7 @@ async fn test_webauthn_prf_with_pin_set_forced_pin_protocol_one() {
 #[test(tokio::test)]
 async fn test_webauthn_prf_with_pin_set_forced_pin_protocol_two() {
     let mut device = get_virtual_device();
-    let mut channel = device.channel().await.unwrap();
+    let mut channel = device.channel(ChannelSettings::default()).await.unwrap();
     channel.set_forced_pin_protocol(Ctap2PinUvAuthProtocol::Two);
     channel
         .change_pin(String::from("1234"), TIMEOUT)
@@ -74,7 +74,7 @@ async fn test_webauthn_prf_with_pin_set_forced_pin_protocol_two() {
 #[test(tokio::test)]
 async fn test_webauthn_prf_eval_at_create_degrades_when_unsupported() {
     let mut device = get_virtual_device();
-    let mut channel = device.channel().await.unwrap();
+    let mut channel = device.channel(ChannelSettings::default()).await.unwrap();
     let state_recv = channel.get_ux_update_receiver();
     // PRF forces UV=required (webauthn#2337); no-PIN device drives PIN setup.
     tokio::spawn(handle_updates(
@@ -659,7 +659,7 @@ async fn run_failed_test(
 #[test(tokio::test)]
 async fn test_webauthn_prf_variable_length_input() {
     let mut device = get_virtual_device();
-    let mut channel = device.channel().await.unwrap();
+    let mut channel = device.channel(ChannelSettings::default()).await.unwrap();
 
     let user_id: [u8; 32] = thread_rng().gen();
     let challenge: [u8; 32] = thread_rng().gen();
@@ -810,7 +810,7 @@ fn basic_make_credential_request(
 #[test(tokio::test)]
 async fn test_webauthn_prf_upgrades_uv_at_registration() {
     let mut device = get_virtual_device();
-    let mut channel = device.channel().await.unwrap();
+    let mut channel = device.channel(ChannelSettings::default()).await.unwrap();
     channel.change_pin("1234".into(), TIMEOUT).await.unwrap();
 
     let state_recv = channel.get_ux_update_receiver();
@@ -852,7 +852,7 @@ async fn test_webauthn_prf_upgrades_uv_at_registration() {
 #[test(tokio::test)]
 async fn test_webauthn_no_prf_no_upgrade() {
     let mut device = get_virtual_device();
-    let mut channel = device.channel().await.unwrap();
+    let mut channel = device.channel(ChannelSettings::default()).await.unwrap();
     channel.change_pin("1234".into(), TIMEOUT).await.unwrap();
 
     let state_recv = channel.get_ux_update_receiver();
@@ -886,7 +886,7 @@ async fn test_webauthn_no_prf_no_upgrade() {
 #[test(tokio::test)]
 async fn test_webauthn_prf_upgrades_uv_at_assertion() {
     let mut device = get_virtual_device();
-    let mut channel = device.channel().await.unwrap();
+    let mut channel = device.channel(ChannelSettings::default()).await.unwrap();
     channel.change_pin("1234".into(), TIMEOUT).await.unwrap();
 
     let user_id: [u8; 32] = thread_rng().gen();

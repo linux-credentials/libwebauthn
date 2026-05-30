@@ -4,7 +4,7 @@ use std::fmt;
 use tracing::{debug, info, instrument, trace};
 
 use crate::{
-    transport::{device::Device, Channel},
+    transport::{device::Device, Channel, ChannelSettings},
     webauthn::Error,
 };
 
@@ -60,13 +60,13 @@ impl NfcDevice {
         }
     }
 
-    async fn channel_sync(&self) -> Result<NfcChannel<Context>, Error> {
+    async fn channel_sync(&self, settings: ChannelSettings) -> Result<NfcChannel<Context>, Error> {
         trace!("nfc channel {:?}", self);
         let mut channel: NfcChannel<Context> = match &self.info {
             #[cfg(feature = "nfc-backend-libnfc")]
-            DeviceInfo::LibNfc(info) => info.channel(),
+            DeviceInfo::LibNfc(info) => info.channel(settings),
             #[cfg(feature = "nfc-backend-pcsc")]
-            DeviceInfo::Pcsc(info) => info.channel(),
+            DeviceInfo::Pcsc(info) => info.channel(settings),
         }?;
 
         channel.select_fido2().await?;
@@ -76,14 +76,17 @@ impl NfcDevice {
 
 #[async_trait]
 impl<'d> Device<'d, Nfc, NfcChannel<Context>> for NfcDevice {
-    async fn channel(&'d mut self) -> Result<NfcChannel<Context>, Error> {
-        self.channel_sync().await
+    async fn channel(
+        &'d mut self,
+        settings: ChannelSettings,
+    ) -> Result<NfcChannel<Context>, Error> {
+        self.channel_sync(settings).await
     }
 }
 
 async fn is_fido(device: &NfcDevice) -> bool {
     async fn inner(device: &NfcDevice) -> Result<bool, Error> {
-        let chan = device.channel_sync().await?;
+        let chan = device.channel_sync(ChannelSettings::default()).await?;
         let protocols = chan.supported_protocols().await?;
         Ok(protocols.fido2 || protocols.u2f)
     }
