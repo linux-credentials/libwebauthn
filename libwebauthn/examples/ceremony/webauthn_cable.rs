@@ -12,7 +12,7 @@ use qrcode::QrCode;
 
 use libwebauthn::ops::webauthn::{
     DatFilePublicSuffixList, JsonFormat, MakeCredentialRequest, MaxRegistrableLabels,
-    RelatedOrigins, RequestOrigin, RequestSettings, ReqwestRelatedOriginsSource,
+    OriginValidation, RelatedOrigins, RequestOrigin, RequestSettings, ReqwestRelatedOriginsSource,
     WebAuthnIDLResponse as _,
 };
 use libwebauthn::transport::{Channel as _, Device};
@@ -61,10 +61,12 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
     );
     let related_origins = ReqwestRelatedOriginsSource::new()?;
     let settings = RequestSettings {
-        public_suffix_list: &psl,
-        related_origins: RelatedOrigins::Enabled {
-            source: &related_origins,
-            max_labels: MaxRegistrableLabels::default(),
+        origin: OriginValidation::Validate {
+            public_suffix_list: &psl,
+            related_origins: RelatedOrigins::Enabled {
+                source: &related_origins,
+                max_labels: MaxRegistrableLabels::default(),
+            },
         },
     };
 

@@ -32,7 +32,7 @@
 //!
 //! ```no_run
 //! use libwebauthn::ops::webauthn::{
-//!     MakeCredentialRequest, RelatedOrigins, RequestOrigin, RequestSettings,
+//!     MakeCredentialRequest, OriginValidation, RelatedOrigins, RequestOrigin, RequestSettings,
 //!     SystemPublicSuffixList,
 //! };
 //! use libwebauthn::transport::hid::list_devices;
@@ -51,8 +51,10 @@
 //!     let origin: RequestOrigin = "https://example.org".try_into().expect("invalid origin");
 //!     let psl = SystemPublicSuffixList::auto().expect("public suffix list unavailable");
 //!     let settings = RequestSettings {
-//!         public_suffix_list: &psl,
-//!         related_origins: RelatedOrigins::Disabled,
+//!         origin: OriginValidation::Validate {
+//!             public_suffix_list: &psl,
+//!             related_origins: RelatedOrigins::Disabled,
+//!         },
 //!     };
 //!     let request_json = r#"{ "rp": { "id": "example.org", "name": "Example" } }"#; // abbreviated
 //!     let request =

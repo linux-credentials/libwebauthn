@@ -14,8 +14,8 @@ use qrcode::QrCode;
 use tokio::time::sleep;
 
 use libwebauthn::ops::webauthn::{
-    GetAssertionRequest, JsonFormat, MakeCredentialRequest, RelatedOrigins, RequestOrigin,
-    RequestSettings, SystemPublicSuffixList, WebAuthnIDLResponse as _,
+    GetAssertionRequest, JsonFormat, MakeCredentialRequest, OriginValidation, RelatedOrigins,
+    RequestOrigin, RequestSettings, SystemPublicSuffixList, WebAuthnIDLResponse as _,
 };
 use libwebauthn::transport::cable::channel::CableChannel;
 use libwebauthn::transport::{Channel as _, Device};
@@ -99,8 +99,10 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             &request_origin,
             MAKE_CREDENTIAL_REQUEST,
             &RequestSettings {
-                public_suffix_list: &psl,
-                related_origins: RelatedOrigins::Disabled,
+                origin: OriginValidation::Validate {
+                    public_suffix_list: &psl,
+                    related_origins: RelatedOrigins::Disabled,
+                },
             },
         )
         .await
@@ -166,8 +168,10 @@ async fn run_get_assertion(
         request_origin,
         GET_ASSERTION_REQUEST,
         &RequestSettings {
-            public_suffix_list: psl,
-            related_origins: RelatedOrigins::Disabled,
+            origin: OriginValidation::Validate {
+                public_suffix_list: psl,
+                related_origins: RelatedOrigins::Disabled,
+            },
         },
     )
     .await

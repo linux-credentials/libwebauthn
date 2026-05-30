@@ -702,7 +702,7 @@ mod tests {
         HttpClientError, MaxRegistrableLabels, RelatedOrigins, RelatedOriginsError,
         RelatedOriginsSource,
     };
-    use crate::ops::webauthn::{MakeCredentialRequest, RequestOrigin};
+    use crate::ops::webauthn::{MakeCredentialRequest, OriginValidation, RequestOrigin};
     use crate::proto::ctap2::Ctap2PublicKeyCredentialType;
 
     use super::*;
@@ -754,8 +754,10 @@ mod tests {
             origin,
             json,
             &RequestSettings {
-                public_suffix_list: psl,
-                related_origins,
+                origin: OriginValidation::Validate {
+                    public_suffix_list: psl,
+                    related_origins,
+                },
             },
         )
         .await
@@ -1087,6 +1089,48 @@ mod tests {
             &MockPublicSuffixList,
             RelatedOrigins::Disabled,
             &req_json,
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(MakeCredentialPrepareError::InvalidRelyingPartyId(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn origin_trust_accepts_mismatching_rp_id() {
+        let request_origin: RequestOrigin = "https://app.example.org".parse().unwrap();
+        let req_json = json_field_add(
+            REQUEST_BASE_JSON,
+            "rp",
+            r#"{"id": "example.com", "name": "example.com"}"#,
+        );
+        let req = MakeCredentialRequest::prepare(
+            &request_origin,
+            &req_json,
+            &RequestSettings {
+                origin: OriginValidation::Trust,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(req.relying_party.id, "example.com");
+    }
+
+    #[tokio::test]
+    async fn origin_trust_still_rejects_invalid_rp_id() {
+        let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
+        let req_json = json_field_add(
+            REQUEST_BASE_JSON,
+            "rp",
+            r#"{"id": "example.org.", "name": "example.org"}"#,
+        );
+        let result = MakeCredentialRequest::prepare(
+            &request_origin,
+            &req_json,
+            &RequestSettings {
+                origin: OriginValidation::Trust,
+            },
         )
         .await;
         assert!(matches!(

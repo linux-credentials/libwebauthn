@@ -6,7 +6,7 @@ use async_trait::async_trait;
 
 use libwebauthn::ops::webauthn::{
     GetAssertionRequest, HttpClient, HttpClientError, MakeCredentialRequest, MaxRegistrableLabels,
-    PublicSuffixList, RelatedOrigins, RequestOrigin, RequestSettings,
+    OriginValidation, PublicSuffixList, RelatedOrigins, RequestOrigin, RequestSettings,
     WellKnownRelatedOriginsSource,
 };
 
@@ -86,10 +86,12 @@ fn settings<'a>(
     source: &'a WellKnownRelatedOriginsSource<StaticHttp>,
 ) -> RequestSettings<'a> {
     RequestSettings {
-        public_suffix_list: psl,
-        related_origins: RelatedOrigins::Enabled {
-            source,
-            max_labels: MaxRegistrableLabels::default(),
+        origin: OriginValidation::Validate {
+            public_suffix_list: psl,
+            related_origins: RelatedOrigins::Enabled {
+                source,
+                max_labels: MaxRegistrableLabels::default(),
+            },
         },
     }
 }

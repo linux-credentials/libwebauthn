@@ -21,8 +21,8 @@ pub use idl::{
     rpid::RelyingPartyId,
     AuthenticationExtensionsClientOutputsJSON, AuthenticationResponseJSON,
     AuthenticatorAssertionResponseJSON, AuthenticatorAttestationResponseJSON, Base64UrlString,
-    JsonFormat, RegistrationResponseJSON, RequestSettings, ResponseSerializationError,
-    WebAuthnIDLResponse,
+    JsonFormat, OriginValidation, RegistrationResponseJSON, RequestSettings,
+    ResponseSerializationError, WebAuthnIDLResponse,
 };
 pub use make_credential::{
     CredentialPropsExtension, CredentialProtectionExtension, CredentialProtectionPolicy,

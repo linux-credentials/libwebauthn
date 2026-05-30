@@ -663,7 +663,7 @@ mod tests {
         HttpClientError, MaxRegistrableLabels, RelatedOrigins, RelatedOriginsError,
         RelatedOriginsSource,
     };
-    use crate::ops::webauthn::{GetAssertionRequest, RequestOrigin};
+    use crate::ops::webauthn::{GetAssertionRequest, OriginValidation, RequestOrigin};
     use crate::proto::ctap2::Ctap2PublicKeyCredentialType;
 
     use super::*;
@@ -715,8 +715,10 @@ mod tests {
             origin,
             json,
             &RequestSettings {
-                public_suffix_list: psl,
-                related_origins,
+                origin: OriginValidation::Validate {
+                    public_suffix_list: psl,
+                    related_origins,
+                },
             },
         )
         .await
@@ -832,6 +834,22 @@ mod tests {
             result,
             Err(GetAssertionPrepareError::MismatchingRelyingPartyId(_, _))
         ));
+    }
+
+    #[tokio::test]
+    async fn origin_trust_accepts_mismatching_rp_id() {
+        let request_origin: RequestOrigin = "https://app.example.org".parse().unwrap();
+        let req_json = json_field_add(REQUEST_BASE_JSON, "rpId", r#""example.com""#);
+        let req = GetAssertionRequest::prepare(
+            &request_origin,
+            &req_json,
+            &RequestSettings {
+                origin: OriginValidation::Trust,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(req.relying_party_id, "example.com");
     }
 
     #[tokio::test]

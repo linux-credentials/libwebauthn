@@ -26,11 +26,23 @@ use super::related_origins::{validate_related_origins, RelatedOrigins};
 
 pub type JsonError = serde_json::Error;
 
-/// Dependencies for origin validation: the Public Suffix List (rp.id suffix
-/// check and related-origins matching) and the related-origins policy.
+/// Per-request settings (currently just the origin-validation policy).
 pub struct RequestSettings<'a> {
-    pub public_suffix_list: &'a dyn PublicSuffixList,
-    pub related_origins: RelatedOrigins<'a>,
+    pub origin: OriginValidation<'a>,
+}
+
+/// How the caller origin is validated against the request rp.id.
+pub enum OriginValidation<'a> {
+    /// Trust the caller's origin to rp.id binding with no check, for callers
+    /// that have already validated it (e.g. a browser). Misuse defeats phishing
+    /// resistance, so the caller owns that decision.
+    Trust,
+    /// Validate rp.id against the caller origin: a registrable suffix of the
+    /// effective domain, then related origins on mismatch.
+    Validate {
+        public_suffix_list: &'a dyn PublicSuffixList,
+        related_origins: RelatedOrigins<'a>,
+    },
 }
 
 /// Builds a request from its parsed IDL model, validating origin against rp.id.
@@ -48,19 +60,26 @@ where
     ) -> Result<Self, Self::Error>;
 }
 
-/// Whether `request_origin` may act for `rp_id`: a registrable suffix of the
-/// caller's effective domain, or a matching related origin when enabled.
+/// Whether `request_origin` may act for `rp_id`. `Trust` accepts any rp.id;
+/// `Validate` requires a registrable suffix of the caller's effective domain or
+/// a matching related origin.
 pub(crate) async fn rp_id_authorised(
     request_origin: &RequestOrigin,
     rp_id: &RelyingPartyId,
     settings: &RequestSettings<'_>,
 ) -> bool {
+    let (public_suffix_list, related_origins) = match &settings.origin {
+        OriginValidation::Trust => return true,
+        OriginValidation::Validate {
+            public_suffix_list,
+            related_origins,
+        } => (*public_suffix_list, related_origins),
+    };
     let effective_rp_id = request_origin.origin.host.as_str();
-    if is_registrable_domain_suffix_or_equal(&rp_id.0, effective_rp_id, settings.public_suffix_list)
-    {
+    if is_registrable_domain_suffix_or_equal(&rp_id.0, effective_rp_id, public_suffix_list) {
         return true;
     }
-    match &settings.related_origins {
+    match related_origins {
         RelatedOrigins::Disabled => false,
         RelatedOrigins::Enabled { source, max_labels } => {
             match source.allowed_origins(rp_id).await {
@@ -71,7 +90,7 @@ pub(crate) async fn rp_id_authorised(
                 Ok(origins) => match validate_related_origins(
                     &request_origin.origin,
                     &origins,
-                    settings.public_suffix_list,
+                    public_suffix_list,
                     *max_labels,
                 ) {
                     Ok(()) => true,
