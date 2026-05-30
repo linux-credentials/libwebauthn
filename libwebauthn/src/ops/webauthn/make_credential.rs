@@ -374,9 +374,8 @@ impl FromIdlModel<PublicKeyCredentialCreationOptionsJSON> for MakeCredentialRequ
         inner: PublicKeyCredentialCreationOptionsJSON,
     ) -> Result<Self, MakeCredentialPrepareError> {
         let effective_rp_id = request_origin.origin.host.as_str();
-        let rp_id = RelyingPartyId::try_from(inner.rp.id.as_str()).map_err(|err| {
-            MakeCredentialPrepareError::InvalidRelyingPartyId(err.to_string())
-        })?;
+        let rp_id = RelyingPartyId::try_from(inner.rp.id.as_str())
+            .map_err(|err| MakeCredentialPrepareError::InvalidRelyingPartyId(err.to_string()))?;
         if !rp_id_authorised(request_origin, &rp_id, settings).await {
             return Err(MakeCredentialPrepareError::MismatchingRelyingPartyId(
                 rp_id.0,
@@ -722,7 +721,9 @@ mod tests {
         }
 
         fn err(e: RelatedOriginsError) -> Self {
-            Self { result: Some(Err(e)) }
+            Self {
+                result: Some(Err(e)),
+            }
         }
 
         fn panicking() -> Self {

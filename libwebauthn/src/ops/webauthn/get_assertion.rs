@@ -184,9 +184,8 @@ impl FromIdlModel<PublicKeyCredentialRequestOptionsJSON> for GetAssertionRequest
     ) -> Result<Self, GetAssertionPrepareError> {
         let effective_rp_id = request_origin.origin.host.as_str();
         let resolved_rp_id = if let Some(relying_party_id) = inner.relying_party_id.as_deref() {
-            let parsed = RelyingPartyId::try_from(relying_party_id).map_err(|err| {
-                GetAssertionPrepareError::InvalidRelyingPartyId(err.to_string())
-            })?;
+            let parsed = RelyingPartyId::try_from(relying_party_id)
+                .map_err(|err| GetAssertionPrepareError::InvalidRelyingPartyId(err.to_string()))?;
             if !rp_id_authorised(request_origin, &parsed, settings).await {
                 return Err(GetAssertionPrepareError::MismatchingRelyingPartyId(
                     parsed.0,
@@ -685,7 +684,9 @@ mod tests {
         }
 
         fn err(e: RelatedOriginsError) -> Self {
-            Self { result: Some(Err(e)) }
+            Self {
+                result: Some(Err(e)),
+            }
         }
 
         fn panicking() -> Self {
@@ -831,10 +832,7 @@ mod tests {
         .await;
         assert!(matches!(
             result,
-            Err(GetAssertionPrepareError::MismatchingRelyingPartyId(
-                _,
-                _
-            ))
+            Err(GetAssertionPrepareError::MismatchingRelyingPartyId(_, _))
         ));
     }
 
@@ -871,10 +869,7 @@ mod tests {
         .await;
         assert!(matches!(
             result,
-            Err(GetAssertionPrepareError::MismatchingRelyingPartyId(
-                _,
-                _
-            ))
+            Err(GetAssertionPrepareError::MismatchingRelyingPartyId(_, _))
         ));
     }
 
@@ -919,10 +914,7 @@ mod tests {
         .await;
         assert!(matches!(
             result,
-            Err(GetAssertionPrepareError::MismatchingRelyingPartyId(
-                _,
-                _
-            ))
+            Err(GetAssertionPrepareError::MismatchingRelyingPartyId(_, _))
         ));
     }
 
@@ -946,10 +938,7 @@ mod tests {
         .await;
         assert!(matches!(
             result,
-            Err(GetAssertionPrepareError::MismatchingRelyingPartyId(
-                _,
-                _
-            ))
+            Err(GetAssertionPrepareError::MismatchingRelyingPartyId(_, _))
         ));
     }
 
