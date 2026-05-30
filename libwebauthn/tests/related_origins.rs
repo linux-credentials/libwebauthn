@@ -6,7 +6,8 @@ use async_trait::async_trait;
 
 use libwebauthn::ops::webauthn::{
     GetAssertionRequest, HttpClient, HttpClientError, MakeCredentialRequest, MaxRegistrableLabels,
-    PublicSuffixList, RelatedOrigins, RequestOrigin, RequestSettings, WellKnownRelatedOriginsSource,
+    PublicSuffixList, RelatedOrigins, RequestOrigin, RequestSettings,
+    WellKnownRelatedOriginsSource,
 };
 
 const KNOWN_SUFFIXES: &[&str] = &["com", "org"];
@@ -80,7 +81,10 @@ const GET_ASSERTION_JSON: &str = r#"
 // related-origins fetch path is actually exercised.
 const WELL_KNOWN_BODY: &str = r#"{"origins":["https://app.example.com","https://example.org"]}"#;
 
-fn settings<'a>(psl: &'a TestPsl, source: &'a WellKnownRelatedOriginsSource<StaticHttp>) -> RequestSettings<'a> {
+fn settings<'a>(
+    psl: &'a TestPsl,
+    source: &'a WellKnownRelatedOriginsSource<StaticHttp>,
+) -> RequestSettings<'a> {
     RequestSettings {
         public_suffix_list: psl,
         related_origins: RelatedOrigins::Enabled {
@@ -94,7 +98,9 @@ fn settings<'a>(psl: &'a TestPsl, source: &'a WellKnownRelatedOriginsSource<Stat
 async fn end_to_end_mock_match_via_make_credential() {
     let request_origin: RequestOrigin = "https://app.example.com".parse().unwrap();
     let psl = TestPsl;
-    let source = WellKnownRelatedOriginsSource::from_client(StaticHttp { body: WELL_KNOWN_BODY });
+    let source = WellKnownRelatedOriginsSource::from_client(StaticHttp {
+        body: WELL_KNOWN_BODY,
+    });
 
     let req = MakeCredentialRequest::prepare(
         &request_origin,
@@ -114,7 +120,9 @@ async fn end_to_end_mock_match_via_make_credential() {
 async fn end_to_end_mock_match_via_get_assertion() {
     let request_origin: RequestOrigin = "https://app.example.com".parse().unwrap();
     let psl = TestPsl;
-    let source = WellKnownRelatedOriginsSource::from_client(StaticHttp { body: WELL_KNOWN_BODY });
+    let source = WellKnownRelatedOriginsSource::from_client(StaticHttp {
+        body: WELL_KNOWN_BODY,
+    });
 
     let req = GetAssertionRequest::prepare(
         &request_origin,

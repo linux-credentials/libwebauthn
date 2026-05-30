@@ -88,13 +88,10 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
     let state_recv = channel.get_ux_update_receiver();
     tokio::spawn(common::handle_cable_updates(state_recv));
 
-    let request = MakeCredentialRequest::prepare(
-        &request_origin,
-        MAKE_CREDENTIAL_REQUEST,
-        &settings,
-    )
-    .await
-    .expect("Failed to parse request JSON");
+    let request =
+        MakeCredentialRequest::prepare(&request_origin, MAKE_CREDENTIAL_REQUEST, &settings)
+            .await
+            .expect("Failed to parse request JSON");
 
     let response = retry_user_errors!(channel.webauthn_make_credential(&request)).unwrap();
     let response_json = response
