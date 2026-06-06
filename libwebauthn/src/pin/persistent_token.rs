@@ -347,6 +347,42 @@ mod test {
         assert!(decrypt_enc_identifier(&token, &[]).is_err());
     }
 
+    // Known-answer vector for the encIdentifier construction (CTAP 2.3-PS 6.4). The
+    // expected key and ciphertext were computed independently of this crate (RFC 5869
+    // HKDF-SHA-256 via Python hashlib/hmac, AES-128-CBC via openssl), so a self-
+    // consistent but spec-wrong change to the HKDF salt, info string, output length, or
+    // cipher is caught here even though the round-trip tests would still pass.
+    #[test]
+    fn enc_identifier_matches_known_answer_vector() {
+        let token: [u8; 32] = [
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D,
+            0x0E, 0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B,
+            0x1C, 0x1D, 0x1E, 0x1F,
+        ];
+        let device_identifier: [u8; 16] = [
+            0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8, 0xA9, 0xAA, 0xAB, 0xAC, 0xAD,
+            0xAE, 0xAF,
+        ];
+        // HKDF-SHA-256(salt = 32 zero bytes, IKM = token, L = 16, info = "encIdentifier").
+        let expected_key: [u8; 16] = [
+            0x24, 0x15, 0x4D, 0xBE, 0x7E, 0xF3, 0xCE, 0x2D, 0x6A, 0xDD, 0x02, 0xC4, 0xE4, 0x8D,
+            0xBB, 0x69,
+        ];
+        assert_eq!(enc_identifier_key(&token).unwrap(), expected_key);
+
+        // iv (0x30..0x3F) || ct, where ct = AES-128-CBC(expected_key, iv, device_identifier)
+        // with no padding (the device identifier is exactly one block).
+        let enc_identifier: [u8; 32] = [
+            0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D,
+            0x3E, 0x3F, 0xF4, 0xD6, 0x82, 0xA3, 0x6E, 0x94, 0x0D, 0x68, 0xD8, 0x62, 0xE3, 0x09,
+            0x9C, 0x6C, 0xE9, 0xB4,
+        ];
+        assert_eq!(
+            decrypt_enc_identifier(&token, &enc_identifier).unwrap(),
+            device_identifier
+        );
+    }
+
     #[tokio::test]
     async fn recognizes_matching_record() {
         let store = MemoryPersistentTokenStore::new();
