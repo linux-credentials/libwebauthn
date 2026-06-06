@@ -44,7 +44,20 @@ fn prf_forces_uv_upgrade(prf_present: bool, uv: UserVerificationRequirement) -> 
 }
 
 macro_rules! handle_errors {
+    // Callers that never reuse a persistent token (make-credential, get-assertion,
+    // authenticator-config, bio-enrollment): nothing to notify on a persistent rejection.
     ($channel: expr, $resp: expr, $uv_auth_used: expr, $timeout: expr) => {
+        handle_errors!(@inner $channel, $resp, $uv_auth_used, $timeout, {})
+    };
+    // Credential-management callers pass their request so a rejected persistent token is
+    // marked on it, forcing the retry to mint a fresh token instead of reusing the same
+    // stale record. This keeps loop termination independent of the best-effort store delete.
+    ($channel: expr, $resp: expr, $uv_auth_used: expr, $timeout: expr, $request: expr) => {
+        handle_errors!(@inner $channel, $resp, $uv_auth_used, $timeout, {
+            $request.note_persistent_token_rejected();
+        })
+    };
+    (@inner $channel: expr, $resp: expr, $uv_auth_used: expr, $timeout: expr, $on_persistent_reject: block) => {
         match $resp {
             Err(Error::Ctap(CtapError::PINAuthInvalid))
                 if $uv_auth_used == UsedPinUvAuthToken::FromEphemeralStorage =>
@@ -62,6 +75,7 @@ macro_rules! handle_errors {
                         store.delete(id).await;
                     }
                 }
+                $on_persistent_reject
                 continue;
             }
             Err(Error::Ctap(CtapError::UVInvalid)) => {

@@ -322,6 +322,14 @@ pub trait Ctap2UserVerifiableRequest {
     fn wants_persistent_token(&self) -> bool {
         false
     }
+    /// Record that a reused persistent (pcmr) token was rejected by the authenticator, so
+    /// the retry stops reusing it and mints a fresh one instead. Default: no-op.
+    fn note_persistent_token_rejected(&mut self) {}
+    /// Whether a reused persistent token was already rejected during this ceremony, per
+    /// [`Self::note_persistent_token_rejected`]. Default false.
+    fn persistent_token_rejected(&self) -> bool {
+        false
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
