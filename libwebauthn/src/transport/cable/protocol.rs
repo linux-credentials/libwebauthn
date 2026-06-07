@@ -215,10 +215,7 @@ pub(crate) async fn do_handshake(
         .get(..initial_msg_len)
         .map(<[u8]>::to_vec)
         .ok_or(CableError::ConnectionFailed)?;
-    trace!(
-        { handshake = ?initial_msg },
-        "Sending initial handshake message"
-    );
+    trace!(handshake = ?initial_msg, "Sending initial handshake message");
 
     data_channel.send(&initial_msg).await?;
     debug!("Sent initial handshake message");
@@ -231,20 +228,17 @@ pub(crate) async fn do_handshake(
             response
         }
         Ok(None) => {
-            error!("Connection was closed before handshake was complete");
+            warn!("Connection was closed before handshake was complete");
             return Err(CableError::ConnectionFailed);
         }
         Err(e) => {
-            error!(?e, "Failed to read handshake response");
+            warn!(?e, "Failed to read handshake response");
             return Err(e);
         }
     };
 
     if response.len() < P256_X962_LENGTH {
-        error!(
-            { len = response.len() },
-            "Peer handshake message is too short"
-        );
+        warn!(len = response.len(), "Peer handshake message is too short");
         return Err(CableError::ConnectionFailed);
     }
 
@@ -252,18 +246,15 @@ pub(crate) async fn do_handshake(
     let payload_len = match noise_handshake.read_message(&response, &mut payload) {
         Ok(len) => len,
         Err(e) => {
-            error!(?e, "Failed to read handshake response message");
+            warn!(?e, "Failed to read handshake response message");
             return Err(CableError::ConnectionFailed);
         }
     };
 
-    debug!(
-        { handshake = ?payload.get(..payload_len) },
-        "Received handshake response"
-    );
+    debug!(handshake_len = payload_len, "Received handshake response");
 
     if !noise_handshake.is_handshake_finished() {
-        error!("Handshake did not complete");
+        warn!("Handshake did not complete");
         return Err(CableError::ConnectionFailed);
     }
 
@@ -280,20 +271,23 @@ pub(crate) async fn connection(mut input: TunnelConnectionInput) -> Result<(), C
         Ok(Some(message)) => match connection_recv_initial(message, &mut input.noise_state).await {
             Ok(initial) => initial,
             Err(e) => {
-                error!(?e, "Failed to process initial message");
+                warn!(?e, "Failed to process initial message");
                 return Err(e);
             }
         },
         Ok(None) => {
-            error!("Connection closed before initial message was received");
+            warn!("Connection closed before initial message was received");
             return Err(CableError::ConnectionLost);
         }
         Err(e) => {
-            error!(?e, "Failed to read initial message");
+            warn!(?e, "Failed to read initial message");
             return Err(e);
         }
     };
-    debug!(?get_info_response_serialized, "Received initial message");
+    debug!(
+        get_info_response_serialized_len = get_info_response_serialized.len(),
+        "Received initial message"
+    );
 
     loop {
         tokio::select! {
@@ -315,7 +309,7 @@ pub(crate) async fn connection(mut input: TunnelConnectionInput) -> Result<(), C
                             Ok(RecvOutcome::Continue) => {}
                             Ok(RecvOutcome::PeerShutdown) => return Ok(()),
                             Err(e) => {
-                                error!(?e, "Fatal error processing inbound frame");
+                                warn!(?e, "Fatal error processing inbound frame");
                                 return Err(e);
                             }
                         }
@@ -325,7 +319,7 @@ pub(crate) async fn connection(mut input: TunnelConnectionInput) -> Result<(), C
                         return Ok(());
                     }
                     Err(e) => {
-                        error!(?e, "Failed to read encrypted CBOR message");
+                        warn!(?e, "Failed to read encrypted CBOR message");
                         return Err(e);
                     }
                 }
@@ -337,7 +331,7 @@ pub(crate) async fn connection(mut input: TunnelConnectionInput) -> Result<(), C
                         debug!("Responding to GetInfo request with cached response");
                         let response = CborResponse::new_success_from_slice(&get_info_response_serialized);
                         if let Err(e) = input.cbor_rx_send.send(response).await {
-                            error!(?e, "CBOR response receiver dropped");
+                            warn!(?e, "CBOR response receiver dropped");
                             return Err(CableError::ConnectionFailed);
                         }
                     }
@@ -350,7 +344,7 @@ pub(crate) async fn connection(mut input: TunnelConnectionInput) -> Result<(), C
                         )
                         .await
                         {
-                            error!(?e, "Fatal error sending CBOR request");
+                            warn!(?e, "Fatal error sending CBOR request");
                             return Err(e);
                         }
                     }
@@ -370,13 +364,13 @@ async fn connection_send(
 
     let cbor_request = request.raw_long().map_err(CableError::from)?;
     if cbor_request.len() > MAX_CBOR_SIZE {
-        error!(
+        warn!(
             cbor_request_len = cbor_request.len(),
             "CBOR request too large"
         );
         return Err(CableError::InvalidFraming);
     }
-    trace!(?cbor_request, cbor_request_len = cbor_request.len());
+    trace!({ ?cbor_request, cbor_request_len = cbor_request.len() });
 
     let extra_bytes = PADDING_GRANULARITY - (cbor_request.len() % PADDING_GRANULARITY);
     let padded_len = cbor_request.len() + extra_bytes;
@@ -419,7 +413,7 @@ fn strip_frame_padding(mut decrypted_frame: Vec<u8>) -> Result<Vec<u8>, CableErr
     let padding_len = match decrypted_frame.last() {
         Some(&b) => b as usize,
         None => {
-            error!("Decrypted frame is empty; cannot read padding length");
+            warn!("Decrypted frame is empty; cannot read padding length");
             return Err(CableError::InvalidFraming);
         }
     };
@@ -427,9 +421,9 @@ fn strip_frame_padding(mut decrypted_frame: Vec<u8>) -> Result<Vec<u8>, CableErr
         .len()
         .checked_sub(padding_len + 1)
         .ok_or_else(|| {
-            error!(
-                frame_len = decrypted_frame.len(),
-                padding_len, "Padding length exceeds frame length"
+            warn!(
+                { frame_len = decrypted_frame.len(), padding_len },
+                "Padding length exceeds frame length"
             );
             CableError::InvalidFraming
         })?;
@@ -452,15 +446,14 @@ async fn decrypt_frame(
             trace!(?decrypted_frame);
         }
         Err(e) => {
-            error!(?e, "Failed to decrypt CBOR response");
+            warn!(?e, "Failed to decrypt CBOR response");
             return Err(CableError::EncryptionFailed);
         }
     }
 
     let decrypted_frame = strip_frame_padding(decrypted_frame)?;
     trace!(
-        ?decrypted_frame,
-        decrypted_frame_len = decrypted_frame.len(),
+        { ?decrypted_frame, decrypted_frame_len = decrypted_frame.len() },
         "Trimmed padding"
     );
 
@@ -476,7 +469,7 @@ async fn connection_recv_initial(
     let initial_message: CableInitialMessage = match cbor::from_slice(&decrypted_frame) {
         Ok(initial_message) => initial_message,
         Err(e) => {
-            error!(?e, "Failed to decode initial message");
+            warn!(?e, "Failed to decode initial message");
             return Err(CableError::InvalidFraming);
         }
     };
@@ -484,7 +477,7 @@ async fn connection_recv_initial(
     let _: Ctap2GetInfoResponse = match cbor::from_slice(&initial_message.info) {
         Ok(get_info_response) => get_info_response,
         Err(e) => {
-            error!(?e, "Failed to decode GetInfo response");
+            warn!(?e, "Failed to decode GetInfo response");
             return Err(CableError::InvalidFraming);
         }
     };
@@ -499,7 +492,7 @@ async fn connection_recv_update(message: &[u8]) -> Result<Option<CableLinkingInf
     let update_message: BTreeMap<Value, Value> = match serde_cbor::from_slice(message) {
         Ok(update_message) => update_message,
         Err(e) => {
-            error!(?e, "Failed to decode update message");
+            warn!(?e, "Failed to decode update message");
             return Err(CableError::InvalidFraming);
         }
     };
@@ -566,7 +559,7 @@ async fn connection_recv(
     let decrypted_frame = decrypt_frame(encrypted_frame, noise_state).await?;
 
     let cable_message: CableTunnelMessage = CableTunnelMessage::from_slice(&decrypted_frame)
-        .inspect_err(|e| error!(?e, "Failed to decode CABLE tunnel message"))?;
+        .inspect_err(|e| warn!(?e, "Failed to decode CABLE tunnel message"))?;
 
     trace!(?cable_message);
     match cable_message.message_type {
@@ -667,7 +660,7 @@ fn parse_known_device(
     let Ok(authenticator_public_key) =
         PublicKey::from_sec1_bytes(&linking_info.authenticator_public_key)
     else {
-        error!("Failed to parse public key.");
+        warn!("Failed to parse public key");
         return Err(CableError::InvalidKey);
     };
 
@@ -684,8 +677,8 @@ fn parse_known_device(
     let expected_mac = hmac.finalize().into_bytes().to_vec();
 
     if expected_mac != linking_info.handshake_signature {
-        error!("Invalid handshake signature, rejecting update message");
-        trace!(?expected_mac, ?linking_info.handshake_signature);
+        warn!("Invalid handshake signature, rejecting update message");
+        trace!({ ?expected_mac, ?linking_info.handshake_signature });
         return Err(CableError::InvalidSignature);
     }
 
