@@ -294,9 +294,9 @@ impl TryFrom<String> for RequestOrigin {
 /// is equal to") which WebAuthn L3 §5.1.3 step 7 / §5.1.7 step 9 reference.
 ///
 /// Public-suffix knowledge is supplied by the caller via the
-/// [`PublicSuffixList`] trait. Validation rejects bare public suffixes (e.g.
-/// `co.uk`) on either side of the comparison so they cannot be claimed as an
-/// rp.id.
+/// [`PublicSuffixList`] trait. Validation requires the effective domain's
+/// registrable domain to be a suffix of, or equal to, the rp.id, so bare
+/// public suffixes (e.g. `co.uk`) cannot be claimed as an rp.id.
 pub(crate) fn is_registrable_domain_suffix_or_equal(
     rp_id: &str,
     effective_domain: &str,
@@ -322,19 +322,19 @@ pub(crate) fn is_registrable_domain_suffix_or_equal(
         return false;
     }
 
-    // `rp_id` must not be `effective_domain`'s public suffix (otherwise an
-    // attacker on a sibling registrable could claim the eTLD).
-    if psl.public_suffix(effective_domain).as_deref() == Some(rp_id) {
+    // The effective domain's registrable domain must be a suffix of, or equal
+    // to, `rp_id`, so `rp_id` cannot sit above the registrable domain.
+    let Some(rd) = psl.registrable_domain(effective_domain) else {
+        return false;
+    };
+    if rp_id == rd {
+        return true;
+    }
+    if rp_id.len() <= rd.len() {
         return false;
     }
-
-    // `rp_id` must not itself be a public suffix (cannot register a credential
-    // against a bare eTLD like `co.uk`).
-    if psl.public_suffix(rp_id).as_deref() == Some(rp_id) {
-        return false;
-    }
-
-    true
+    let rd_boundary = rp_id.len() - rd.len() - 1;
+    rp_id.as_bytes().get(rd_boundary) == Some(&b'.') && rp_id[rd_boundary + 1..] == rd
 }
 
 #[cfg(test)]
@@ -667,10 +667,40 @@ mod tests {
     }
 
     #[test]
-    fn registrable_suffix_localhost_subdomain_accepted() {
-        assert!(is_registrable_domain_suffix_or_equal(
+    fn registrable_suffix_localhost_subdomain_rejected() {
+        // `localhost` is not a public suffix, so `sub.localhost` has no
+        // registrable domain and an rp.id above the full host is rejected.
+        assert!(!is_registrable_domain_suffix_or_equal(
             "localhost",
             "sub.localhost",
+            &psl(),
+        ));
+    }
+
+    #[test]
+    fn registrable_suffix_multilabel_private_suffix() {
+        // Under a multi-label private suffix the registrable domain is the
+        // full host, so an rp.id above it must be rejected.
+        let host = "app.svc.example.com";
+        assert!(!is_registrable_domain_suffix_or_equal(
+            "example.com",
+            host,
+            &psl(),
+        ));
+        assert!(is_registrable_domain_suffix_or_equal(host, host, &psl()));
+
+        // Single-label public suffix cases are unchanged.
+        let host = "login.example.com";
+        assert!(is_registrable_domain_suffix_or_equal(
+            "example.com",
+            host,
+            &psl(),
+        ));
+        assert!(is_registrable_domain_suffix_or_equal(host, host, &psl()));
+        assert!(!is_registrable_domain_suffix_or_equal("com", host, &psl()));
+        assert!(!is_registrable_domain_suffix_or_equal(
+            "m.login.example.com",
+            host,
             &psl(),
         ));
     }

@@ -58,25 +58,22 @@ pub trait PublicSuffixList: Send + Sync {
 
 /// Test-only PSL that recognises a small fixed set of public suffixes.
 ///
-/// Sufficient for unit tests of the suffix-check algorithm without reading
-/// the system file. Recognises `com`, `co.uk`, `org`, and `net`.
+/// Sufficient for unit tests of the suffix-check algorithm without reading the
+/// system file. Recognises `com`, `co.uk`, `org`, `net`, and the multi-label
+/// private suffix `svc.example.com`, returning the longest match.
 #[cfg(test)]
 pub(crate) struct MockPublicSuffixList;
 
 #[cfg(test)]
 impl PublicSuffixList for MockPublicSuffixList {
     fn public_suffix(&self, host: &str) -> Option<String> {
-        const KNOWN_SUFFIXES: &[&str] = &["com", "co.uk", "org", "net"];
-        for suffix in KNOWN_SUFFIXES {
-            if host == *suffix {
-                return Some((*suffix).to_string());
-            }
-            let needle = format!(".{suffix}");
-            if host.ends_with(&needle) {
-                return Some((*suffix).to_string());
-            }
-        }
-        None
+        const KNOWN_SUFFIXES: &[&str] = &["com", "co.uk", "org", "net", "svc.example.com"];
+        KNOWN_SUFFIXES
+            .iter()
+            .copied()
+            .filter(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
+            .max_by_key(|suffix| suffix.len())
+            .map(str::to_string)
     }
 }
 
