@@ -143,6 +143,7 @@ impl UpgradableResponse<MakeCredentialResponse, MakeCredentialRequest> for Regis
             signature_count,
             attested_credential: Some(attested_cred_data),
             extensions: None,
+            raw: None,
         };
 
         // Let attestationStatement be a CBOR map (see "attStmtTemplate" in Generating an Attestation Object [WebAuthn])
@@ -201,6 +202,7 @@ impl UpgradableResponse<GetAssertionResponse, SignRequest> for SignResponse {
             signature_count,
             attested_credential: None,
             extensions: None,
+            raw: None,
         };
 
         // Let authenticatorGetAssertionResponse be a CBOR map with the following keys whose values are as follows: [..]

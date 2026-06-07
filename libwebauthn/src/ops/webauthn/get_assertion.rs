@@ -1213,6 +1213,7 @@ mod tests {
             signature_count: 1,
             attested_credential: None,
             extensions: None,
+            raw: None,
         };
 
         Assertion {

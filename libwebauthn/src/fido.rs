@@ -100,6 +100,11 @@ pub struct AuthenticatorData<T> {
     pub signature_count: u32,
     pub attested_credential: Option<AttestedCredentialData>,
     pub extensions: Option<T>,
+    /// Raw authData bytes as received from the device, preserved verbatim so
+    /// the RP's signature over authData stays valid. `None` for authData the
+    /// platform synthesizes (e.g. the U2F upgrade path), which is rebuilt from
+    /// the fields above.
+    pub raw: Option<Vec<u8>>,
 }
 
 impl<T> AuthenticatorData<T>
@@ -107,6 +112,12 @@ where
     T: Clone + Serialize,
 {
     pub fn to_response_bytes(&self) -> Result<Vec<u8>, Error> {
+        // Return the device's authData verbatim. Re-encoding from the parsed
+        // fields would reorder or drop unmodeled extensions, invalidating the
+        // authenticator's signature over these exact bytes.
+        if let Some(raw) = &self.raw {
+            return Ok(raw.clone());
+        }
         // Name                    | Length
         // -----------------------------------
         // rpIdHash                | 32
@@ -284,6 +295,7 @@ impl<'de, T: DeserializeOwned> Deserialize<'de> for AuthenticatorData<T> {
                     signature_count,
                     attested_credential,
                     extensions,
+                    raw: Some(data.to_vec()),
                 })
             }
         }
@@ -349,6 +361,7 @@ mod tests {
             signature_count,
             attested_credential: Some(attested_credential.clone()),
             extensions: Some(extensions.clone()),
+            raw: None,
         };
         let webauthn_auth_data = auth_data.to_response_bytes().unwrap();
         assert_eq!(rp_id_hash, &webauthn_auth_data[..32]);
@@ -432,6 +445,7 @@ mod tests {
             signature_count: 1,
             attested_credential: Some(attested_credential),
             extensions: None,
+            raw: None,
         };
 
         let bytes = auth_data.to_response_bytes().unwrap();
@@ -443,6 +457,39 @@ mod tests {
         assert_eq!(
             cose::read_alg(&credential.credential_public_key).unwrap(),
             crate::proto::ctap2::Ctap2COSEAlgorithmIdentifier::RS256
+        );
+    }
+
+    #[test]
+    fn to_response_bytes_preserves_extensions_verbatim() {
+        // The authenticator signs over the exact authData bytes, including the
+        // extensions block. Re-encoding from the typed struct drops keys it does
+        // not model (and may reorder the rest), which would break relying-party
+        // signature verification. The bytes must round-trip unchanged.
+        use crate::proto::ctap2::Ctap2MakeCredentialsResponseExtensions;
+
+        let flags = AuthenticatorDataFlags::USER_PRESENT | AuthenticatorDataFlags::EXTENSION_DATA;
+        let mut input = [0x11u8; 32].to_vec();
+        input.push(flags.bits());
+        input.extend_from_slice(&[0x00, 0x00, 0x00, 0x07]); // signCount
+
+        // CBOR: { "credBlob": true, "thirdPartyPayment": true }. The second key
+        // is unmodeled, so the typed struct drops it on re-encode.
+        input.extend_from_slice(&[
+            0xA2, // map(2)
+            0x68, b'c', b'r', b'e', b'd', b'B', b'l', b'o', b'b', 0xF5, // "credBlob": true
+            0x71, b't', b'h', b'i', b'r', b'd', b'P', b'a', b'r', b't', b'y', b'P', b'a', b'y',
+            b'm', b'e', b'n', b't', 0xF5, // "thirdPartyPayment": true
+        ]);
+
+        let wrapped = cbor::to_vec(&ByteBuf::from(input.clone())).unwrap();
+        let parsed: AuthenticatorData<Ctap2MakeCredentialsResponseExtensions> =
+            cbor::from_slice(&wrapped).unwrap();
+
+        assert_eq!(
+            parsed.to_response_bytes().unwrap(),
+            input,
+            "authenticatorData must be preserved byte-for-byte"
         );
     }
 }

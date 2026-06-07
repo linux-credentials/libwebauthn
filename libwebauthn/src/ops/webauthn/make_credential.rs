@@ -1388,6 +1388,7 @@ mod tests {
             signature_count: 0,
             attested_credential: Some(attested_credential),
             extensions: None,
+            raw: None,
         };
 
         MakeCredentialResponse {
