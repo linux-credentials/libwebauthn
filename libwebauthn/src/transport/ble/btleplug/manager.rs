@@ -65,13 +65,13 @@ async fn on_peripheral_service_data(
 ) -> Option<(Adapter, Peripheral, Vec<u8>)> {
     for uuid in uuids {
         if let Some(service_data) = service_data.get(uuid) {
-            trace!(?id, ?service_data, "Found service data");
+            trace!({ ?id, ?service_data }, "Found service data");
             let Ok(peripheral) = adapter.peripheral(id).await else {
                 warn!(?id, "Could not get peripheral");
                 return None;
             };
 
-            debug!({ ?id, ?service_data }, "Found service data for peripheral");
+            debug!({ ?id, len = service_data.len() }, "Found service data for peripheral");
             return Some((adapter.clone(), peripheral, service_data.to_owned()));
         }
     }
@@ -143,7 +143,7 @@ async fn discover_properties(
             .properties()
             .await
             .or(Err(Error::ConnectionFailed))?;
-        trace!({ ?peripheral, ?properties });
+        trace!({ ?peripheral, ?properties }, "Discovered peripheral properties");
         if let Some(properties) = properties {
             result.push((peripheral, properties));
         }
