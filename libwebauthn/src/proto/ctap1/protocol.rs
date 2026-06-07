@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use tokio::time::{sleep, timeout as tokio_timeout};
-use tracing::{debug, error, info, instrument, span, trace, warn, Level};
+use tracing::{debug, instrument, span, trace, warn, Level};
 
 use super::apdu::{ApduRequest, ApduResponse, ApduResponseStatus};
 use super::{
@@ -53,7 +53,7 @@ where
             .await
             .map_err(WebAuthnError::Transport)?;
         let response: Ctap1VersionResponse = apdu_response.try_into().or(Err(CtapError::Other))?;
-        debug!({ ?response.version }, "CTAP1 version response");
+        debug!(?response.version, "CTAP1 version response");
         Ok(response)
     }
 
@@ -62,25 +62,25 @@ where
         &mut self,
         request: &Ctap1RegisterRequest,
     ) -> Result<Ctap1RegisterResponse, WebAuthnError<Self::TransportError>> {
-        debug!({ %request.require_user_presence }, "CTAP1 register request");
-        trace!(?request);
+        debug!(%request.require_user_presence, "CTAP1 register request");
+        trace!(?request, "CTAP1 register request");
         self.send_ux_update(UvUpdate::PresenceRequired.into()).await;
 
         let (request, preflight_requests) = request.preflight()?;
-        debug!({ count = preflight_requests.len() }, "Preflight requests");
+        debug!(count = preflight_requests.len(), "Preflight requests");
         for preflight in preflight_requests.iter() {
             let span = span!(Level::DEBUG, "preflight");
             let _enter = span.enter();
             match self.ctap1_sign(preflight).await {
                 Ok(_) => {
-                    info!("Already-registered credential found during preflight request.");
+                    debug!("Already-registered credential found during preflight");
                     return Err(WebAuthnError::Ctap(CtapError::CredentialExcluded));
                 }
                 Err(WebAuthnError::Ctap(CtapError::NoCredentials)) => {
-                    debug!("Credential doesn't already exist, continuing.");
+                    debug!("Credential doesn't already exist, continuing");
                 }
                 Err(err) => {
-                    warn!(?err, "Preflight request failed with unexpected error.");
+                    warn!(?err, "Preflight request failed with unexpected error");
                 }
             };
         }
@@ -89,13 +89,13 @@ where
         let apdu_response = send_apdu_request_wait_uv(self, &apdu_request, request.timeout).await?;
         let status = apdu_response.status().or(Err(CtapError::Other))?;
         if status != ApduResponseStatus::NoError {
-            error!(?status, "APDU response has error code");
+            debug!(?status, "APDU response has error code");
             return Err(WebAuthnError::Ctap(CtapError::from(status)));
         }
 
         let response: Ctap1RegisterResponse = apdu_response.try_into().or(Err(CtapError::Other))?;
         debug!("CTAP1 register response");
-        trace!(?response);
+        trace!(?response, "CTAP1 register response");
         Ok(response)
     }
 
@@ -104,21 +104,21 @@ where
         &mut self,
         request: &Ctap1SignRequest,
     ) -> Result<Ctap1SignResponse, WebAuthnError<Self::TransportError>> {
-        debug!({ %request.require_user_presence }, "CTAP1 sign request");
-        trace!(?request);
+        debug!(%request.require_user_presence, "CTAP1 sign request");
+        trace!(?request, "CTAP1 sign request");
         self.send_ux_update(UvUpdate::PresenceRequired.into()).await;
 
         let apdu_request: ApduRequest = request.into();
         let apdu_response = send_apdu_request_wait_uv(self, &apdu_request, request.timeout).await?;
         let status = apdu_response.status().or(Err(CtapError::Other))?;
         if status != ApduResponseStatus::NoError {
-            error!(?status, "APDU response has error code");
+            debug!(?status, "APDU response has error code");
             return Err(WebAuthnError::Ctap(CtapError::from(status)));
         }
 
         let response: Ctap1SignResponse = apdu_response.try_into().or(Err(CtapError::Other))?;
-        debug!({ ?response.user_presence_verified }, "CTAP1 sign response received");
-        trace!(?response);
+        debug!(?response.user_presence_verified, "CTAP1 sign response received");
+        trace!(?response, "CTAP1 sign response");
         Ok(response)
     }
 }
@@ -147,7 +147,7 @@ async fn send_apdu_request_wait_uv<C: Channel>(
                 CtapError::UserPresenceRequired => (), // Sleep some more.
                 _ => return Err(WebAuthnError::Ctap(ctap_error)),
             };
-            debug!("UP required. Sleeping for {:?}.", UP_SLEEP);
+            debug!(sleep = ?UP_SLEEP, "User presence required, sleeping");
             sleep(UP_SLEEP).await;
         }
     })

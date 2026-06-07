@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 #[allow(unused_imports)]
-use tracing::{debug, info, instrument, trace};
+use tracing::{debug, info, instrument, trace, warn};
 
 const MAX_DEVICES: usize = 10;
 const TIMEOUT: Duration = Duration::from_millis(5000);
@@ -45,11 +45,11 @@ impl Info {
             device.set_property_bool(nfc1::Property::InfiniteSelect, false)?;
 
             let info = device.get_information_about()?;
-            debug!("Info: {}", info);
+            debug!(%info, "Device information");
         }
 
         let target = chan.connect_to_target()?;
-        debug!("Selected: {:?}", target);
+        debug!(?target, "Selected target");
 
         let ctx = Context {};
         let channel = NfcChannel::new(Box::new(chan), ctx, settings);
@@ -92,7 +92,7 @@ impl Channel {
                 }
             }
             Err(err) => {
-                println!("Error: {}", err);
+                warn!(%err, "Failed to select passive target");
                 Err(err)
             }
         }
@@ -115,7 +115,7 @@ impl Channel {
             if i > 0 {
                 thread::sleep(Duration::from_millis(100));
             }
-            trace!("Poll {:?} {}", modulation, i);
+            trace!({ ?modulation, attempt = i }, "Polling target");
             if let Ok(target) = Channel::initiator_select_passive_target_ex(&mut device, modulation)
             {
                 if is_one_rate {
@@ -125,7 +125,7 @@ impl Channel {
                 for modulation in modulations.iter() {
                     device.initiator_deselect_target()?;
                     device.initiator_init()?;
-                    trace!("Try {:?}", modulation);
+                    trace!(?modulation, "Trying modulation");
                     if let Ok(target) =
                         Channel::initiator_select_passive_target_ex(&mut device, modulation)
                     {
@@ -151,7 +151,7 @@ where
     ) -> Result<usize, NfcError> {
         let timeout = nfc1::Timeout::Duration(TIMEOUT);
         let len = response.len();
-        trace!("TX: {:?}", command);
+        trace!(?command, "Transmitting APDU");
         let rapdu = self
             .device
             .lock()
@@ -159,7 +159,7 @@ where
             .initiator_transceive_bytes(command, len, timeout)
             .map_err(NfcError::LibNfc)?;
 
-        trace!("RX: {:?}", rapdu);
+        trace!(?rapdu, "Received APDU");
 
         if response.len() < rapdu.len() {
             return Err(NfcError::BufferOverflow(rapdu.len()));

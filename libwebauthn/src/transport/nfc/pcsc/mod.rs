@@ -140,12 +140,12 @@ where
         command: &[u8],
         response: &mut [u8],
     ) -> Result<usize, NfcError> {
-        trace!("TX: {:?}", command);
+        trace!(?command, "Transmitting APDU");
 
         let card = self.card.lock().map_err(|_| NfcError::MutexPoisoned)?;
         let rapdu = card.transmit(command, response).map_err(NfcError::Pcsc)?;
 
-        trace!("RX: {:?}", rapdu);
+        trace!(?rapdu, "Received APDU");
         Ok(rapdu.len())
     }
 }
