@@ -10,6 +10,7 @@ use crate::{
     ops::webauthn::{
         client_data::ClientData,
         idl::{
+            appid_authorised,
             get::{
                 HmacGetSecretInputJson, LargeBlobInputJson, PrfInputJson,
                 PublicKeyCredentialRequestOptionsJSON,
@@ -125,27 +126,22 @@ pub enum GetAssertionPrepareError {
     #[error("Mismatching relying party ID: {0} != {1}")]
     MismatchingRelyingPartyId(String, String),
 
+    /// The client must throw a "SecurityError" DOMException.
     #[error("Invalid AppID: {0}")]
     InvalidAppId(String),
 }
 
-/// Basic sanity check for FIDO AppID strings (WebAuthn L3 §10.1.1).
-///
-/// Per spec the AppID should be a same-site URL (typically `https://<rpid>/...`).
-/// Full same-site validation against the rpId is not yet implemented; for now
-/// we require non-empty input, an absolute URL form, and the `https` scheme.
-fn validate_appid(appid: &str) -> Result<String, GetAssertionPrepareError> {
-    if appid.is_empty() {
-        return Err(GetAssertionPrepareError::InvalidAppId(
-            "appid must not be empty".to_string(),
-        ));
-    }
-    // Sanity check: must be an https URL.
-    if !appid.starts_with("https://") {
-        return Err(GetAssertionPrepareError::InvalidAppId(format!(
-            "appid must be an https URL, got: {appid}"
-        )));
-    }
+/// Validates a FIDO AppID string (WebAuthn L3 §10.1.1): a non-empty https URL
+/// whose host is authorised for the caller origin (same-site check). Returns
+/// the AppID unchanged on success.
+async fn validate_appid(
+    request_origin: &RequestOrigin,
+    settings: &RequestSettings<'_>,
+    appid: &str,
+) -> Result<String, GetAssertionPrepareError> {
+    appid_authorised(request_origin, settings, appid)
+        .await
+        .map_err(|err| GetAssertionPrepareError::InvalidAppId(err.to_string()))?;
     Ok(appid.to_string())
 }
 
@@ -206,7 +202,7 @@ impl FromIdlModel<PublicKeyCredentialRequestOptionsJSON> for GetAssertionRequest
         };
 
         let appid = match inner.extensions.as_ref().and_then(|e| e.appid.as_ref()) {
-            Some(s) => Some(validate_appid(s)?),
+            Some(s) => Some(validate_appid(request_origin, settings, s).await?),
             None => None,
         };
 
@@ -1166,7 +1162,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_request_from_json_appid_extension() {
-        let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
+        // Same-site AppID (equal host) is authorised for the caller.
+        let request_origin: RequestOrigin = "https://www.example.org".parse().unwrap();
         let req_json = json_field_add(
             REQUEST_BASE_JSON,
             "extensions",
@@ -1195,6 +1192,79 @@ mod tests {
             REQUEST_BASE_JSON,
             "extensions",
             r#"{"appid":"http://www.example.org/u2f/origins.json"}"#,
+        );
+
+        let res = from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            RelatedOrigins::Disabled,
+            &req_json,
+        )
+        .await;
+        assert!(matches!(
+            res,
+            Err(GetAssertionPrepareError::InvalidAppId(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_request_from_json_appid_extension_rejects_cross_site() {
+        // WebAuthn L3 §10.1.1: a cross-site AppID is not authorised.
+        let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
+        let req_json = json_field_add(
+            REQUEST_BASE_JSON,
+            "extensions",
+            r#"{"appid":"https://example.net/u2f/origins.json"}"#,
+        );
+
+        let res = from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            RelatedOrigins::Disabled,
+            &req_json,
+        )
+        .await;
+        assert!(matches!(
+            res,
+            Err(GetAssertionPrepareError::InvalidAppId(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_request_from_json_appid_extension_parent_domain() {
+        // Legacy U2F migration: a subdomain caller may use its registrable
+        // parent domain as the AppID (WebAuthn L3 §10.1.1).
+        let request_origin: RequestOrigin = "https://login.example.org".parse().unwrap();
+        let req_json = json_field_add(
+            REQUEST_BASE_JSON,
+            "extensions",
+            r#"{"appid":"https://example.org/u2f/origins.json"}"#,
+        );
+
+        let req: GetAssertionRequest = from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            RelatedOrigins::Disabled,
+            &req_json,
+        )
+        .await
+        .unwrap();
+        let ext = req.extensions.expect("extensions should be present");
+        assert_eq!(
+            ext.appid.as_deref(),
+            Some("https://example.org/u2f/origins.json")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_request_from_json_appid_extension_rejects_subdomain() {
+        // The AppID host must be a suffix of the caller host, so a parent-domain
+        // caller cannot claim a more-specific subdomain AppID.
+        let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
+        let req_json = json_field_add(
+            REQUEST_BASE_JSON,
+            "extensions",
+            r#"{"appid":"https://sub.example.org/u2f/origins.json"}"#,
         );
 
         let res = from_json(
