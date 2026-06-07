@@ -63,8 +63,8 @@ bitflags! {
         const USER_PRESENT = 0x01;
         const RFU_1 = 0x02;
         const USER_VERIFIED = 0x04;
-        const RFU_2_1 = 0x08;
-        const RFU_2_2 = 0x10;
+        const BACKUP_ELIGIBILITY = 0x08;
+        const BACKUP_STATE = 0x10;
         const RFU_2_3 = 0x20;
         const ATTESTED_CREDENTIALS = 0x40;
         const EXTENSION_DATA = 0x80;
@@ -105,6 +105,19 @@ pub struct AuthenticatorData<T> {
     /// platform synthesizes (e.g. the U2F upgrade path), which is rebuilt from
     /// the fields above.
     pub raw: Option<Vec<u8>>,
+}
+
+impl<T> AuthenticatorData<T> {
+    /// Backup Eligibility (BE): the credential may be backed up or synced.
+    pub fn backup_eligible(&self) -> bool {
+        self.flags
+            .contains(AuthenticatorDataFlags::BACKUP_ELIGIBILITY)
+    }
+
+    /// Backup State (BS): the credential is currently backed up.
+    pub fn backed_up(&self) -> bool {
+        self.flags.contains(AuthenticatorDataFlags::BACKUP_STATE)
+    }
 }
 
 impl<T> AuthenticatorData<T>
@@ -320,9 +333,11 @@ mod tests {
             0xe2, 0x75, 0x1e, 0x68, 0x2f, 0xab, 0x9f, 0x2d, 0x30, 0xab, 0x13, 0xd2, 0x12, 0x55,
             0x86, 0xce, 0x19, 0x47,
         ];
-        let flag_bits = 0b1100_0101;
+        let flag_bits = 0b1101_1101;
         let flags = AuthenticatorDataFlags::USER_PRESENT
             | AuthenticatorDataFlags::USER_VERIFIED
+            | AuthenticatorDataFlags::BACKUP_ELIGIBILITY
+            | AuthenticatorDataFlags::BACKUP_STATE
             | AuthenticatorDataFlags::ATTESTED_CREDENTIALS
             | AuthenticatorDataFlags::EXTENSION_DATA;
         assert_eq!(flag_bits, flags.bits());
@@ -388,6 +403,14 @@ mod tests {
             cbor::from_slice(authdata_wrapped.as_slice()).unwrap();
         assert_eq!(auth_data.rp_id_hash, auth_data_reparsed.rp_id_hash);
         assert_eq!(auth_data.flags.bits(), auth_data_reparsed.flags.bits());
+        assert!(auth_data_reparsed
+            .flags
+            .contains(AuthenticatorDataFlags::BACKUP_ELIGIBILITY));
+        assert!(auth_data_reparsed
+            .flags
+            .contains(AuthenticatorDataFlags::BACKUP_STATE));
+        assert!(auth_data_reparsed.backup_eligible());
+        assert!(auth_data_reparsed.backed_up());
         assert_eq!(
             auth_data.signature_count,
             auth_data_reparsed.signature_count
@@ -468,7 +491,10 @@ mod tests {
         // signature verification. The bytes must round-trip unchanged.
         use crate::proto::ctap2::Ctap2MakeCredentialsResponseExtensions;
 
-        let flags = AuthenticatorDataFlags::USER_PRESENT | AuthenticatorDataFlags::EXTENSION_DATA;
+        let flags = AuthenticatorDataFlags::USER_PRESENT
+            | AuthenticatorDataFlags::BACKUP_ELIGIBILITY
+            | AuthenticatorDataFlags::BACKUP_STATE
+            | AuthenticatorDataFlags::EXTENSION_DATA;
         let mut input = [0x11u8; 32].to_vec();
         input.push(flags.bits());
         input.extend_from_slice(&[0x00, 0x00, 0x00, 0x07]); // signCount
@@ -486,10 +512,38 @@ mod tests {
         let parsed: AuthenticatorData<Ctap2MakeCredentialsResponseExtensions> =
             cbor::from_slice(&wrapped).unwrap();
 
+        assert!(parsed.backup_eligible());
+        assert!(parsed.backed_up());
+
         assert_eq!(
             parsed.to_response_bytes().unwrap(),
             input,
             "authenticatorData must be preserved byte-for-byte"
         );
+    }
+
+    #[test]
+    fn backup_flags_are_distinct_bits() {
+        // BE and BS are separate bits per WebAuthn L3 section 6.1. Each accessor
+        // must read its own bit, so a swap or a wrong wiring is caught.
+        assert_eq!(AuthenticatorDataFlags::BACKUP_ELIGIBILITY.bits(), 0x08);
+        assert_eq!(AuthenticatorDataFlags::BACKUP_STATE.bits(), 0x10);
+
+        let with_flags = |flags| AuthenticatorData::<()> {
+            rp_id_hash: [0u8; 32],
+            flags,
+            signature_count: 0,
+            attested_credential: None,
+            extensions: None,
+            raw: None,
+        };
+
+        let be_only = with_flags(AuthenticatorDataFlags::BACKUP_ELIGIBILITY);
+        assert!(be_only.backup_eligible());
+        assert!(!be_only.backed_up());
+
+        let bs_only = with_flags(AuthenticatorDataFlags::BACKUP_STATE);
+        assert!(!bs_only.backup_eligible());
+        assert!(bs_only.backed_up());
     }
 }
