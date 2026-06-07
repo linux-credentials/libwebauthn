@@ -16,6 +16,7 @@ pub struct ApduResponse {
 pub enum ApduResponseStatus {
     NoError = 0x9000,
     UserPresenceTestFailed = 0x6985,
+    CommandNotAllowed = 0x6986,
     InvalidKeyHandle = 0x6A80,
     InvalidRequestLength = 0x6700,
     InvalidClassByte = 0x6E00,
