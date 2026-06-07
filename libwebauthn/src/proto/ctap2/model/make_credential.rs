@@ -179,17 +179,18 @@ impl Ctap2MakeCredentialRequest {
 #[derive(Debug, Default, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Ctap2MakeCredentialsRequestExtensions {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cred_protect: Option<Ctap2CredentialProtectionPolicy>,
+    // Field order is CTAP2 canonical CBOR map order: shortest key first, then bytewise.
     #[serde(skip_serializing_if = "Option::is_none", with = "serde_bytes")]
     pub cred_blob: Option<Vec<u8>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cred_protect: Option<Ctap2CredentialProtectionPolicy>,
+    // Thanks, FIDO-spec for this consistent naming scheme...
+    #[serde(rename = "hmac-secret", skip_serializing_if = "Option::is_none")]
+    pub hmac_secret: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub large_blob_key: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub min_pin_length: Option<bool>,
-    // Thanks, FIDO-spec for this consistent naming scheme...
-    #[serde(rename = "hmac-secret", skip_serializing_if = "Option::is_none")]
-    pub hmac_secret: Option<bool>,
     // CTAP 2.2 § 12.8
     #[serde(rename = "hmac-secret-mc", skip_serializing_if = "Option::is_none")]
     pub hmac_secret_mc: Option<CalculatedHMACGetSecretInput>,
@@ -199,11 +200,11 @@ pub struct Ctap2MakeCredentialsRequestExtensions {
 
 impl Ctap2MakeCredentialsRequestExtensions {
     pub fn skip_serializing(&self) -> bool {
-        self.cred_protect.is_none()
-            && self.cred_blob.is_none()
+        self.cred_blob.is_none()
+            && self.cred_protect.is_none()
+            && self.hmac_secret.is_none()
             && self.large_blob_key.is_none()
             && self.min_pin_length.is_none()
-            && self.hmac_secret.is_none()
             && self.hmac_secret_mc.is_none()
     }
 }
@@ -757,5 +758,47 @@ mod tests {
             crate::proto::ctap2::cbor::from_slice(&bytes).unwrap();
         assert_eq!(parsed.hmac_secret, Some(true));
         assert!(parsed.hmac_secret_mc.is_some());
+    }
+
+    #[test]
+    fn make_credential_extensions_serialize_in_canonical_cbor_order() {
+        // Byte offset of a key's CBOR text-string header, so "hmac-secret" is not
+        // confused with the "hmac-secret-mc" prefix. All keys are < 24 bytes.
+        fn key_offset(bytes: &[u8], key: &str) -> usize {
+            let mut needle = vec![0x60 | key.len() as u8];
+            needle.extend_from_slice(key.as_bytes());
+            bytes
+                .windows(needle.len())
+                .position(|w| w == needle.as_slice())
+                .unwrap_or_else(|| panic!("key {key} missing from encoded extensions"))
+        }
+
+        let ext = Ctap2MakeCredentialsRequestExtensions {
+            cred_protect: Some(Ctap2CredentialProtectionPolicy::Required),
+            cred_blob: Some(vec![1, 2, 3]),
+            large_blob_key: Some(true),
+            min_pin_length: Some(true),
+            hmac_secret: Some(true),
+            hmac_secret_mc: None,
+            prf_input: None,
+        };
+
+        let bytes = crate::proto::ctap2::cbor::to_vec(&ext).unwrap();
+
+        // CTAP2 canonical map order: shortest key first, then bytewise.
+        let canonical = [
+            "credBlob",
+            "credProtect",
+            "hmac-secret",
+            "largeBlobKey",
+            "minPinLength",
+        ];
+        let offsets: Vec<usize> = canonical.iter().map(|k| key_offset(&bytes, k)).collect();
+        let mut sorted = offsets.clone();
+        sorted.sort_unstable();
+        assert_eq!(
+            offsets, sorted,
+            "extension keys not in canonical CBOR order: {canonical:?} -> {offsets:?}"
+        );
     }
 }
