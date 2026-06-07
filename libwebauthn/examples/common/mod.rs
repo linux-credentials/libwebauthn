@@ -62,6 +62,9 @@ fn handle_uv_update(update: UvUpdate) {
                 PinNotSetReason::PinPolicyViolation => {
                     println!("The provided PIN violated the device's PIN policy.")
                 }
+                PinNotSetReason::PinChangeRequired => {
+                    println!("Your device requires a PIN change before it can be used.")
+                }
             }
             print!("PIN: Please set a new PIN for your device: ");
             io::stdout().flush().unwrap();
