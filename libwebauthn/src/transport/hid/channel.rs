@@ -13,7 +13,7 @@ use tokio::sync::broadcast;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::time::sleep;
-use tracing::{debug, info, instrument, trace, warn, Level};
+use tracing::{debug, instrument, trace, warn, Level};
 
 use crate::pin::persistent_token::PersistentTokenStore;
 use crate::proto::ctap1::apdu::{ApduRequest, ApduResponse};
@@ -157,7 +157,7 @@ impl<'d> HidChannel<'d> {
                     Err(_) => Ok(false),
                 }
             } else {
-                info!("Creating dummy request to make the device blink");
+                debug!("Creating dummy request to make the device blink");
                 let ctap2_request = Ctap2MakeCredentialRequest::dummy();
                 match self.ctap2_make_credential(&ctap2_request, timeout).await {
                     Ok(_)
@@ -168,7 +168,7 @@ impl<'d> HidChannel<'d> {
                 }
             }
         } else if supported.u2f {
-            info!("Creating dummy request to make the device blink");
+            debug!("Creating dummy request to make the device blink");
             let register_request = Ctap1RegisterRequest::dummy(timeout);
             match self.ctap1_register(&register_request).await {
                 Ok(_)
@@ -197,10 +197,7 @@ impl<'d> HidChannel<'d> {
         }
 
         if response.payload.len() < INIT_PAYLOAD_LEN {
-            warn!(
-                { len = response.payload.len() },
-                "INIT payload is too small"
-            );
+            warn!(len = response.payload.len(), "INIT payload is too small");
             return Err(Error::Transport(TransportError::InvalidEndpoint));
         }
 
@@ -209,7 +206,7 @@ impl<'d> HidChannel<'d> {
             .get(..INIT_NONCE_LEN)
             .ok_or(Error::Transport(TransportError::InvalidEndpoint))?;
         if payload_nonce != nonce.as_slice() {
-            warn!("INIT nonce mismatch. Terminating.");
+            warn!("INIT nonce mismatch");
             return Err(Error::Transport(TransportError::InvalidEndpoint));
         }
 
@@ -457,7 +454,7 @@ impl<'d> HidChannel<'d> {
                 trace!("hidapi read_timeout returned 0 bytes, continuing");
                 continue;
             }
-            debug!({ len = bytes_read }, "Received HID report");
+            debug!(len = bytes_read, "Received HID report");
             trace!(?report);
             if let HidMessageParserState::Done = parser
                 .update(&report)
@@ -524,7 +521,7 @@ impl Channel for HidChannel<'_> {
         _timeout: std::time::Duration,
     ) -> Result<(), Error> {
         let cid = self.init.cid;
-        debug!({ cid }, "Sending APDU request");
+        debug!(cid, "Sending APDU request");
         trace!(?request);
         let apdu_raw = request
             .raw_long()
@@ -545,7 +542,7 @@ impl Channel for HidChannel<'_> {
 
     async fn cbor_send(&mut self, request: &CborRequest, _timeout: Duration) -> Result<(), Error> {
         let cid = self.init.cid;
-        debug!({ cid }, "Sending CBOR request");
+        debug!(cid, "Sending CBOR request");
         trace!(?request);
         self.hid_send(&HidMessage::new(
             cid,
@@ -560,10 +557,7 @@ impl Channel for HidChannel<'_> {
         let hid_response = self.hid_recv(timeout).await?;
         let cbor_response = CborResponse::try_from(&hid_response.payload)
             .or(Err(Error::Transport(TransportError::InvalidFraming)))?;
-        debug!(
-            { status = ?cbor_response.status_code },
-            "Received CBOR response"
-        );
+        debug!(status = ?cbor_response.status_code, "Received CBOR response");
         trace!(?cbor_response);
         Ok(cbor_response)
     }
