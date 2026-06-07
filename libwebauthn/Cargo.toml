@@ -201,3 +201,7 @@ path = "examples/management/authenticator_config_hid.rs"
 [[example]]
 name = "cred_management_hid"
 path = "examples/management/cred_management_hid.rs"
+
+[[example]]
+name = "persistent_cred_management_hid"
+path = "examples/management/persistent_cred_management_hid.rs"
