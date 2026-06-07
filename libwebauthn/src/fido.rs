@@ -129,7 +129,10 @@ where
         res.push(self.flags.bits());
         res.write_u32::<BigEndian>(self.signature_count)
             .map_err(|e| {
-                error!("Failed to create AuthenticatorData output vec at signature_count: {e:?}");
+                error!(
+                    ?e,
+                    "Failed to create AuthenticatorData output vec at signature_count"
+                );
                 Error::Platform(PlatformError::InvalidDeviceResponse)
             })?;
 
@@ -144,7 +147,8 @@ where
             res.write_u16::<BigEndian>(att_data.credential_id.len() as u16)
             .map_err(|e| {
                 error!(
-                    "Failed to create AuthenticatorData output vec at attested_credential.credential_id: {e:?}"
+                    ?e,
+                    "Failed to create AuthenticatorData output vec at attested_credential.credential_id"
                 );
                 Error::Platform(PlatformError::InvalidDeviceResponse)
             })?;

@@ -3,7 +3,7 @@ use std::time::Duration;
 use cosey as cose;
 use serde_bytes::ByteBuf;
 use sha2::{Digest, Sha256};
-use tracing::{error, trace};
+use tracing::{error, trace, warn};
 use x509_parser::nom::AsBytes;
 
 use super::webauthn::MakeCredentialRequest;
@@ -57,17 +57,20 @@ impl UpgradableResponse<MakeCredentialResponse, MakeCredentialRequest> for Regis
         // from ANS X9.62 / Sec-1 v2 uncompressed curve point representation [SEC1V2]
         // to COSE_Key representation ([RFC8152] Section 7).
         let Ok(encoded_point) = p256::EncodedPoint::from_bytes(&self.public_key) else {
-            error!(?self.public_key, "Failed to parse public key as SEC-1 v2 encoded point");
+            warn!(
+                public_key_len = self.public_key.len(),
+                "Failed to parse public key as SEC-1 v2 encoded point"
+            );
             return Err(Error::Ctap(CtapError::Other));
         };
         let x_bytes = encoded_point.x().ok_or_else(|| {
-            error!("Public key is the identity point");
+            warn!("Public key is the identity point");
             Error::Platform(PlatformError::CryptoError(
                 "public key is the identity point".into(),
             ))
         })?;
         let y_bytes = encoded_point.y().ok_or_else(|| {
-            error!("Public key is identity or compressed");
+            warn!("Public key is identity or compressed");
             Error::Platform(PlatformError::CryptoError(
                 "public key is identity or compressed".into(),
             ))
@@ -245,7 +248,7 @@ impl UpgradableResponse<GetAssertionResponse, SignRequest> for SignResponse {
             .as_slice()
             .into();
 
-        trace!(?upgraded_response);
+        trace!(?upgraded_response, "Upgraded U2F sign response");
         Ok(upgraded_response)
     }
 }

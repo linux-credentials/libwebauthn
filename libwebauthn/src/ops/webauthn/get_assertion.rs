@@ -3,7 +3,7 @@ use std::{collections::HashMap, time::Duration};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tracing::{debug, error, trace};
+use tracing::{debug, trace, warn};
 
 use crate::{
     fido::AuthenticatorData,
@@ -417,7 +417,7 @@ impl Ctap2HMACGetSecretOutput {
         let output = match uv_proto.decrypt(shared_secret, &self.encrypted_output) {
             Ok(o) => o,
             Err(e) => {
-                error!("Failed to decrypt HMAC Secret output with the shared secret: {e:?}. Skipping HMAC extension");
+                warn!(?e, "Failed to decrypt HMAC Secret output with the shared secret, skipping HMAC extension");
                 return None;
             }
         };
@@ -431,7 +431,10 @@ impl Ctap2HMACGetSecretOutput {
             output2.copy_from_slice(o2);
             res.output2 = Some(output2);
         } else {
-            error!("Failed to split HMAC Secret outputs. Unexpected output length: {}. Skipping HMAC extension", output.len());
+            warn!(
+                output_len = output.len(),
+                "Failed to split HMAC Secret outputs, skipping HMAC extension"
+            );
             return None;
         }
 

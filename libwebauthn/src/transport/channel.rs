@@ -55,7 +55,7 @@ pub trait Channel: Send + Sync + Display + Ctap2AuthTokenStore {
         match self.get_ux_update_sender().send(state) {
             Ok(_) => (),
             Err(_) => {
-                warn!("No receivers for UX update.");
+                warn!("No receivers for UX update");
             }
         };
     }
