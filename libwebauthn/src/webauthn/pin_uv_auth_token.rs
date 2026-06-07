@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use icu_normalizer::ComposingNormalizerBorrowed;
-use tracing::{debug, error, info, instrument, warn};
+use tracing::{debug, info, instrument, warn};
 
 use cosey::PublicKey;
 
@@ -88,7 +88,7 @@ fn enforce_no_mc_ga_with_client_pin(
     if get_info_response.option_enabled("uv") && !uv_unavailable {
         Ok(Ctap2UserVerificationOperation::GetPinUvAuthTokenUsingUvWithPermissions)
     } else {
-        error!("noMcGaPermissionsWithClientPin is set but built-in UV is unavailable for mc/ga");
+        warn!("noMcGaPermissionsWithClientPin is set but built-in UV is unavailable for mc/ga");
         Err(PlatformError::NoUvAvailable)
     }
 }
@@ -174,11 +174,11 @@ where
     // If it is not discouraged and either RP or device requires it.
     let uv = !rp_uv_discouraged && (rp_uv_preferred || dev_uv_protected);
 
-    debug!(%rp_uv_preferred, %rp_uv_discouraged, %dev_uv_protected, %uv, %needs_shared_secret, %can_establish_shared_secret, "Checking if user verification is required");
+    debug!({ %rp_uv_preferred, %rp_uv_discouraged, %dev_uv_protected, %uv, %needs_shared_secret, %can_establish_shared_secret }, "Checking if user verification is required");
     // Enforce required UV even on the shared-secret path. A shared-secret-only result performs no UV.
     if user_verification.is_required() && !dev_uv_protected {
-        error!(
-            "Request requires user verification, but device user verification is not available. Try letting the user set a PIN."
+        debug!(
+            "Request requires user verification, but device user verification is not available. Trying to set a PIN"
         );
         // Lets try setting a PIN. Either we succeed in some fashion, or we return the resulting error here instead.
         try_to_set_pin(
@@ -289,7 +289,7 @@ where
         )
         .await
         else {
-            error!("No supported PIN/UV auth protocols found");
+            warn!("No supported PIN/UV auth protocols found");
             return Err(WebAuthnError::Ctap(CtapError::Other));
         };
 
@@ -346,7 +346,7 @@ where
                     &uv_proto.encrypt(
                         &shared_secret,
                         &pin_hash(&pin.ok_or_else(|| {
-                            error!("PIN expected but not available");
+                            warn!("PIN expected but not available");
                             WebAuthnError::Ctap(CtapError::PINRequired)
                         })?),
                     )?,
@@ -359,7 +359,7 @@ where
                     &uv_proto.encrypt(
                         &shared_secret,
                         &pin_hash(&pin.ok_or_else(|| {
-                            error!("PIN expected but not available");
+                            warn!("PIN expected but not available");
                             WebAuthnError::Ctap(CtapError::PINRequired)
                         })?),
                     )?,
@@ -446,11 +446,11 @@ where
         | Ctap2UserVerificationOperation::GetPinToken => {
             {
                 let token_response = token_response.ok_or_else(|| {
-                    error!("Expected token response but got None");
+                    warn!("Expected token response but got None");
                     WebAuthnError::Ctap(CtapError::Other)
                 })?;
                 let Some(encrypted_pin_uv_auth_token) = token_response.pin_uv_auth_token else {
-                    error!("Client PIN response did not include a PIN UV auth token");
+                    warn!("Client PIN response did not include a PIN UV auth token");
                     return Err(WebAuthnError::Ctap(CtapError::Other));
                 };
 
@@ -459,9 +459,8 @@ where
 
                 // Reject a spec-invalid token length before it is used as a key downstream.
                 if !pin_uv_auth_token_len_valid(uv_proto.version(), uv_auth_token.len()) {
-                    error!(
-                        protocol = ?uv_proto.version(),
-                        token_len = uv_auth_token.len(),
+                    warn!(
+                        { protocol = ?uv_proto.version(), token_len = uv_auth_token.len() },
                         "Decrypted pinUvAuthToken has an invalid length"
                     );
                     return Err(WebAuthnError::Ctap(CtapError::Other));
@@ -526,7 +525,7 @@ where
         .ctap2_client_pin(&client_pin_request, timeout)
         .await?;
     let Some(public_key) = client_pin_response.key_agreement else {
-        error!("Missing public key from Client PIN response");
+        warn!("Missing public key from Client PIN response");
         return Err(WebAuthnError::Ctap(CtapError::Other));
     };
     Ok(pin_proto.encapsulate(&public_key)?)
