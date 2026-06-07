@@ -25,7 +25,9 @@ pub use idl::{
     JsonFormat, OriginValidation, RegistrationResponseJSON, RequestSettings,
     ResponseSerializationError, WebAuthnIDLResponse,
 };
-pub(crate) use large_blob::{max_fragment_length, read_authenticator_large_blob};
+pub(crate) use large_blob::{
+    decrypt_first_matching, fetch_large_blob_entries, max_fragment_length,
+};
 pub use make_credential::{
     CredentialPropsExtension, CredentialProtectionExtension, CredentialProtectionPolicy,
     MakeCredentialLargeBlobExtension, MakeCredentialLargeBlobExtensionInput,
