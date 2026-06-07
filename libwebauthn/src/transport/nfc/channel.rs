@@ -374,7 +374,7 @@ mod tests {
     use std::fmt::{Display, Formatter};
     use std::time::Duration;
 
-    use super::{is_fido2_version, HandlerInCtx, NfcBackend, NfcChannel};
+    use super::{is_fido2_version, ChannelSettings, HandlerInCtx, NfcBackend, NfcChannel};
     use crate::proto::ctap1::apdu::{ApduRequest, ApduResponseStatus};
     use crate::proto::CtapError;
     use crate::transport::channel::Channel;
@@ -436,7 +436,7 @@ mod tests {
         let backend = FixedResponseBackend {
             response: vec![0x6A, 0x80],
         };
-        let mut channel = NfcChannel::new(Box::new(backend), 0u8);
+        let mut channel = NfcChannel::new(Box::new(backend), 0u8, ChannelSettings::default());
         let request = ApduRequest::new(0x02, 0x00, 0x00, None, None);
 
         channel
