@@ -19,7 +19,7 @@ pub struct ClientData {
 /// serialize `clientDataJSON` per WebAuthn L3 §5.8.1.2.
 ///
 /// Field order matches the algorithm in the spec: `type`, `challenge`,
-/// `origin`, optional `topOrigin`, `crossOrigin`. `serde_json`'s string
+/// `origin`, `crossOrigin`, optional `topOrigin`. `serde_json`'s string
 /// escaping is a strict superset of CCDToString (ECMA-262 / RFC 8259 escapes
 /// every code point CCDToString escapes), so routing free-form strings
 /// through `serde_json::to_string` is sufficient to satisfy the spec.
@@ -29,10 +29,10 @@ struct CollectedClientDataJSON<'a> {
     operation: &'static str,
     challenge: &'a str,
     origin: &'a str,
-    #[serde(rename = "topOrigin", skip_serializing_if = "Option::is_none")]
-    top_origin: Option<&'a str>,
     #[serde(rename = "crossOrigin")]
     cross_origin: bool,
+    #[serde(rename = "topOrigin", skip_serializing_if = "Option::is_none")]
+    top_origin: Option<&'a str>,
 }
 
 impl ClientData {
@@ -40,7 +40,7 @@ impl ClientData {
     ///
     /// Strings are escaped per WebAuthn L3 §5.8.1.2 (CCDToString), via
     /// `serde_json`'s RFC 8259 string encoder. Field order matches the spec:
-    /// `type`, `challenge`, `origin`, `topOrigin?`, `crossOrigin`.
+    /// `type`, `challenge`, `origin`, `crossOrigin`, `topOrigin?`.
     #[allow(clippy::expect_used)] // serialization of this fixed-shape struct cannot fail
     pub fn to_json(&self) -> String {
         let operation = match self.operation {
@@ -52,8 +52,8 @@ impl ClientData {
             operation,
             challenge: &challenge,
             origin: &self.origin,
-            top_origin: self.top_origin.as_deref(),
             cross_origin: self.top_origin.is_some(),
+            top_origin: self.top_origin.as_deref(),
         };
         // Serializing a fixed-shape struct with `String`/`&str`/`bool` fields
         // cannot fail; preserve the infallible API by unwrapping.
@@ -215,7 +215,7 @@ mod tests {
         assert_eq!(parsed["crossOrigin"].as_bool(), Some(true));
     }
 
-    /// Spec field order: type, challenge, origin, topOrigin?, crossOrigin.
+    /// Spec field order: type, challenge, origin, crossOrigin, topOrigin?.
     #[test]
     fn field_order_matches_spec_with_top_origin() {
         let client_data = ClientData {
@@ -229,11 +229,11 @@ mod tests {
         let i_type = json.find("\"type\"").expect("type missing");
         let i_chal = json.find("\"challenge\"").expect("challenge missing");
         let i_orig = json.find("\"origin\"").expect("origin missing");
-        let i_top = json.find("\"topOrigin\"").expect("topOrigin missing");
         let i_cross = json.find("\"crossOrigin\"").expect("crossOrigin missing");
+        let i_top = json.find("\"topOrigin\"").expect("topOrigin missing");
 
         assert!(
-            i_type < i_chal && i_chal < i_orig && i_orig < i_top && i_top < i_cross,
+            i_type < i_chal && i_chal < i_orig && i_orig < i_cross && i_cross < i_top,
             "field order is wrong: {json}"
         );
     }
