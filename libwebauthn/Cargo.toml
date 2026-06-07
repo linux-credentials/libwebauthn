@@ -118,6 +118,8 @@ reqwest = { version = "0.12", default-features = false, features = [
 [dev-dependencies]
 tracing-subscriber = { version = "0.3.3", features = ["env-filter"] }
 qrcode = "0.14.1"
+# test-util enables paused time for deterministic timeout/linger tests
+tokio = { version = "1.45", features = ["test-util"] }
 # For turning on logging in unittests
 test-log = { version = "0.2" }
 

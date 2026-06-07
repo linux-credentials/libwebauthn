@@ -47,6 +47,7 @@ pub struct CableChannel {
     pub(crate) ux_update_sender: broadcast::Sender<CableUxUpdate>,
     pub(crate) connection_state_receiver: watch::Receiver<ConnectionState>,
     pub(crate) persistent_token_store: Option<Arc<dyn PersistentTokenStore>>,
+    pub(crate) close_sender: Option<mpsc::Sender<()>>,
 }
 
 impl CableChannel {
@@ -137,7 +138,14 @@ impl Channel for CableChannel {
     }
 
     async fn close(&mut self) {
-        // TODO Send CableTunnelMessageType#Shutdown and drop the connection
+        // Signal the loop to send Shutdown, then wait for it to flush and terminate.
+        if let Some(close_sender) = self.close_sender.take() {
+            let _ = close_sender.send(()).await;
+        }
+        let mut connection_state = self.connection_state_receiver.clone();
+        let _ = connection_state
+            .wait_for(|state| *state == ConnectionState::Terminated)
+            .await;
     }
 
     async fn apdu_send(&mut self, _request: &ApduRequest, _timeout: Duration) -> Result<(), Error> {
