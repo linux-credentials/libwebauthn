@@ -50,7 +50,6 @@ impl From<PublicKeyCredentialDescriptorJSON> for Ctap2PublicKeyCredentialDescrip
 pub struct GetAssertionRequestExtensionsJSON {
     #[serde(rename = "getCredBlob")]
     pub cred_blob: Option<bool>,
-    #[serde(rename = "largeBlobKey")]
     pub large_blob: Option<LargeBlobInputJson>,
     pub hmac_get_secret: Option<HmacGetSecretInputJson>,
     pub prf: Option<PrfInputJson>,
@@ -62,6 +61,7 @@ pub struct GetAssertionRequestExtensionsJSON {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct LargeBlobInputJson {
+    pub support: Option<String>,
     pub read: Option<bool>,
 }
 

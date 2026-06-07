@@ -208,16 +208,24 @@ impl FromIdlModel<PublicKeyCredentialRequestOptionsJSON> for GetAssertionRequest
             None => None,
         };
 
+        let large_blob = match inner
+            .extensions
+            .as_ref()
+            .and_then(|e| e.large_blob.as_ref())
+        {
+            // L3 §10.1.5: largeBlob without read=true or support is a no-op, not an error.
+            Some(lb) if lb.support.is_none() && lb.read != Some(true) => None,
+            Some(lb) => Some(GetAssertionLargeBlobExtension::try_from(lb.clone())?),
+            None => None,
+        };
+
         let extensions =
             inner
                 .extensions
                 .as_ref()
                 .map(|extensions_opt| GetAssertionRequestExtensions {
                     cred_blob: extensions_opt.cred_blob.unwrap_or(false),
-                    large_blob: extensions_opt
-                        .large_blob
-                        .clone()
-                        .and_then(|lb| GetAssertionLargeBlobExtension::try_from(lb).ok()),
+                    large_blob: large_blob.clone(),
                     prf: prf.clone(),
                     appid: appid.clone(),
                 });
@@ -337,6 +345,11 @@ impl TryFrom<LargeBlobInputJson> for GetAssertionLargeBlobExtension {
     type Error = GetAssertionPrepareError;
 
     fn try_from(value: LargeBlobInputJson) -> Result<Self, Self::Error> {
+        if value.support.is_some() {
+            return Err(GetAssertionPrepareError::NotSupported(
+                "largeBlob.support is only valid at registration".to_string(),
+            ));
+        }
         match value.read {
             Some(true) => Ok(GetAssertionLargeBlobExtension::Read),
             Some(false) => Err(GetAssertionPrepareError::NotSupported(
@@ -1376,5 +1389,60 @@ mod tests {
             json.get("appid").is_none(),
             "JSON output should omit `appid` when not requested"
         );
+    }
+
+    #[test]
+    fn large_blob_json_read_input_and_identifier() {
+        use crate::ops::webauthn::idl::get::{
+            GetAssertionRequestExtensionsJSON, LargeBlobInputJson,
+        };
+
+        assert_eq!(
+            GetAssertionLargeBlobExtension::try_from(LargeBlobInputJson {
+                support: None,
+                read: Some(true),
+            })
+            .unwrap(),
+            GetAssertionLargeBlobExtension::Read
+        );
+        assert!(matches!(
+            GetAssertionLargeBlobExtension::try_from(LargeBlobInputJson {
+                support: Some("required".to_string()),
+                read: Some(true),
+            }),
+            Err(GetAssertionPrepareError::NotSupported(_))
+        ));
+
+        let ext: GetAssertionRequestExtensionsJSON =
+            serde_json::from_str(r#"{"largeBlob":{"read":true}}"#).unwrap();
+        assert!(
+            ext.large_blob.is_some(),
+            "extension keyed under `largeBlob`"
+        );
+        let ext: GetAssertionRequestExtensionsJSON =
+            serde_json::from_str(r#"{"largeBlobKey":{"read":true}}"#).unwrap();
+        assert!(
+            ext.large_blob.is_none(),
+            "legacy `largeBlobKey` must not bind"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_request_from_json_large_blob_read_false_is_noop() {
+        let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
+        let json = json_field_add(
+            REQUEST_BASE_JSON,
+            "extensions",
+            r#"{"largeBlob":{"read":false}}"#,
+        );
+        let req = from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            RelatedOrigins::Disabled,
+            &json,
+        )
+        .await
+        .expect("largeBlob.read=false must be a no-op, not an error");
+        assert!(req.extensions.and_then(|e| e.large_blob).is_none());
     }
 }

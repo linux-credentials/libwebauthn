@@ -1,6 +1,7 @@
 mod client_data;
 mod get_assertion;
 pub mod idl;
+mod large_blob;
 mod make_credential;
 pub mod psl;
 pub mod related_origins;
@@ -23,6 +24,9 @@ pub use idl::{
     AuthenticatorAssertionResponseJSON, AuthenticatorAttestationResponseJSON, Base64UrlString,
     JsonFormat, OriginValidation, RegistrationResponseJSON, RequestSettings,
     ResponseSerializationError, WebAuthnIDLResponse,
+};
+pub(crate) use large_blob::{
+    decrypt_first_matching, fetch_large_blob_entries, max_fragment_length,
 };
 pub use make_credential::{
     CredentialPropsExtension, CredentialProtectionExtension, CredentialProtectionPolicy,

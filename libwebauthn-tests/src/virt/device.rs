@@ -66,10 +66,13 @@ where
                 client,
                 Conforming {},
                 Config {
-                    max_msg_size: 0,
+                    max_msg_size: 1200,
                     skip_up_timeout: None,
                     max_resident_credential_count: options.max_resident_credential_count,
-                    large_blobs: None,
+                    large_blobs: Some(fido_authenticator::LargeBlobsConfig {
+                        location: trussed::types::Location::Internal,
+                        max_size: 4096,
+                    }),
                     nfc_transport: false,
                 },
             );
