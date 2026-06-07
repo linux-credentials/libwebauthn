@@ -214,7 +214,7 @@ impl FromIdlModel<PublicKeyCredentialRequestOptionsJSON> for GetAssertionRequest
             .and_then(|e| e.large_blob.as_ref())
         {
             // L3 §10.1.5: largeBlob without read=true or support is a no-op, not an error.
-            Some(lb) if lb.support.is_none() && lb.read != Some(true) => None,
+            Some(lb) if lb.support.is_none() && lb.read != Some(true) && lb.write.is_none() => None,
             Some(lb) => Some(GetAssertionLargeBlobExtension::try_from(lb.clone())?),
             None => None,
         };
@@ -336,9 +336,12 @@ impl TryFrom<HmacGetSecretInputJson> for HMACGetSecretInput {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GetAssertionLargeBlobExtension {
+    /// Per WebAuthn L3 §10.1.5 (read=true): fetch the credential's blob.
     Read,
-    // Not yet supported
-    // Write(Vec<u8>),
+    /// Per WebAuthn L3 §10.1.5 (write=ArrayBuffer): store this blob against the credential.
+    Write(Vec<u8>),
+    /// CTAP 2.2 §6.10.6 erase branch. Not exposed via WebAuthn L3 JSON IDL.
+    Delete,
 }
 
 impl TryFrom<LargeBlobInputJson> for GetAssertionLargeBlobExtension {
@@ -350,13 +353,19 @@ impl TryFrom<LargeBlobInputJson> for GetAssertionLargeBlobExtension {
                 "largeBlob.support is only valid at registration".to_string(),
             ));
         }
+        // WebAuthn L3 §10.1.5: read and write present together is an error.
+        if value.read.is_some() && value.write.is_some() {
+            return Err(GetAssertionPrepareError::NotSupported(
+                "largeBlob.read and largeBlob.write are mutually exclusive".to_string(),
+            ));
+        }
+        if let Some(write) = value.write {
+            return Ok(GetAssertionLargeBlobExtension::Write(write.to_vec()));
+        }
         match value.read {
             Some(true) => Ok(GetAssertionLargeBlobExtension::Read),
-            Some(false) => Err(GetAssertionPrepareError::NotSupported(
-                "largeBlob writes not supported".to_string(),
-            )),
-            None => Err(GetAssertionPrepareError::NotSupported(
-                "largeBlob read not requested".to_string(),
+            _ => Err(GetAssertionPrepareError::NotSupported(
+                "largeBlob input must set read=true or write".to_string(),
             )),
         }
     }
@@ -366,9 +375,8 @@ impl TryFrom<LargeBlobInputJson> for GetAssertionLargeBlobExtension {
 pub struct GetAssertionLargeBlobExtensionOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub blob: Option<Vec<u8>>,
-    // Not yet supported
-    // #[serde(skip_serializing_if = "Option::is_none")]
-    // pub written: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub written: Option<bool>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -543,7 +551,7 @@ impl Assertion {
                         .blob
                         .as_ref()
                         .map(|b| Base64UrlString::from(b.as_slice())),
-                    written: None, // Write not yet supported
+                    written: large_blob.written,
                 });
             }
 
@@ -593,6 +601,15 @@ impl DowngradableRequest<Vec<SignRequest>> for GetAssertionRequest {
         // allowList must have at least one credential.
         if self.allow.is_empty() {
             debug!("Not downgradable: allowList is empty.");
+            return false;
+        }
+
+        if matches!(
+            self.extensions.as_ref().and_then(|e| e.large_blob.as_ref()),
+            Some(GetAssertionLargeBlobExtension::Write(_))
+                | Some(GetAssertionLargeBlobExtension::Delete)
+        ) {
+            debug!("Not downgradable: largeBlob write/delete requires FIDO2");
             return false;
         }
 
@@ -1401,6 +1418,7 @@ mod tests {
             GetAssertionLargeBlobExtension::try_from(LargeBlobInputJson {
                 support: None,
                 read: Some(true),
+                write: None,
             })
             .unwrap(),
             GetAssertionLargeBlobExtension::Read
@@ -1409,6 +1427,7 @@ mod tests {
             GetAssertionLargeBlobExtension::try_from(LargeBlobInputJson {
                 support: Some("required".to_string()),
                 read: Some(true),
+                write: None,
             }),
             Err(GetAssertionPrepareError::NotSupported(_))
         ));
@@ -1444,5 +1463,29 @@ mod tests {
         .await
         .expect("largeBlob.read=false must be a no-op, not an error");
         assert!(req.extensions.and_then(|e| e.large_blob).is_none());
+    }
+
+    #[test]
+    fn large_blob_json_write_input_and_mutual_exclusion() {
+        use crate::ops::webauthn::idl::get::LargeBlobInputJson;
+
+        let blob = b"blob to write".to_vec();
+        assert_eq!(
+            GetAssertionLargeBlobExtension::try_from(LargeBlobInputJson {
+                support: None,
+                read: None,
+                write: Some(Base64UrlString::from(blob.clone())),
+            })
+            .unwrap(),
+            GetAssertionLargeBlobExtension::Write(blob)
+        );
+        assert!(matches!(
+            GetAssertionLargeBlobExtension::try_from(LargeBlobInputJson {
+                support: None,
+                read: Some(true),
+                write: Some(Base64UrlString::from(b"x".to_vec())),
+            }),
+            Err(GetAssertionPrepareError::NotSupported(_))
+        ));
     }
 }

@@ -26,7 +26,8 @@ pub use idl::{
     ResponseSerializationError, WebAuthnIDLResponse,
 };
 pub(crate) use large_blob::{
-    decrypt_first_matching, fetch_large_blob_entries, max_fragment_length,
+    decrypt_first_matching, delete_authenticator_large_blob, fetch_large_blob_entries,
+    max_fragment_length, write_authenticator_large_blob,
 };
 pub use make_credential::{
     CredentialPropsExtension, CredentialProtectionExtension, CredentialProtectionPolicy,

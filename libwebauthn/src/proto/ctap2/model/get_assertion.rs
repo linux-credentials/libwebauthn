@@ -200,19 +200,32 @@ pub struct Ctap2GetAssertionRequestExtensions {
     pub large_blob_key: Option<bool>,
     #[serde(skip)]
     pub(crate) hmac_or_prf: Option<GetAssertionHmacOrPrfInput>,
+    /// Set when the WebAuthn `largeBlob` extension is `Write`/`Delete`. Drives the
+    /// `lbw` bit in `permissions()` so the negotiated pinUvAuthToken can authorize
+    /// `authenticatorLargeBlobs(set)` (CTAP 2.2 §6.10.2/§6.5.5.7.1).
+    #[serde(skip)]
+    pub(crate) large_blob_write: bool,
 }
 
 impl From<GetAssertionRequestExtensions> for Ctap2GetAssertionRequestExtensions {
     fn from(other: GetAssertionRequestExtensions) -> Self {
+        let needs_key = matches!(
+            other.large_blob,
+            Some(GetAssertionLargeBlobExtension::Read)
+                | Some(GetAssertionLargeBlobExtension::Write(_))
+                | Some(GetAssertionLargeBlobExtension::Delete)
+        );
+        let is_write = matches!(
+            other.large_blob,
+            Some(GetAssertionLargeBlobExtension::Write(_))
+                | Some(GetAssertionLargeBlobExtension::Delete)
+        );
         Ctap2GetAssertionRequestExtensions {
             cred_blob: other.cred_blob,
             hmac_secret: None, // Gets calculated later
             hmac_or_prf: other.prf.map(GetAssertionHmacOrPrfInput::Prf),
-            large_blob_key: if other.large_blob == Some(GetAssertionLargeBlobExtension::Read) {
-                Some(true)
-            } else {
-                None
-            },
+            large_blob_key: if needs_key { Some(true) } else { None },
+            large_blob_write: is_write,
         }
     }
 }
@@ -400,7 +413,14 @@ impl Ctap2UserVerifiableRequest for Ctap2GetAssertionRequest {
     }
 
     fn permissions(&self) -> Ctap2AuthTokenPermissionRole {
-        Ctap2AuthTokenPermissionRole::GET_ASSERTION
+        let mut perms = Ctap2AuthTokenPermissionRole::GET_ASSERTION;
+        if self.extensions.as_ref().is_some_and(|e| e.large_blob_write) {
+            // CTAP 2.2 §6.10.2 requires the lbw bit on the token used for
+            // authenticatorLargeBlobs(set). Negotiating it alongside ga avoids a
+            // second PIN/UV ceremony for the chunked upload that follows.
+            perms |= Ctap2AuthTokenPermissionRole::LARGE_BLOB_WRITE;
+        }
+        perms
     }
 
     fn permissions_rpid(&self) -> Option<&str> {
@@ -426,7 +446,17 @@ impl Ctap2UserVerifiableRequest for Ctap2GetAssertionRequest {
             .as_ref()
             .map(|e| e.hmac_or_prf.is_some())
             .unwrap_or_default();
-        hmac_requested && hmac_supported
+        (hmac_requested && hmac_supported) || self.needs_pin_uv_auth_token(get_info_response)
+    }
+
+    fn needs_pin_uv_auth_token(&self, info: &Ctap2GetInfoResponse) -> bool {
+        // largeBlob.write/delete needs a full token with the `lbw` permission
+        // (CTAP 2.2 §6.10.2 line 113). Only require it when the device is
+        // UV-protected; an unprotected authenticator accepts writes without
+        // auth per spec line 137.
+        self.extensions.as_ref().is_some_and(|e| e.large_blob_write)
+            && info.option_enabled("largeBlobs")
+            && info.is_uv_protected()
     }
 }
 
@@ -516,7 +546,10 @@ impl Ctap2GetAssertionResponseExtensions {
             .extensions
             .as_ref()
             .and_then(|ext| ext.large_blob.as_ref())
-            .map(|_| GetAssertionLargeBlobExtensionOutput { blob: None });
+            .map(|_| GetAssertionLargeBlobExtensionOutput {
+                blob: None,
+                written: None,
+            });
 
         // FIDO AppID extension: on the FIDO2 path the application parameter
         // is always derived from rp.id, so if the caller requested `appid`
