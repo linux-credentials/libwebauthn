@@ -17,7 +17,7 @@ pub mod error;
 pub mod pin_uv_auth_token;
 
 use async_trait::async_trait;
-use tracing::{debug, error, info, instrument, trace, warn};
+use tracing::{debug, info, instrument, trace, warn};
 
 use crate::fido::FidoProtocol;
 use crate::ops::u2f::{RegisterRequest, SignRequest, UpgradableResponse};
@@ -434,7 +434,7 @@ async fn get_assertion_fido2<C: Channel>(
     let count = (response.credentials_count.unwrap_or(1) as usize).min(max_count);
     let mut ctap_responses = vec![response];
     for i in 1..count {
-        debug!({ i }, "Fetching additional credential");
+        debug!(i, "Fetching additional credential");
         // GetNextAssertion doesn't use PinUVAuthToken, so we don't need to check uv_auth_used here
         let next = channel.ctap2_get_next_assertion(op.timeout).await?;
         validate_rp_id_hash(&next)?;
@@ -682,9 +682,9 @@ async fn get_assertion_u2f<C: Channel>(
                 debug!("No credentials found, trying with the next.");
             }
             Err(err) => {
-                error!(
+                warn!(
                     ?err,
-                    "Unexpected error whilst trying each credential in allowList."
+                    "Unexpected error whilst trying each credential in allowList"
                 );
                 return Err(err);
             }
@@ -719,7 +719,7 @@ async fn negotiate_protocol<C: Channel>(
     if fido_protocol == FidoProtocol::U2F {
         warn!("Negotiated protocol downgrade from FIDO2 to FIDO U2F");
     } else {
-        debug!("Selected protocol: {:?}", fido_protocol);
+        debug!(?fido_protocol, "Selected protocol");
     }
     Ok(fido_protocol)
 }
