@@ -1,11 +1,10 @@
+use super::get::PublicKeyCredentialDescriptorJSON;
 use super::Base64UrlString;
 use crate::{
     ops::webauthn::{
         MakeCredentialsRequestExtensions, ResidentKeyRequirement, UserVerificationRequirement,
     },
-    proto::ctap2::{
-        Ctap2CredentialType, Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialRpEntity,
-    },
+    proto::ctap2::{Ctap2CredentialType, Ctap2PublicKeyCredentialRpEntity},
 };
 
 use serde::Deserialize;
@@ -46,10 +45,44 @@ pub struct PublicKeyCredentialCreationOptionsJSON {
     #[serde(rename = "pubKeyCredParams")]
     pub params: Vec<Ctap2CredentialType>,
     pub timeout: Option<u32>,
-    pub exclude_credentials: Vec<Ctap2PublicKeyCredentialDescriptor>,
+    #[serde(default)]
+    pub exclude_credentials: Vec<PublicKeyCredentialDescriptorJSON>,
     pub authenticator_selection: Option<AuthenticatorSelectionCriteria>,
     pub hints: Option<Vec<String>>,
     pub attestation: Option<String>,
     pub attestation_formats: Option<Vec<String>>,
     pub extensions: Option<MakeCredentialsRequestExtensions>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::proto::ctap2::Ctap2PublicKeyCredentialDescriptor;
+
+    #[test]
+    fn exclude_credentials_id_is_base64url_decoded() {
+        let json = r#"{
+            "rp": { "id": "example.org", "name": "Example" },
+            "user": { "id": "YWxpY2U", "name": "alice", "displayName": "Alice" },
+            "challenge": "Y2hhbGxlbmdl",
+            "pubKeyCredParams": [{ "type": "public-key", "alg": -7 }],
+            "excludeCredentials": [{ "type": "public-key", "id": "AQIDBA" }]
+        }"#;
+        let options: PublicKeyCredentialCreationOptionsJSON = serde_json::from_str(json).unwrap();
+        let descriptor: Ctap2PublicKeyCredentialDescriptor =
+            options.exclude_credentials[0].clone().into();
+        assert_eq!(descriptor.id, [1u8, 2, 3, 4]);
+    }
+
+    #[test]
+    fn exclude_credentials_defaults_to_empty_when_omitted() {
+        let json = r#"{
+            "rp": { "id": "example.org", "name": "Example" },
+            "user": { "id": "YWxpY2U", "name": "alice", "displayName": "Alice" },
+            "challenge": "Y2hhbGxlbmdl",
+            "pubKeyCredParams": [{ "type": "public-key", "alg": -7 }]
+        }"#;
+        let options: PublicKeyCredentialCreationOptionsJSON = serde_json::from_str(json).unwrap();
+        assert!(options.exclude_credentials.is_empty());
+    }
 }
