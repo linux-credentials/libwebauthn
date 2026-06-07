@@ -422,7 +422,13 @@ impl FromIdlModel<PublicKeyCredentialCreationOptionsJSON> for MakeCredentialRequ
             exclude: if inner.exclude_credentials.is_empty() {
                 None
             } else {
-                Some(inner.exclude_credentials)
+                Some(
+                    inner
+                        .exclude_credentials
+                        .into_iter()
+                        .map(|c| c.into())
+                        .collect(),
+                )
             },
             extensions: inner.extensions,
             timeout,
