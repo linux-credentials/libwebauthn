@@ -29,7 +29,7 @@ pub async fn list_devices() -> Result<Vec<BleDevice>, Error> {
         .iter()
         .map(|bluez_device| bluez_device.into())
         .collect();
-    info!({ count = devices.len() }, "Listing available BLE devices");
+    info!(count = devices.len(), "Listing available BLE devices");
     Ok(devices)
 }
 
