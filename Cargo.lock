@@ -2052,6 +2052,7 @@ dependencies = [
  "libwebauthn",
  "littlefs2",
  "num_enum",
+ "p256 0.13.2",
  "rand 0.8.6",
  "serde_bytes",
  "serde_cbor_2",
@@ -2063,6 +2064,7 @@ dependencies = [
  "tracing-subscriber",
  "trussed",
  "trussed-staging",
+ "x509-parser",
 ]
 
 [[package]]
