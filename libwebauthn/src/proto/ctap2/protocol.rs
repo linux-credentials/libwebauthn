@@ -469,6 +469,7 @@ mod tests {
             uv_auth_param: None,
             use_legacy_preview: false,
             use_persistent_token: false,
+            persistent_token_rejected: false,
         };
         let expected_request: CborRequest = (&request).try_into().unwrap();
         channel.push_command_pair(expected_request, error_response(CtapError::PINRequired));

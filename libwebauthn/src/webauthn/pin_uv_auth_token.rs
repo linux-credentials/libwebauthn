@@ -77,10 +77,12 @@ where
     ctap2_request.handle_legacy_preview(&get_info_response);
 
     // Decide whether this request acquires a persistent (pcmr) token. A persistent token
-    // outranks a same-session ephemeral one, so try it first.
+    // outranks a same-session ephemeral one, so try it first. Skip reuse once a stored
+    // token has been rejected this ceremony, so the retry mints a fresh one rather than
+    // looping on the same stale record.
     let persistent_token_store = channel.persistent_token_store();
     ctap2_request.set_persistent_token_use(&get_info_response, persistent_token_store.is_some());
-    if ctap2_request.wants_persistent_token() {
+    if ctap2_request.wants_persistent_token() && !ctap2_request.persistent_token_rejected() {
         if let Some(store) = &persistent_token_store {
             if let Some((id, record)) =
                 recognize_authenticator(store.as_ref(), &get_info_response).await
@@ -612,7 +614,7 @@ mod test {
         UvUpdate,
     };
 
-    use super::{pin_uv_auth_token_len_valid, user_verification, Error};
+    use super::{pin_uv_auth_token_len_valid, user_verification, CtapError, Error};
     const TIMEOUT: Duration = Duration::from_secs(1);
 
     #[test]
@@ -1679,5 +1681,339 @@ mod test {
 
         let recv = recv_handle.await.expect("Failed to join update thread");
         assert!(recv.is_empty());
+    }
+
+    // The spec-real foreign-invalidation path. A PIN change (or any out-of-band reset of the
+    // persistent token) regenerates the token bytes, so the stored token can no longer decrypt
+    // the new encIdentifier: recognition MISSES with no PINAuthInvalid round trip, a fresh pcmr
+    // token is minted, and reaping by the stable device identifier evicts the dead record.
+    // Complements persistent_token_self_heals_on_rejection, which covers the defensive
+    // recognized-but-rejected arm.
+    #[tokio::test]
+    async fn recognition_miss_remints_and_reaps() {
+        let mut channel = MockChannel::new();
+        let device_identifier = [0x42; 16];
+        let aaguid = [0x07; 16];
+        let minted_token = [0x05; 16];
+        let stale_token = vec![0x11; 32];
+
+        // A stale record for THIS device (same device identifier) holding the old token bytes.
+        let store = Arc::new(MemoryPersistentTokenStore::new());
+        store
+            .put(
+                &"stale".to_string(),
+                &PersistentTokenRecord {
+                    persistent_token: stale_token,
+                    pin_uv_auth_protocol: Ctap2PinUvAuthProtocol::One,
+                    device_identifier,
+                    aaguid,
+                },
+            )
+            .await;
+        channel.set_persistent_token_store(store.clone());
+
+        // encIdentifier is built under the NEW token, so the stale record fails recognition.
+        let info = pcmr_get_info(
+            &[
+                ("uv", true),
+                ("pinUvAuthToken", true),
+                ("perCredMgmtRO", true),
+            ],
+            &minted_token,
+            device_identifier,
+            aaguid,
+        );
+        channel.push_command_pair(
+            CborRequest::new(Ctap2CommandCode::AuthenticatorGetInfo),
+            CborResponse::new_success_from_slice(to_vec(&info).unwrap().as_slice()),
+        );
+
+        let key_agreement_req = CborRequest::try_from(
+            &Ctap2ClientPinRequest::new_get_key_agreement(Ctap2PinUvAuthProtocol::One),
+        )
+        .unwrap();
+        let key_agreement_resp = CborResponse::new_success_from_slice(
+            to_vec(&Ctap2ClientPinResponse {
+                key_agreement: Some(get_key_agreement()),
+                pin_uv_auth_token: None,
+                pin_retries: None,
+                power_cycle_state: None,
+                uv_retries: None,
+            })
+            .unwrap()
+            .as_slice(),
+        );
+        channel.push_command_pair(key_agreement_req, key_agreement_resp);
+
+        let pin_protocol = PinUvAuthProtocolOne::new();
+        let (public_key, shared_secret) = pin_protocol.encapsulate(&get_key_agreement()).unwrap();
+        let uv_token_req =
+            CborRequest::try_from(&Ctap2ClientPinRequest::new_get_uv_token_with_perm(
+                Ctap2PinUvAuthProtocol::One,
+                public_key,
+                Ctap2AuthTokenPermissionRole::PERSISTENT_CREDENTIAL_MANAGEMENT_READ_ONLY,
+                None,
+            ))
+            .unwrap();
+        let encrypted_token = pin_protocol.encrypt(&shared_secret, &minted_token).unwrap();
+        let uv_token_resp = CborResponse::new_success_from_slice(
+            to_vec(&Ctap2ClientPinResponse {
+                key_agreement: None,
+                pin_uv_auth_token: Some(ByteBuf::from(encrypted_token)),
+                pin_retries: None,
+                power_cycle_state: None,
+                uv_retries: None,
+            })
+            .unwrap()
+            .as_slice(),
+        );
+        channel.push_command_pair(uv_token_req, uv_token_resp);
+
+        let mut recv = channel.get_ux_update_receiver();
+        let recv_handle = tokio::task::spawn(async move {
+            assert_eq!(recv.recv().await, Ok(UvUpdate::PresenceRequired));
+            recv
+        });
+
+        let mut req = Ctap2CredentialManagementRequest::new_get_credential_metadata();
+        let result = user_verification(
+            &mut channel,
+            UserVerificationRequirement::Preferred,
+            &mut req,
+            TIMEOUT,
+        )
+        .await;
+
+        // Recognition missed, so the token was minted, not reused.
+        assert_eq!(
+            result,
+            Ok(UsedPinUvAuthToken::NewlyCalculated(
+                Ctap2UserVerificationOperation::GetPinUvAuthTokenUsingUvWithPermissions
+            ))
+        );
+        // The stale record was reaped and replaced by exactly one fresh record.
+        let listed = store.list().await;
+        assert_eq!(listed.len(), 1);
+        assert!(listed.iter().all(|(id, _)| id != "stale"));
+        assert_eq!(listed[0].1.persistent_token, minted_token.to_vec());
+        assert_eq!(listed[0].1.device_identifier, device_identifier);
+
+        let recv = recv_handle.await.expect("Failed to join update thread");
+        assert!(recv.is_empty());
+    }
+
+    #[tokio::test]
+    async fn persistent_token_self_heals_on_rejection() {
+        use crate::management::CredentialManagement;
+
+        let mut channel = MockChannel::new();
+        let token = vec![0x5A; 32];
+        let device_identifier = [0x42; 16];
+        let aaguid = [0x07; 16];
+
+        let store = Arc::new(MemoryPersistentTokenStore::new());
+        store
+            .put(
+                &"stale".to_string(),
+                &PersistentTokenRecord {
+                    persistent_token: token.clone(),
+                    pin_uv_auth_protocol: Ctap2PinUvAuthProtocol::One,
+                    device_identifier,
+                    aaguid,
+                },
+            )
+            .await;
+        channel.set_persistent_token_store(store.clone());
+
+        // Defensive path: a recognized token is rejected by the device. The encIdentifier is
+        // built under our stored token so recognition matches, yet the op returns
+        // PINAuthInvalid; we evict and re-mint. (A real PIN change regenerates the token bytes,
+        // per resetPersistentPinUvAuthToken, so recognition would instead miss and re-mint
+        // without a rejection; that path is covered by recognition_miss_remints_and_reaps.)
+        let info = pcmr_get_info(
+            &[
+                ("uv", true),
+                ("pinUvAuthToken", true),
+                ("perCredMgmtRO", true),
+            ],
+            &token,
+            device_identifier,
+            aaguid,
+        );
+        let info_resp = || CborResponse::new_success_from_slice(to_vec(&info).unwrap().as_slice());
+
+        let pin_protocol = PinUvAuthProtocolOne::new();
+        // The credMgmt request is identical on reuse and re-mint (same token, same data).
+        let mut expected_credmgmt = Ctap2CredentialManagementRequest::new_get_credential_metadata();
+        expected_credmgmt
+            .calculate_and_set_uv_auth(&pin_protocol, &token)
+            .unwrap();
+        let expected_credmgmt_cbor = CborRequest::try_from(&expected_credmgmt).unwrap();
+
+        // Iteration 1: getInfo, recognize + reuse, device rejects with PINAuthInvalid.
+        channel.push_command_pair(
+            CborRequest::new(Ctap2CommandCode::AuthenticatorGetInfo),
+            info_resp(),
+        );
+        channel.push_command_pair(
+            expected_credmgmt_cbor.clone(),
+            CborResponse {
+                status_code: CtapError::PINAuthInvalid,
+                data: None,
+            },
+        );
+
+        // Iteration 2: getInfo, mint via UV (keyAgreement, getUvToken pcmr), then success.
+        channel.push_command_pair(
+            CborRequest::new(Ctap2CommandCode::AuthenticatorGetInfo),
+            info_resp(),
+        );
+        let key_agreement_req = CborRequest::try_from(
+            &Ctap2ClientPinRequest::new_get_key_agreement(Ctap2PinUvAuthProtocol::One),
+        )
+        .unwrap();
+        let key_agreement_resp = CborResponse::new_success_from_slice(
+            to_vec(&Ctap2ClientPinResponse {
+                key_agreement: Some(get_key_agreement()),
+                pin_uv_auth_token: None,
+                pin_retries: None,
+                power_cycle_state: None,
+                uv_retries: None,
+            })
+            .unwrap()
+            .as_slice(),
+        );
+        channel.push_command_pair(key_agreement_req, key_agreement_resp);
+
+        let (public_key, shared_secret) = pin_protocol.encapsulate(&get_key_agreement()).unwrap();
+        let uv_token_req =
+            CborRequest::try_from(&Ctap2ClientPinRequest::new_get_uv_token_with_perm(
+                Ctap2PinUvAuthProtocol::One,
+                public_key,
+                Ctap2AuthTokenPermissionRole::PERSISTENT_CREDENTIAL_MANAGEMENT_READ_ONLY,
+                None,
+            ))
+            .unwrap();
+        // The device re-grants the same persistent token (bytes unchanged).
+        let encrypted_token = pin_protocol.encrypt(&shared_secret, &token).unwrap();
+        let uv_token_resp = CborResponse::new_success_from_slice(
+            to_vec(&Ctap2ClientPinResponse {
+                key_agreement: None,
+                pin_uv_auth_token: Some(ByteBuf::from(encrypted_token)),
+                pin_retries: None,
+                power_cycle_state: None,
+                uv_retries: None,
+            })
+            .unwrap()
+            .as_slice(),
+        );
+        channel.push_command_pair(uv_token_req, uv_token_resp);
+
+        // CBOR map {0x01: 3, 0x02: 20}: existingResidentCredentialsCount and max remaining.
+        let metadata_resp = CborResponse::new_success_from_slice(&[0xA2, 0x01, 0x03, 0x02, 0x14]);
+        channel.push_command_pair(expected_credmgmt_cbor, metadata_resp);
+
+        let mut recv = channel.get_ux_update_receiver();
+        let recv_handle = tokio::task::spawn(async move {
+            assert_eq!(recv.recv().await, Ok(UvUpdate::PresenceRequired));
+            recv
+        });
+
+        let metadata = channel.get_credential_metadata(TIMEOUT).await.unwrap();
+        assert_eq!(metadata.existing_resident_credentials_count, 3);
+
+        // The stale record was evicted and replaced by a freshly minted one.
+        let listed = store.list().await;
+        assert_eq!(listed.len(), 1);
+        assert!(listed.iter().all(|(id, _)| id != "stale"));
+        assert_eq!(listed[0].1.device_identifier, device_identifier);
+
+        let recv = recv_handle.await.expect("Failed to join update thread");
+        assert!(recv.is_empty());
+    }
+
+    #[tokio::test]
+    async fn pin_change_evicts_persistent_record() {
+        use crate::pin::PinManagement;
+
+        let mut channel = MockChannel::new();
+        let token = vec![0x5A; 32];
+        let device_identifier = [0x42; 16];
+        let aaguid = [0x07; 16];
+
+        let store = Arc::new(MemoryPersistentTokenStore::new());
+        store
+            .put(
+                &"to-evict".to_string(),
+                &PersistentTokenRecord {
+                    persistent_token: token.clone(),
+                    pin_uv_auth_protocol: Ctap2PinUvAuthProtocol::One,
+                    device_identifier,
+                    aaguid,
+                },
+            )
+            .await;
+        channel.set_persistent_token_store(store.clone());
+
+        // Set-PIN path (clientPin=false): no current-PIN prompt.
+        let info = pcmr_get_info(
+            &[("clientPin", false), ("perCredMgmtRO", true)],
+            &token,
+            device_identifier,
+            aaguid,
+        );
+        channel.push_command_pair(
+            CborRequest::new(Ctap2CommandCode::AuthenticatorGetInfo),
+            CborResponse::new_success_from_slice(to_vec(&info).unwrap().as_slice()),
+        );
+
+        let key_agreement_req = CborRequest::try_from(
+            &Ctap2ClientPinRequest::new_get_key_agreement(Ctap2PinUvAuthProtocol::One),
+        )
+        .unwrap();
+        let key_agreement_resp = CborResponse::new_success_from_slice(
+            to_vec(&Ctap2ClientPinResponse {
+                key_agreement: Some(get_key_agreement()),
+                pin_uv_auth_token: None,
+                pin_retries: None,
+                power_cycle_state: None,
+                uv_retries: None,
+            })
+            .unwrap()
+            .as_slice(),
+        );
+        channel.push_command_pair(key_agreement_req, key_agreement_resp);
+
+        let pin_protocol = PinUvAuthProtocolOne::new();
+        let (public_key, shared_secret) = pin_protocol.encapsulate(&get_key_agreement()).unwrap();
+        let mut padded_new_pin = "1234".as_bytes().to_vec();
+        padded_new_pin.resize(64, 0x00);
+        let new_pin_enc = pin_protocol
+            .encrypt(&shared_secret, &padded_new_pin)
+            .unwrap();
+        let uv_auth_param = pin_protocol
+            .authenticate(&shared_secret, &new_pin_enc)
+            .unwrap();
+        let set_pin_req = CborRequest::try_from(&Ctap2ClientPinRequest::new_set_pin(
+            pin_protocol.version(),
+            &new_pin_enc,
+            public_key,
+            &uv_auth_param,
+        ))
+        .unwrap();
+        let set_pin_resp = CborResponse::new_success_from_slice(
+            to_vec(&Ctap2ClientPinResponse::default())
+                .unwrap()
+                .as_slice(),
+        );
+        channel.push_command_pair(set_pin_req, set_pin_resp);
+
+        channel
+            .change_pin("1234".to_string(), TIMEOUT)
+            .await
+            .unwrap();
+
+        // The connected device's record is evicted after a successful PIN change.
+        assert!(store.list().await.is_empty());
     }
 }

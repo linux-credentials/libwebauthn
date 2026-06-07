@@ -77,7 +77,8 @@ where
                 self,
                 self.ctap2_credential_management(&req, timeout).await,
                 uv_auth_used,
-                timeout
+                timeout,
+                req
             )
         }?;
         let metadata = Ctap2CredentialManagementMetadata::new(
@@ -106,7 +107,8 @@ where
                 self,
                 self.ctap2_credential_management(&req, timeout).await,
                 uv_auth_used,
-                timeout
+                timeout,
+                req
             )
         }?;
         Ok((
@@ -134,7 +136,8 @@ where
                 self,
                 self.ctap2_credential_management(&req, timeout).await,
                 uv_auth_used,
-                timeout
+                timeout,
+                req
             )
         }?;
         Ok(Ctap2RPData::new(
@@ -163,7 +166,8 @@ where
                 self,
                 self.ctap2_credential_management(&req, timeout).await,
                 uv_auth_used,
-                timeout
+                timeout,
+                req
             )
         }?;
         let cred = Ctap2CredentialData::new(
@@ -196,7 +200,8 @@ where
                 self,
                 self.ctap2_credential_management(&req, timeout).await,
                 uv_auth_used,
-                timeout
+                timeout,
+                req
             )
         }?;
         let cred = Ctap2CredentialData::new(
@@ -229,7 +234,8 @@ where
                 self,
                 self.ctap2_credential_management(&req, timeout).await,
                 uv_auth_used,
-                timeout
+                timeout,
+                req
             )
         }?;
         Ok(())
@@ -262,7 +268,8 @@ where
                 self,
                 self.ctap2_credential_management(&req, timeout).await,
                 uv_auth_used,
-                timeout
+                timeout,
+                req
             )
         }?;
         Ok(())
@@ -338,5 +345,13 @@ impl Ctap2UserVerifiableRequest for Ctap2CredentialManagementRequest {
 
     fn wants_persistent_token(&self) -> bool {
         self.use_persistent_token
+    }
+
+    fn note_persistent_token_rejected(&mut self) {
+        self.persistent_token_rejected = true;
+    }
+
+    fn persistent_token_rejected(&self) -> bool {
+        self.persistent_token_rejected
     }
 }

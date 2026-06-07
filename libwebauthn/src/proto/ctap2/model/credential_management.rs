@@ -36,6 +36,11 @@ pub struct Ctap2CredentialManagementRequest {
     /// Set from getInfo and store availability before `permissions()` is read.
     #[serde(skip)]
     pub use_persistent_token: bool,
+
+    /// Set once a reused persistent token is rejected, so the retry skips recognition and
+    /// mints a fresh token instead of looping on the same stale record.
+    #[serde(skip)]
+    pub persistent_token_rejected: bool,
 }
 
 #[repr(u32)]
@@ -150,6 +155,7 @@ impl Ctap2CredentialManagementRequest {
             uv_auth_param: None,
             use_legacy_preview: false,
             use_persistent_token: false,
+            persistent_token_rejected: false,
         }
     }
 
@@ -161,6 +167,7 @@ impl Ctap2CredentialManagementRequest {
             uv_auth_param: None,
             use_legacy_preview: false,
             use_persistent_token: false,
+            persistent_token_rejected: false,
         }
     }
 
@@ -172,6 +179,7 @@ impl Ctap2CredentialManagementRequest {
             uv_auth_param: None,
             use_legacy_preview: false,
             use_persistent_token: false,
+            persistent_token_rejected: false,
         }
     }
 
@@ -187,6 +195,7 @@ impl Ctap2CredentialManagementRequest {
             uv_auth_param: None,
             use_legacy_preview: false,
             use_persistent_token: false,
+            persistent_token_rejected: false,
         }
     }
 
@@ -200,6 +209,7 @@ impl Ctap2CredentialManagementRequest {
             uv_auth_param: None,
             use_legacy_preview: false,
             use_persistent_token: false,
+            persistent_token_rejected: false,
         }
     }
 
@@ -215,6 +225,7 @@ impl Ctap2CredentialManagementRequest {
             uv_auth_param: None,
             use_legacy_preview: false,
             use_persistent_token: false,
+            persistent_token_rejected: false,
         }
     }
 
@@ -233,6 +244,7 @@ impl Ctap2CredentialManagementRequest {
             uv_auth_param: None,
             use_legacy_preview: false,
             use_persistent_token: false,
+            persistent_token_rejected: false,
         }
     }
 }

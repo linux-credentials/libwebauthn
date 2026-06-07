@@ -59,6 +59,9 @@ pub enum Ctap2CommandCode {
     AuthenticatorCredentialManagementPreview = 0x41,
     AuthenticatorSelection = 0x0B,
     AuthenticatorConfig = 0x0D,
+    // TODO: authenticatorReset (0x07) is not implemented. When it is added, a successful
+    // reset must evict this device's persistent pcmr record from the persistent token
+    // store, since reset regenerates the device identifier and invalidates the token.
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -317,6 +320,14 @@ pub trait Ctap2UserVerifiableRequest {
     /// Whether this request will reuse or mint a persistent (pcmr) token, per the cached
     /// decision from [`Self::set_persistent_token_use`]. Default false.
     fn wants_persistent_token(&self) -> bool {
+        false
+    }
+    /// Record that a reused persistent (pcmr) token was rejected by the authenticator, so
+    /// the retry stops reusing it and mints a fresh one instead. Default: no-op.
+    fn note_persistent_token_rejected(&mut self) {}
+    /// Whether a reused persistent token was already rejected during this ceremony, per
+    /// [`Self::note_persistent_token_rejected`]. Default false.
+    fn persistent_token_rejected(&self) -> bool {
         false
     }
 }
