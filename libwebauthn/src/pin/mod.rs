@@ -190,9 +190,9 @@ where
         // Parse peerCoseKey as specified for getPublicKey, below, and produce a P-256 point, Y.
         // If unsuccessful, or if the resulting point is not on the curve, return error.
         let cose::PublicKey::EcdhEsHkdf256Key(peer_public_key) = peer_public_key else {
-            error!(
+            warn!(
                 ?peer_public_key,
-                "Unsupported peerCoseKey format. Only EcdhEsHkdf256Key is supported."
+                "Unsupported peerCoseKey format, only EcdhEsHkdf256Key is supported"
             );
             return Err(PlatformError::CryptoError(String::from(
                 "pin/uv crypto operation failed",
@@ -201,14 +201,14 @@ where
         // x and y must be exactly 32 bytes (P-256 field size). `cosey` accepts
         // any length up to 32; validate before converting to `&FieldBytes`.
         let x: &[u8; 32] = peer_public_key.x.as_bytes().try_into().map_err(|_| {
-            error!(
+            warn!(
                 x_len = peer_public_key.x.as_bytes().len(),
                 "Peer public key x coordinate is not 32 bytes"
             );
             PlatformError::CryptoError(String::from("pin/uv crypto operation failed"))
         })?;
         let y: &[u8; 32] = peer_public_key.y.as_bytes().try_into().map_err(|_| {
-            error!(
+            warn!(
                 y_len = peer_public_key.y.as_bytes().len(),
                 "Peer public key y coordinate is not 32 bytes"
             );
@@ -216,7 +216,7 @@ where
         })?;
         let encoded_point = EncodedPoint::from_affine_coordinates(x.into(), y.into(), false);
         let Some(peer_public_key) = P256PublicKey::from_encoded_point(&encoded_point).into() else {
-            error!("Failed to parse public key.");
+            warn!("Failed to parse public key");
             return Err(PlatformError::CryptoError(String::from(
                 "pin/uv crypto operation failed",
             )));
@@ -265,7 +265,7 @@ impl PinUvAuthProtocol for PinUvAuthProtocolOne {
         // (No padding is performed as the size of demPlaintext is required to be a multiple of the AES block length.)
         let iv: &[u8] = &[0; 16];
         let Ok(enc) = Aes256CbcEncryptor::new_from_slices(key, iv) else {
-            error!(?key, "Invalid key for AES-256 encryption");
+            error!(key_len = key.len(), "Invalid key for AES-256 encryption");
             return Err(PlatformError::CryptoError(String::from(
                 "pin/uv crypto operation failed",
             )));
@@ -290,8 +290,8 @@ impl PinUvAuthProtocol for PinUvAuthProtocolOne {
         // If the size of demCiphertext is not a multiple of the AES block length, return error.
         // Otherwise return the AES-256-CBC decryption of demCiphertext using an all-zero IV.
         if !ciphertext.len().is_multiple_of(16) {
-            error!(
-                ?ciphertext,
+            warn!(
+                len = ciphertext.len(),
                 "Ciphertext length is not a multiple of AES block length"
             );
             return Err(PlatformError::CryptoError(String::from(
@@ -301,13 +301,13 @@ impl PinUvAuthProtocol for PinUvAuthProtocolOne {
 
         let iv: &[u8] = &[0; 16];
         let Ok(dec) = Aes256CbcDecryptor::new_from_slices(key, iv) else {
-            error!(?key, "Invalid key for AES-256 decryption");
+            error!(key_len = key.len(), "Invalid key for AES-256 decryption");
             return Err(PlatformError::CryptoError(String::from(
                 "pin/uv crypto operation failed",
             )));
         };
         let Ok(plaintext) = dec.decrypt_padded_vec_mut::<NoPadding>(ciphertext) else {
-            error!("Unpad error while decrypting");
+            warn!("Unpad error while decrypting");
             return Err(PlatformError::CryptoError(String::from(
                 "pin/uv crypto operation failed",
             )));
@@ -391,7 +391,7 @@ impl PinUvAuthProtocol for PinUvAuthProtocolTwo {
         let key = key.get(32..).ok_or_else(|| {
             error!(
                 key_len = key.len(),
-                "key shorter than 32 bytes; cannot select AES-key portion"
+                "Key shorter than 32 bytes, cannot select AES-key portion"
             );
             PlatformError::CryptoError(String::from("pin/uv crypto operation failed"))
         })?;
@@ -402,7 +402,7 @@ impl PinUvAuthProtocol for PinUvAuthProtocolTwo {
         // Let ct be the AES-256-CBC encryption of demPlaintext using key and iv.
         // (No padding is performed as the size of demPlaintext is required to be a multiple of the AES block length.)
         let Ok(enc) = Aes256CbcEncryptor::new_from_slices(key, &iv) else {
-            error!(?key, "Invalid key for AES-256 encryption");
+            error!(key_len = key.len(), "Invalid key for AES-256 encryption");
             return Err(PlatformError::CryptoError(String::from(
                 "pin/uv crypto operation failed",
             )));
@@ -420,14 +420,14 @@ impl PinUvAuthProtocol for PinUvAuthProtocolTwo {
         let key = key.get(32..).ok_or_else(|| {
             error!(
                 key_len = key.len(),
-                "key shorter than 32 bytes; cannot select AES-key portion"
+                "Key shorter than 32 bytes, cannot select AES-key portion"
             );
             PlatformError::CryptoError(String::from("pin/uv crypto operation failed"))
         })?;
 
         // If demPlaintext is less than 16 bytes in length, return an error
         if ciphertext.len() < 16 {
-            error!({ len = ciphertext.len() }, "Invalid length for ciphertext");
+            warn!(len = ciphertext.len(), "Invalid length for ciphertext");
             return Err(PlatformError::CryptoError(String::from(
                 "pin/uv crypto operation failed",
             )));
@@ -438,13 +438,13 @@ impl PinUvAuthProtocol for PinUvAuthProtocolTwo {
 
         // Return the AES-256-CBC decryption of ct using key and iv.
         let Ok(dec) = Aes256CbcDecryptor::new_from_slices(key, iv) else {
-            error!(?key, "Invalid key for AES-256 decryption");
+            error!(key_len = key.len(), "Invalid key for AES-256 decryption");
             return Err(PlatformError::CryptoError(String::from(
                 "pin/uv crypto operation failed",
             )));
         };
         let Ok(plaintext) = dec.decrypt_padded_vec_mut::<NoPadding>(ciphertext) else {
-            error!("Unpad error while decrypting");
+            warn!("Unpad error while decrypting");
             return Err(PlatformError::CryptoError(String::from(
                 "pin/uv crypto operation failed",
             )));
@@ -458,7 +458,7 @@ impl PinUvAuthProtocol for PinUvAuthProtocolTwo {
         let key = key.get(..32).ok_or_else(|| {
             error!(
                 key_len = key.len(),
-                "key shorter than 32 bytes; cannot select HMAC-key portion"
+                "Key shorter than 32 bytes, cannot select HMAC-key portion"
             );
             PlatformError::CryptoError(String::from("pin/uv crypto operation failed"))
         })?;
@@ -479,7 +479,7 @@ pub fn pin_hash(pin: &[u8]) -> Vec<u8> {
 
 pub fn hmac_sha256(key: &[u8], message: &[u8]) -> Result<Vec<u8>, PlatformError> {
     let mut hmac = HmacSha256::new_from_slice(key).map_err(|e| {
-        error!("HMAC key error: {e}");
+        error!(?e, "HMAC key error");
         PlatformError::CryptoError(format!("HMAC key error: {e}"))
     })?;
     hmac.update(message);
@@ -490,7 +490,7 @@ pub fn hkdf_sha256(salt: Option<&[u8]>, ikm: &[u8], info: &[u8]) -> Result<Vec<u
     let hk = Hkdf::<Sha256>::new(salt, ikm);
     let mut okm = [0u8; 32]; // fixed L = 32
     hk.expand(info, &mut okm).map_err(|e| {
-        error!("HKDF expand error: {e}");
+        error!(?e, "HKDF expand error");
         PlatformError::CryptoError(format!("HKDF expand error: {e}"))
     })?;
     Ok(Vec::from(okm))
@@ -555,7 +555,7 @@ pub(crate) mod internal {
             )
             .await
             else {
-                error!("No supported PIN/UV auth protocols found");
+                warn!("No supported PIN/UV auth protocols found");
                 return Err(WebAuthnError::Ctap(CtapError::Other));
             };
 
