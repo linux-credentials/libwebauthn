@@ -137,13 +137,35 @@ where
 {
     let rp_uv_preferred = user_verification.is_preferred();
     let rp_uv_discouraged = user_verification.is_discouraged();
-    let dev_uv_protected = get_info_response.is_uv_protected();
+    let mut dev_uv_protected = get_info_response.is_uv_protected();
     let can_establish_shared_secret = get_info_response.can_establish_shared_secret();
     let needs_shared_secret = ctap2_request.needs_shared_secret(get_info_response);
     // If it is not discouraged and either RP or device requires it.
     let uv = !rp_uv_discouraged && (rp_uv_preferred || dev_uv_protected);
 
     debug!(%rp_uv_preferred, %rp_uv_discouraged, %dev_uv_protected, %uv, %needs_shared_secret, %can_establish_shared_secret, "Checking if user verification is required");
+    // Enforce required UV even on the shared-secret path. A shared-secret-only result performs no UV.
+    if user_verification.is_required() && !dev_uv_protected {
+        error!(
+            "Request requires user verification, but device user verification is not available. Try letting the user set a PIN."
+        );
+        // Lets try setting a PIN. Either we succeed in some fashion, or we return the resulting error here instead.
+        try_to_set_pin(
+            channel,
+            get_info_response,
+            PinNotSetReason::PinNotSet,
+            timeout,
+        )
+        .await?;
+        // Update get_info_response, because now maybe "clientPin" is set to `Some(true)`
+        *get_info_response = channel.ctap2_get_info().await?;
+        dev_uv_protected = get_info_response.is_uv_protected();
+        // Still no usable UV: do not silently fall back to a shared-secret-only result.
+        if !dev_uv_protected {
+            return Err(Error::Platform(PlatformError::NoUvAvailable));
+        }
+    }
+
     // If we do not need to create a shared secret, we can error out here early
     if !needs_shared_secret {
         if !uv {
@@ -151,29 +173,9 @@ where
             return Ok(UsedPinUvAuthToken::None);
         }
 
-        if !dev_uv_protected {
-            if user_verification.is_required() {
-                error!(
-                    "Request requires user verification, but device user verification is not available. Try letting the user set a PIN."
-                );
-                // Lets try setting a PIN. Either we succeed in some fashion, or we return the resulting error here instead.
-                try_to_set_pin(
-                    channel,
-                    get_info_response,
-                    PinNotSetReason::PinNotSet,
-                    timeout,
-                )
-                .await?;
-                // Update get_info_response, because now maybe "clientPin" is set to `Some(true)`
-                *get_info_response = channel.ctap2_get_info().await?;
-                // Then simply continue with the normal flow. Either we have a PIN set now,
-                // then the user has to enter it (again), as in the normal flow, or the device
-                // itself has some kind of internal protocol to handle this situation.
-                // If not, it will (should) return an error like PinNotSet.
-            } else if user_verification.is_preferred() {
-                warn!("User verification is preferred, but device user verification is not available. Ignoring.");
-                return Ok(UsedPinUvAuthToken::None);
-            }
+        if !dev_uv_protected && user_verification.is_preferred() {
+            warn!("User verification is preferred, but device user verification is not available. Ignoring.");
+            return Ok(UsedPinUvAuthToken::None);
         }
     } else if !can_establish_shared_secret && !uv {
         // We need a shared secret, but the device does not support any form of query-able UV, so we can't establish a
@@ -1189,6 +1191,58 @@ mod test {
             // No updates should be sent, since we are only doing shared_secret
             assert!(status_recv.is_empty());
         }
+    }
+
+    #[tokio::test]
+    async fn required_uv_unenrolled_with_shared_secret_errors_instead_of_shared_secret_only() {
+        // Device is UV-capable (built-in `uv` present) but not enrolled, yet can establish a
+        // shared secret via `pinUvAuthToken`. With PRF requested the request needs a shared
+        // secret, but `userVerification=required` must not resolve to a shared-secret-only
+        // result that performs no user verification.
+        let mut channel = MockChannel::new();
+        let status_recv = channel.get_ux_update_receiver();
+
+        let mut info = create_info(
+            &[("uv", false), ("pinUvAuthToken", true)],
+            Some(&["hmac-secret"]),
+        );
+        info.pin_auth_protos = Some(vec![1]);
+        let info_req = CborRequest::new(Ctap2CommandCode::AuthenticatorGetInfo);
+        let info_resp = CborResponse::new_success_from_slice(to_vec(&info).unwrap().as_slice());
+        // Initial GetInfo plus the refresh after the (no-op) PIN-set attempt.
+        channel.push_command_pair(info_req.clone(), info_resp.clone());
+        channel.push_command_pair(info_req, info_resp);
+
+        let extensions = Some(GetAssertionRequestExtensions {
+            prf: Some(PrfInput {
+                eval: Some(PrfInputValue {
+                    first: vec![0; 32],
+                    second: None,
+                }),
+                eval_by_credential: HashMap::new(),
+            }),
+            ..Default::default()
+        });
+        let mut getassertion = create_get_assertion(&info, extensions);
+
+        let resp = user_verification(
+            &mut channel,
+            UserVerificationRequirement::Required,
+            &mut getassertion,
+            TIMEOUT,
+        )
+        .await;
+
+        assert_eq!(
+            resp,
+            Err(Error::Platform(
+                crate::webauthn::PlatformError::NoUvAvailable
+            ))
+        );
+        // No shared-secret-only fallback ended up in the auth store.
+        assert!(channel.get_auth_data().is_none());
+        // No UX updates: the device has no clientPin to set.
+        assert!(status_recv.is_empty());
     }
 
     #[tokio::test]
