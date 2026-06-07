@@ -1,0 +1,22 @@
+[package]
+name = "logging_lints"
+version = "0.1.0"
+description = "Custom dylint lints enforcing the libwebauthn logging policy (docs/logging.md)"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+dylint_linting = "6.0.1"
+
+[dev-dependencies]
+dylint_testing = "6.0.1"
+
+[package.metadata.rust-analyzer]
+rustc_private = true
+
+# Keep this crate out of the main libwebauthn workspace: it builds on a pinned
+# nightly with rustc_private and must not be pulled into the stable build.
+[workspace]
