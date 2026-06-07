@@ -117,3 +117,79 @@ impl TryFrom<&Ctap2LargeBlobsRequest> for CborRequest {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::proto::ctap2::model::{
+        Ctap2CredentialType, Ctap2GetAssertionOptions, Ctap2MakeCredentialOptions,
+        Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialRpEntity,
+        Ctap2PublicKeyCredentialType, Ctap2PublicKeyCredentialUserEntity,
+    };
+    use serde_bytes::ByteBuf;
+
+    // Deterministic, hand-pickable inputs: fixed byte fills and example.com.
+    fn fixed_make_credential_request() -> Ctap2MakeCredentialRequest {
+        Ctap2MakeCredentialRequest {
+            hash: ByteBuf::from([0x01u8; 32].to_vec()),
+            relying_party: Ctap2PublicKeyCredentialRpEntity {
+                id: "example.com".to_string(),
+                name: Some("Example".to_string()),
+            },
+            user: Ctap2PublicKeyCredentialUserEntity {
+                id: ByteBuf::from([0x02u8; 16].to_vec()),
+                name: Some("alice".to_string()),
+                display_name: Some("Alice".to_string()),
+            },
+            algorithms: vec![Ctap2CredentialType::default()],
+            exclude: Some(vec![Ctap2PublicKeyCredentialDescriptor {
+                id: ByteBuf::from([0x03u8; 16].to_vec()),
+                r#type: Ctap2PublicKeyCredentialType::PublicKey,
+                transports: None,
+            }]),
+            extensions: None,
+            options: Some(Ctap2MakeCredentialOptions {
+                require_resident_key: Some(true),
+                deprecated_require_user_verification: None,
+            }),
+            pin_auth_param: None,
+            pin_auth_proto: None,
+            enterprise_attestation: None,
+        }
+    }
+
+    fn fixed_get_assertion_request() -> Ctap2GetAssertionRequest {
+        Ctap2GetAssertionRequest {
+            relying_party_id: "example.com".to_string(),
+            client_data_hash: ByteBuf::from([0x04u8; 32].to_vec()),
+            allow: vec![Ctap2PublicKeyCredentialDescriptor {
+                id: ByteBuf::from([0x05u8; 16].to_vec()),
+                r#type: Ctap2PublicKeyCredentialType::PublicKey,
+                transports: None,
+            }],
+            extensions: None,
+            options: Some(Ctap2GetAssertionOptions {
+                require_user_presence: true,
+                require_user_verification: false,
+            }),
+            pin_auth_param: None,
+            pin_auth_proto: None,
+        }
+    }
+
+    #[test]
+    fn make_credential_request_golden_cbor() {
+        let cbor = CborRequest::try_from(&fixed_make_credential_request()).unwrap();
+        assert_eq!(cbor.command, Ctap2CommandCode::AuthenticatorMakeCredential);
+        // Canonical indexed map, keys 0x01,0x02,0x03,0x04,0x05,0x07 in order.
+        assert_eq!(hex::encode(&cbor.encoded_data), "a6015820010101010101010101010101010101010101010101010101010101010101010102a26269646b6578616d706c652e636f6d646e616d65674578616d706c6503a36269645002020202020202020202020202020202646e616d6565616c6963656b646973706c61794e616d6565416c6963650481a263616c672664747970656a7075626c69632d6b65790581a2626964500303030303030303030303030303030364747970656a7075626c69632d6b657907a162726bf5");
+    }
+
+    #[test]
+    fn get_assertion_request_golden_cbor() {
+        let cbor = CborRequest::try_from(&fixed_get_assertion_request()).unwrap();
+        assert_eq!(cbor.command, Ctap2CommandCode::AuthenticatorGetAssertion);
+        // Canonical indexed map with keys 0x01,0x02,0x03,0x05 in order, uv omitted.
+        assert_eq!(hex::encode(&cbor.encoded_data), "a4016b6578616d706c652e636f6d02582004040404040404040404040404040404040404040404040404040404040404040381a2626964500505050505050505050505050505050564747970656a7075626c69632d6b657905a1627570f5");
+    }
+}
