@@ -46,7 +46,7 @@ pub(crate) fn max_fragment_length(max_msg_size: Option<u32>) -> u32 {
     }
 }
 
-/// `LEFT(SHA-256(data), 16)` array trailer (CTAP 2.1 §6.10.2).
+/// `LEFT(SHA-256(data), 16)` array trailer (CTAP 2.2 §6.10.2).
 fn array_trailer(data: &[u8]) -> [u8; LARGE_BLOB_HASH_LEN] {
     let digest = Sha256::digest(data);
     let mut out = [0u8; LARGE_BLOB_HASH_LEN];
@@ -387,19 +387,100 @@ pub(crate) fn large_blob_pin_uv_auth_param(
     proto.authenticate(token, &buf)
 }
 
-/// Top-level CBOR array of large-blob maps as raw `Value`s (preserves unknown fields).
-fn parse_large_blob_array_values(bytes: &[u8]) -> Result<Vec<Value>, LargeBlobError> {
+/// One array element kept as its exact CBOR bytes, plus a best-effort decode for ownership testing.
+struct RawArrayEntry {
+    raw: Vec<u8>,
+    value: Option<Value>,
+}
+
+fn read_byte(cursor: &mut std::io::Cursor<&[u8]>) -> Result<u8, LargeBlobError> {
+    use std::io::Read;
+    let mut b = [0u8; 1];
+    cursor
+        .read_exact(&mut b)
+        .map_err(|_| LargeBlobError::Corrupted("truncated CBOR".into()))?;
+    let [byte] = b;
+    Ok(byte)
+}
+
+fn read_uint(cursor: &mut std::io::Cursor<&[u8]>, n: usize) -> Result<u64, LargeBlobError> {
+    let mut val: u64 = 0;
+    for _ in 0..n {
+        val = (val << 8) | read_byte(cursor)? as u64;
+    }
+    Ok(val)
+}
+
+/// Read a definite-length CBOR array header (major type 4), returning the element count.
+fn read_array_header(cursor: &mut std::io::Cursor<&[u8]>) -> Result<usize, LargeBlobError> {
+    let initial = read_byte(cursor)?;
+    if initial >> 5 != 4 {
+        return Err(LargeBlobError::Corrupted(format!(
+            "expected CBOR array, got initial byte {initial:#x}"
+        )));
+    }
+    let count = match initial & 0x1f {
+        n @ 0..=23 => n as u64,
+        24 => read_uint(cursor, 1)?,
+        25 => read_uint(cursor, 2)?,
+        26 => read_uint(cursor, 4)?,
+        27 => read_uint(cursor, 8)?,
+        ai => {
+            return Err(LargeBlobError::Corrupted(format!(
+                "unsupported CBOR array length encoding (additional info {ai})"
+            )))
+        }
+    };
+    usize::try_from(count).map_err(|_| LargeBlobError::Corrupted("array too large".into()))
+}
+
+/// CBOR definite-length array header for `n` elements.
+fn encode_array_header(n: usize) -> Vec<u8> {
+    let mut out = Vec::new();
+    if n <= 23 {
+        out.push(0x80 | n as u8);
+    } else if n <= 0xff {
+        out.push(0x98);
+        out.push(n as u8);
+    } else if n <= 0xffff {
+        out.push(0x99);
+        out.extend_from_slice(&(n as u16).to_be_bytes());
+    } else {
+        out.push(0x9a);
+        out.extend_from_slice(&(n as u32).to_be_bytes());
+    }
+    out
+}
+
+/// Parse the top-level array into per-element raw byte spans, preserving foreign entries exactly.
+fn parse_array_raw_entries(bytes: &[u8]) -> Result<Vec<RawArrayEntry>, LargeBlobError> {
     if bytes.is_empty() {
         return Ok(Vec::new());
     }
-    let value: Value = crate::proto::ctap2::cbor::from_slice(bytes)
-        .map_err(|e| LargeBlobError::Corrupted(format!("array parse: {e}")))?;
-    match value {
-        Value::Array(a) => Ok(a),
-        other => Err(LargeBlobError::Corrupted(format!(
-            "expected CBOR array, got {other:?}"
-        ))),
+    let mut cursor = std::io::Cursor::new(bytes);
+    let count = read_array_header(&mut cursor)?;
+    // Bound the pre-allocation by the remaining bytes (each element is >= 1 byte) so a
+    // device-declared count cannot drive an unbounded allocation.
+    let remaining = bytes.len().saturating_sub(cursor.position() as usize);
+    let mut entries = Vec::with_capacity(count.min(remaining));
+    for _ in 0..count {
+        let start = cursor.position() as usize;
+        let _: serde::de::IgnoredAny = crate::proto::ctap2::cbor::from_cursor(&mut cursor)
+            .map_err(|e| LargeBlobError::Corrupted(format!("array element parse: {e}")))?;
+        let end = cursor.position() as usize;
+        let raw = bytes
+            .get(start..end)
+            .ok_or_else(|| LargeBlobError::Corrupted("array element span out of range".into()))?
+            .to_vec();
+        let value = crate::proto::ctap2::cbor::from_slice::<Value>(&raw).ok();
+        entries.push(RawArrayEntry { raw, value });
     }
+    if cursor.position() as usize != bytes.len() {
+        return Err(LargeBlobError::Corrupted(
+            "trailing bytes after largeBlobArray".into(),
+        ));
+    }
+    Ok(entries)
 }
 
 /// AEAD-verify an entry under `key`. Used to identify the credential's own entry during RMW.
@@ -449,41 +530,46 @@ fn entry_decrypts_under_key(entry: &Value, key: &[u8; 32]) -> bool {
         .is_ok()
 }
 
-/// Drop entries that AEAD-verify under `drop_key`, optionally append `new_entry`, re-serialize with trailer.
-/// Foreign entries (different key, malformed, unknown fields) are preserved verbatim per CTAP 2.2 §6.10.2.
+/// Drop entries that AEAD-verify under `drop_key`, optionally append `new_entry`, append the trailer.
+/// Foreign entries are spliced back by their original bytes per CTAP 2.2 §6.10.2.
 fn rebuild_serialized_array(
-    existing: &[Value],
+    existing: &[RawArrayEntry],
     drop_key: &[u8; 32],
-    new_entry: Option<Value>,
+    new_entry: Option<Vec<u8>>,
 ) -> Result<Vec<u8>, LargeBlobError> {
-    let mut kept: Vec<Value> = Vec::with_capacity(existing.len() + 1);
+    let mut kept: Vec<&[u8]> = Vec::with_capacity(existing.len() + 1);
     for entry in existing {
-        if entry_decrypts_under_key(entry, drop_key) {
+        if entry
+            .value
+            .as_ref()
+            .is_some_and(|v| entry_decrypts_under_key(v, drop_key))
+        {
             trace!("largeBlob RMW: dropping entry owned by this credential");
             continue;
         }
-        kept.push(entry.clone());
+        kept.push(&entry.raw);
     }
-    if let Some(v) = new_entry {
-        kept.push(v);
+    if let Some(ref n) = new_entry {
+        kept.push(n);
     }
-    let array_value = Value::Array(kept);
-    let mut bytes = crate::proto::ctap2::cbor::to_vec(&array_value)
-        .map_err(|e| LargeBlobError::Corrupted(format!("array serialize: {e}")))?;
-    let hash = Sha256::digest(&bytes);
-    bytes.extend_from_slice(&hash[..LARGE_BLOB_HASH_LEN]);
+    let mut bytes = encode_array_header(kept.len());
+    for element in &kept {
+        bytes.extend_from_slice(element);
+    }
+    bytes.extend_from_slice(&array_trailer(&bytes));
     Ok(bytes)
 }
 
-/// Fetch + parse the existing array. On trailer/parse failure, return empty per CTAP 2.2 §6.10.2.
+/// Trailer mismatch yields the initial empty array. A valid-trailer parse error is propagated
+/// (fail-safe: avoids clobbering a hash-valid foreign array).
 async fn fetch_or_initial<C: Ctap2 + ?Sized>(
     channel: &mut C,
     max_fragment: u32,
     timeout: Duration,
-) -> Result<Vec<Value>, LargeBlobError> {
+) -> Result<Vec<RawArrayEntry>, LargeBlobError> {
     let serialized = fetch_serialized_array(channel, max_fragment, timeout).await?;
     match strip_array_trailer(&serialized) {
-        Ok(array_bytes) => parse_large_blob_array_values(array_bytes),
+        Ok(array_bytes) => parse_array_raw_entries(array_bytes),
         Err(_) => {
             warn!("largeBlobArray trailer mismatch; treating as initial empty array (CTAP 2.2 §6.10.2)");
             Ok(Vec::new())
@@ -522,7 +608,11 @@ async fn upload_serialized_array<C: Ctap2 + ?Sized>(
     let mut offset: u32 = 0;
     while (offset as usize) < serialized.len() {
         let end = (offset as usize + chunk_cap).min(serialized.len());
-        let chunk = &serialized[offset as usize..end];
+        let Some(chunk) = serialized.get(offset as usize..end) else {
+            return Err(LargeBlobError::Corrupted(
+                "chunk offset out of range".into(),
+            ));
+        };
         let chunk_auth = match (&pin_uv_auth, &proto) {
             (Some((token, version)), Some(proto)) => {
                 let param = large_blob_pin_uv_auth_param(token, proto.as_ref(), offset, chunk)
@@ -576,9 +666,7 @@ pub(crate) async fn write_authenticator_large_blob<C: Ctap2 + ?Sized>(
     use rand::RngCore;
     rand::thread_rng().fill_bytes(&mut nonce);
     let entry_bytes = encrypt_entry(large_blob_key, &nonce, blob)?;
-    let new_entry: Value = crate::proto::ctap2::cbor::from_slice(&entry_bytes)
-        .map_err(|e| LargeBlobError::Corrupted(format!("entry parse: {e}")))?;
-    let serialized = rebuild_serialized_array(&existing, large_blob_key, Some(new_entry))?;
+    let serialized = rebuild_serialized_array(&existing, large_blob_key, Some(entry_bytes))?;
     upload_serialized_array(channel, &serialized, max_fragment, pin_uv_auth, timeout).await
 }
 
@@ -592,9 +680,11 @@ pub(crate) async fn delete_authenticator_large_blob<C: Ctap2 + ?Sized>(
     timeout: Duration,
 ) -> Result<(), LargeBlobError> {
     let existing = fetch_or_initial(channel, max_fragment, timeout).await?;
-    let any_owned = existing
-        .iter()
-        .any(|e| entry_decrypts_under_key(e, large_blob_key));
+    let any_owned = existing.iter().any(|e| {
+        e.value
+            .as_ref()
+            .is_some_and(|v| entry_decrypts_under_key(v, large_blob_key))
+    });
     if !any_owned {
         // Strict CTAP 2.2 §6.10.6 reading: no matching entry => error path (line 303).
         return Err(LargeBlobError::NoMatch);
@@ -606,6 +696,13 @@ pub(crate) async fn delete_authenticator_large_blob<C: Ctap2 + ?Sized>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn raw_entry(bytes: &[u8]) -> RawArrayEntry {
+        RawArrayEntry {
+            raw: bytes.to_vec(),
+            value: crate::proto::ctap2::cbor::from_slice::<Value>(bytes).ok(),
+        }
+    }
 
     #[test]
     fn max_fragment_uses_get_info_when_available() {
@@ -1089,6 +1186,326 @@ mod tests {
         assert_eq!(blob(1).as_deref(), Some(pt1.as_slice()));
     }
 
+    /// Spot-check the CTAP 2.2 §6.10.2 auth-param construction byte-for-byte:
+    /// the message MUST be `32×0xff || 0x0c, 0x00 || u32_le(offset) || SHA-256(chunk)`.
+    #[test]
+    fn large_blob_pin_uv_auth_param_matches_spec_message() {
+        use crate::pin::PinUvAuthProtocolTwo;
+        use hmac::Mac;
+
+        let token = [0x11u8; 32];
+        let chunk = b"some chunk bytes";
+        let offset: u32 = 0x12345678;
+
+        let proto = PinUvAuthProtocolTwo::new();
+        let got = large_blob_pin_uv_auth_param(&token, &proto, offset, chunk).expect("auth_param");
+
+        let mut expected_msg = Vec::new();
+        expected_msg.extend_from_slice(&[0xff; 32]);
+        expected_msg.extend_from_slice(&[0x0c, 0x00]);
+        expected_msg.extend_from_slice(&offset.to_le_bytes());
+        expected_msg.extend_from_slice(&Sha256::digest(chunk));
+        let mut mac = <hmac::Hmac<Sha256> as hmac::Mac>::new_from_slice(&token).unwrap();
+        mac.update(&expected_msg);
+        let expected = mac.finalize().into_bytes();
+
+        assert_eq!(got, expected.as_slice());
+    }
+
+    #[test]
+    fn entry_decrypts_under_key_matches_owned_entry() {
+        let key = [0x42u8; 32];
+        let nonce = [0x07u8; 12];
+        let entry_bytes = encrypt_entry(&key, &nonce, b"owned blob").unwrap();
+        let entry: Value = crate::proto::ctap2::cbor::from_slice(&entry_bytes).unwrap();
+        assert!(entry_decrypts_under_key(&entry, &key));
+    }
+
+    #[test]
+    fn entry_decrypts_under_key_rejects_foreign_entry() {
+        let owner = [0xa1u8; 32];
+        let other = [0xb2u8; 32];
+        let nonce = [0x33u8; 12];
+        let entry_bytes = encrypt_entry(&owner, &nonce, b"someone else's blob").unwrap();
+        let entry: Value = crate::proto::ctap2::cbor::from_slice(&entry_bytes).unwrap();
+        assert!(!entry_decrypts_under_key(&entry, &other));
+    }
+
+    #[test]
+    fn entry_decrypts_under_key_rejects_non_map() {
+        let v = Value::Text("not a map".into());
+        assert!(!entry_decrypts_under_key(&v, &[0u8; 32]));
+    }
+
+    #[test]
+    fn rebuild_appends_and_drops_only_owned() {
+        let owner_a = [0xa1u8; 32];
+        let owner_b = [0xb2u8; 32];
+        let nonce = [0x55u8; 12];
+        let entry_a = encrypt_entry(&owner_a, &nonce, b"alpha").unwrap();
+        let entry_b = encrypt_entry(&owner_b, &nonce, b"bravo").unwrap();
+
+        let new_entry = encrypt_entry(&owner_a, &[0x99u8; 12], b"alpha v2").unwrap();
+
+        let rebuilt = rebuild_serialized_array(
+            &[raw_entry(&entry_a), raw_entry(&entry_b)],
+            &owner_a,
+            Some(new_entry),
+        )
+        .unwrap();
+
+        let array_bytes = strip_array_trailer(&rebuilt).unwrap();
+        let parsed = parse_array_raw_entries(array_bytes).unwrap();
+        assert_eq!(
+            parsed.len(),
+            2,
+            "owner_b entry kept + new owner_a entry appended"
+        );
+        assert!(entry_decrypts_under_key(
+            parsed[0].value.as_ref().unwrap(),
+            &owner_b
+        ));
+        assert!(entry_decrypts_under_key(
+            parsed[1].value.as_ref().unwrap(),
+            &owner_a
+        ));
+    }
+
+    #[test]
+    fn rebuild_delete_drops_only_owned() {
+        let owner_a = [0xa1u8; 32];
+        let owner_b = [0xb2u8; 32];
+        let nonce = [0x55u8; 12];
+        let entry_a = encrypt_entry(&owner_a, &nonce, b"alpha").unwrap();
+        let entry_b = encrypt_entry(&owner_b, &nonce, b"bravo").unwrap();
+
+        let rebuilt =
+            rebuild_serialized_array(&[raw_entry(&entry_a), raw_entry(&entry_b)], &owner_a, None)
+                .unwrap();
+        let array_bytes = strip_array_trailer(&rebuilt).unwrap();
+        let parsed = parse_array_raw_entries(array_bytes).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert!(entry_decrypts_under_key(
+            parsed[0].value.as_ref().unwrap(),
+            &owner_b
+        ));
+    }
+
+    /// Delete with no matching entry is a no-op: array returns unchanged (+ valid trailer).
+    #[test]
+    fn rebuild_delete_no_match_is_noop() {
+        let owner_a = [0xa1u8; 32];
+        let owner_b = [0xb2u8; 32];
+        let nonce = [0x55u8; 12];
+        let entry_b = encrypt_entry(&owner_b, &nonce, b"bravo").unwrap();
+        let rebuilt = rebuild_serialized_array(&[raw_entry(&entry_b)], &owner_a, None).unwrap();
+        let array_bytes = strip_array_trailer(&rebuilt).unwrap();
+        let parsed = parse_array_raw_entries(array_bytes).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert!(entry_decrypts_under_key(
+            parsed[0].value.as_ref().unwrap(),
+            &owner_b
+        ));
+    }
+
+    /// Foreign entries with unknown CBOR fields must round-trip unmodified through RMW.
+    #[test]
+    fn rebuild_preserves_unknown_fields_in_foreign_entries() {
+        let owner_a = [0xa1u8; 32];
+        let owner_b = [0xb2u8; 32];
+
+        let entry_a_bytes = encrypt_entry(&owner_a, &[0x55u8; 12], b"alpha").unwrap();
+
+        // Foreign entry under owner_b carrying an extra (future) key 0x07.
+        let entry_b_base = encrypt_entry(&owner_b, &[0x66u8; 12], b"bravo").unwrap();
+        let Value::Map(mut map_b) = crate::proto::ctap2::cbor::from_slice(&entry_b_base).unwrap()
+        else {
+            panic!("entry_b is a map");
+        };
+        map_b.insert(Value::Integer(0x07), Value::Text("future field".into()));
+        // Non-canonical indefinite-length map: decodes to the same Value but re-encodes to a
+        // definite-length map, so this fixture only round-trips byte-for-byte under the raw splice.
+        let canonical = crate::proto::ctap2::cbor::to_vec(&Value::Map(map_b)).unwrap();
+        let mut entry_b_bytes = vec![0xBF];
+        entry_b_bytes.extend_from_slice(&canonical[1..]);
+        entry_b_bytes.push(0xFF);
+
+        let new_entry = encrypt_entry(&owner_a, &[0x99u8; 12], b"alpha v2").unwrap();
+
+        let rebuilt = rebuild_serialized_array(
+            &[raw_entry(&entry_a_bytes), raw_entry(&entry_b_bytes)],
+            &owner_a,
+            Some(new_entry),
+        )
+        .unwrap();
+        let array_bytes = strip_array_trailer(&rebuilt).unwrap();
+        let parsed = parse_array_raw_entries(array_bytes).unwrap();
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(
+            parsed[0].raw, entry_b_bytes,
+            "foreign entry preserved byte-for-byte"
+        );
+        let Value::Map(map_b) = parsed[0].value.as_ref().unwrap() else {
+            panic!("kept_b is a map");
+        };
+        assert_eq!(
+            map_b.get(&Value::Integer(0x07)),
+            Some(&Value::Text("future field".into())),
+            "unknown field 0x07 preserved"
+        );
+    }
+
+    #[test]
+    fn parse_array_raw_entries_rejects_hostile_headers() {
+        let e0 = encrypt_entry(&[0x01u8; 32], &[0u8; 12], b"a").unwrap();
+        let e1 = encrypt_entry(&[0x02u8; 32], &[0u8; 12], b"b").unwrap();
+        let mut canonical = encode_array_header(2);
+        canonical.extend_from_slice(&e0);
+        canonical.extend_from_slice(&e1);
+        assert_eq!(parse_array_raw_entries(&canonical).unwrap().len(), 2);
+
+        // Huge declared count (array(2^32-1)) with no element bytes: bounded alloc, errors fast.
+        assert!(parse_array_raw_entries(&[0x9a, 0xff, 0xff, 0xff, 0xff]).is_err());
+
+        // Valid array plus one trailing byte: rejected by the full-consumption check.
+        let mut trailing = canonical.clone();
+        trailing.push(0x00);
+        assert!(parse_array_raw_entries(&trailing).is_err());
+
+        // Header count smaller than the actual element bytes: rejected.
+        let mut short = encode_array_header(1);
+        short.extend_from_slice(&e0);
+        short.extend_from_slice(&e1);
+        assert!(parse_array_raw_entries(&short).is_err());
+    }
+
+    #[test]
+    fn rebuild_meets_minimum_17_bytes_when_empty() {
+        // CTAP 2.2 §6.10.2: serialized array length MUST be >= 17.
+        let rebuilt = rebuild_serialized_array(&[], &[0u8; 32], None).unwrap();
+        assert!(rebuilt.len() >= 17);
+        // Empty array: 0x80 (1 byte) + 16-byte trailer = 17 bytes.
+        assert_eq!(rebuilt.len(), 17);
+        assert_eq!(rebuilt[0], 0x80);
+    }
+
+    /// CTAP 2.2 §6.10 spec text: "The initial serialized large-blob array ... is the byte string
+    /// `h'8076be8b528d0075f7aae98d6fa57a6d3c'`". Asserting byte-for-byte locks our canonical CBOR
+    /// emission against future serializer drift.
+    #[test]
+    fn rebuild_empty_array_matches_spec_initial_bytes() {
+        let rebuilt = rebuild_serialized_array(&[], &[0u8; 32], None).unwrap();
+        assert_eq!(hex::encode(&rebuilt), "8076be8b528d0075f7aae98d6fa57a6d3c");
+    }
+
+    /// `upload_serialized_array` issues set_first with the precise pinUvAuthParam derived per CTAP 2.2 §6.10.2.
+    #[tokio::test]
+    async fn upload_single_chunk_uses_set_first_with_correct_auth_param() {
+        use crate::pin::{PinUvAuthProtocol, PinUvAuthProtocolTwo};
+        use crate::proto::ctap2::cbor::{CborRequest, CborResponse};
+        use crate::proto::ctap2::{Ctap2CommandCode, Ctap2LargeBlobsResponse};
+        use crate::transport::mock::channel::MockChannel;
+
+        let key = [0xC0u8; 32];
+        let token = [0x11u8; 32];
+        let proto = PinUvAuthProtocolTwo::new();
+        let plaintext = b"round-trip blob".to_vec();
+
+        let nonce = [0x07u8; 12];
+        let entry_bytes = encrypt_entry(&key, &nonce, &plaintext).unwrap();
+        let serialized = rebuild_serialized_array(&[], &key, Some(entry_bytes)).unwrap();
+        assert!(
+            serialized.len() <= LARGE_BLOB_DEFAULT_FRAGMENT as usize,
+            "test fixture must fit in one chunk"
+        );
+
+        let auth_param =
+            large_blob_pin_uv_auth_param(&token, &proto, 0, &serialized).expect("auth_param");
+        let set_req = Ctap2LargeBlobsRequest::new_set_first(
+            serialized.clone(),
+            serialized.len() as u32,
+            Some((auth_param, proto.version() as u32)),
+        );
+        let mut channel = MockChannel::new();
+        channel.push_command_pair(
+            CborRequest {
+                command: Ctap2CommandCode::AuthenticatorLargeBlobs,
+                encoded_data: crate::proto::ctap2::cbor::to_vec(&set_req).unwrap(),
+            },
+            CborResponse::new_success_from_slice(
+                &crate::proto::ctap2::cbor::to_vec(&Ctap2LargeBlobsResponse { config: None })
+                    .unwrap(),
+            ),
+        );
+
+        upload_serialized_array(
+            &mut channel,
+            &serialized,
+            LARGE_BLOB_DEFAULT_FRAGMENT,
+            Some((&token, Ctap2PinUvAuthProtocol::Two)),
+            Duration::from_secs(5),
+        )
+        .await
+        .expect("upload");
+    }
+
+    #[tokio::test]
+    async fn upload_chunks_when_array_exceeds_max_fragment() {
+        use crate::pin::{PinUvAuthProtocol, PinUvAuthProtocolTwo};
+        use crate::proto::ctap2::cbor::{CborRequest, CborResponse};
+        use crate::proto::ctap2::{Ctap2CommandCode, Ctap2LargeBlobsResponse};
+        use crate::transport::mock::channel::MockChannel;
+
+        let token = [0x22u8; 32];
+        let proto = PinUvAuthProtocolTwo::new();
+        // Small max_fragment to force chunking with a small payload.
+        const MF: u32 = 32;
+        // Build a synthetic 70-byte "serialized array" (the helpers only check length >= 17).
+        let serialized: Vec<u8> = (0u8..70).collect();
+        assert_eq!(serialized.len(), 70);
+
+        let mut channel = MockChannel::new();
+        // Chunks: 0..32, 32..64, 64..70. Three calls.
+        for (offset, chunk_len) in [(0u32, 32), (32u32, 32), (64u32, 6)] {
+            let chunk = serialized[offset as usize..(offset as usize + chunk_len)].to_vec();
+            let auth_param =
+                large_blob_pin_uv_auth_param(&token, &proto, offset, &chunk).expect("auth_param");
+            let req = if offset == 0 {
+                Ctap2LargeBlobsRequest::new_set_first(
+                    chunk,
+                    70,
+                    Some((auth_param, proto.version() as u32)),
+                )
+            } else {
+                Ctap2LargeBlobsRequest::new_set_continuation(
+                    chunk,
+                    offset,
+                    Some((auth_param, proto.version() as u32)),
+                )
+            };
+            channel.push_command_pair(
+                CborRequest {
+                    command: Ctap2CommandCode::AuthenticatorLargeBlobs,
+                    encoded_data: crate::proto::ctap2::cbor::to_vec(&req).unwrap(),
+                },
+                CborResponse::new_success_from_slice(
+                    &crate::proto::ctap2::cbor::to_vec(&Ctap2LargeBlobsResponse { config: None })
+                        .unwrap(),
+                ),
+            );
+        }
+
+        upload_serialized_array(
+            &mut channel,
+            &serialized,
+            MF,
+            Some((&token, Ctap2PinUvAuthProtocol::Two)),
+            Duration::from_secs(5),
+        )
+        .await
+        .expect("chunked upload");
+    }
+
     /// Pseudo-random (incompressible) bytes, so the serialized array length is predictable.
     fn incompressible(len: usize) -> Vec<u8> {
         let mut state: u32 = 0x1234_5678;
@@ -1276,7 +1693,6 @@ mod tests {
     /// compressed bytes via AES-256-GCM and confirm they inflate raw yet are not a zlib stream.
     #[test]
     fn encrypt_entry_uses_raw_deflate_not_zlib() {
-        use crate::proto::ctap2::cbor::Value;
         use flate2::read::ZlibDecoder;
 
         let key = [0x5Au8; 32];
@@ -1352,18 +1768,149 @@ mod tests {
             compressed[0], 0x78,
             "raw DEFLATE must not begin with a zlib CMF byte"
         );
-    /// Spot-check the CTAP 2.2 §6.10.2 auth-param construction byte-for-byte:
-    /// the message MUST be `32×0xff || 0x0c, 0x00 || u32_le(offset) || SHA-256(chunk)`.
+    }
+
+    /// Fixed-nonce reuse is catastrophic for AES-GCM. Two writes of the same blob
+    /// under the same key MUST emit distinct nonces.
+    #[tokio::test]
+    async fn each_write_uses_a_distinct_nonce() {
+        use crate::proto::ctap2::{
+            Ctap2AuthenticatorConfigRequest, Ctap2BioEnrollmentRequest, Ctap2BioEnrollmentResponse,
+            Ctap2ClientPinRequest, Ctap2ClientPinResponse, Ctap2CredentialManagementRequest,
+            Ctap2CredentialManagementResponse, Ctap2GetAssertionRequest, Ctap2GetAssertionResponse,
+            Ctap2GetInfoResponse, Ctap2LargeBlobsRequest, Ctap2LargeBlobsResponse,
+            Ctap2MakeCredentialRequest, Ctap2MakeCredentialResponse,
+        };
+
+        // Records each uploaded array; get() replays the most recent one (RMW round-trip).
+        struct RecordingChannel {
+            current: Vec<u8>,
+            sets: Vec<Vec<u8>>,
+        }
+
+        #[async_trait::async_trait]
+        impl Ctap2 for RecordingChannel {
+            async fn ctap2_large_blobs(
+                &mut self,
+                request: &Ctap2LargeBlobsRequest,
+                _timeout: Duration,
+            ) -> Result<Ctap2LargeBlobsResponse, Error> {
+                if request.get.is_some() {
+                    Ok(Ctap2LargeBlobsResponse {
+                        config: Some(serde_bytes::ByteBuf::from(self.current.clone())),
+                    })
+                } else if let Some(set) = request.set.as_ref() {
+                    self.current = set.to_vec();
+                    self.sets.push(set.to_vec());
+                    Ok(Ctap2LargeBlobsResponse::default())
+                } else {
+                    panic!("largeBlobs request was neither get nor set");
+                }
+            }
+            async fn ctap2_get_info(&mut self) -> Result<Ctap2GetInfoResponse, Error> {
+                unimplemented!()
+            }
+            async fn ctap2_make_credential(
+                &mut self,
+                _r: &Ctap2MakeCredentialRequest,
+                _t: Duration,
+            ) -> Result<Ctap2MakeCredentialResponse, Error> {
+                unimplemented!()
+            }
+            async fn ctap2_client_pin(
+                &mut self,
+                _r: &Ctap2ClientPinRequest,
+                _t: Duration,
+            ) -> Result<Ctap2ClientPinResponse, Error> {
+                unimplemented!()
+            }
+            async fn ctap2_get_assertion(
+                &mut self,
+                _r: &Ctap2GetAssertionRequest,
+                _t: Duration,
+            ) -> Result<Ctap2GetAssertionResponse, Error> {
+                unimplemented!()
+            }
+            async fn ctap2_get_next_assertion(
+                &mut self,
+                _t: Duration,
+            ) -> Result<Ctap2GetAssertionResponse, Error> {
+                unimplemented!()
+            }
+            async fn ctap2_selection(&mut self, _t: Duration) -> Result<(), Error> {
+                unimplemented!()
+            }
+            async fn ctap2_authenticator_config(
+                &mut self,
+                _r: &Ctap2AuthenticatorConfigRequest,
+                _t: Duration,
+            ) -> Result<(), Error> {
+                unimplemented!()
+            }
+            async fn ctap2_bio_enrollment(
+                &mut self,
+                _r: &Ctap2BioEnrollmentRequest,
+                _t: Duration,
+            ) -> Result<Ctap2BioEnrollmentResponse, Error> {
+                unimplemented!()
+            }
+            async fn ctap2_credential_management(
+                &mut self,
+                _r: &Ctap2CredentialManagementRequest,
+                _t: Duration,
+            ) -> Result<Ctap2CredentialManagementResponse, Error> {
+                unimplemented!()
+            }
+        }
+
+        fn entry_nonce(serialized: &[u8]) -> Vec<u8> {
+            let array_bytes = strip_array_trailer(serialized).expect("trailer");
+            let parsed = parse_large_blob_array(array_bytes).expect("parse");
+            assert_eq!(parsed.len(), 1, "exactly one entry per write");
+            parsed[0].nonce.clone()
+        }
+
+        let key = [0x5Au8; 32];
+        let blob = b"distinct-nonce blob".to_vec();
+
+        let mut channel = RecordingChannel {
+            current: build_serialized_array(&[]),
+            sets: Vec::new(),
+        };
+        for _ in 0..2 {
+            write_authenticator_large_blob(
+                &mut channel,
+                &key,
+                &blob,
+                LARGE_BLOB_DEFAULT_FRAGMENT,
+                None,
+                Duration::from_secs(5),
+            )
+            .await
+            .expect("write should succeed");
+        }
+
+        assert_eq!(channel.sets.len(), 2, "each write is a single-chunk set()");
+        let nonce_a = entry_nonce(&channel.sets[0]);
+        let nonce_b = entry_nonce(&channel.sets[1]);
+        assert_eq!(nonce_a.len(), LARGE_BLOB_NONCE_LEN);
+        assert_eq!(nonce_b.len(), LARGE_BLOB_NONCE_LEN);
+        assert_ne!(
+            nonce_a, nonce_b,
+            "each write must generate a fresh AES-GCM nonce"
+        );
+    }
+
     #[test]
-    fn large_blob_pin_uv_auth_param_matches_spec_message() {
-        use crate::pin::PinUvAuthProtocolTwo;
+    fn large_blob_pin_uv_auth_param_protocol_one_truncates_to_16() {
+        use crate::pin::PinUvAuthProtocolOne;
         use hmac::Mac;
 
         let token = [0x11u8; 32];
         let chunk = b"some chunk bytes";
         let offset: u32 = 0x12345678;
 
-        let proto = PinUvAuthProtocolTwo::new();
+        let proto = PinUvAuthProtocolOne::new();
         let got = large_blob_pin_uv_auth_param(&token, &proto, offset, chunk).expect("auth_param");
 
         let mut expected_msg = Vec::new();
@@ -1373,266 +1920,9 @@ mod tests {
         expected_msg.extend_from_slice(&Sha256::digest(chunk));
         let mut mac = <hmac::Hmac<Sha256> as hmac::Mac>::new_from_slice(&token).unwrap();
         mac.update(&expected_msg);
-        let expected = mac.finalize().into_bytes();
+        let full = mac.finalize().into_bytes();
 
-        assert_eq!(got, expected.as_slice());
-    }
-
-    #[test]
-    fn entry_decrypts_under_key_matches_owned_entry() {
-        let key = [0x42u8; 32];
-        let nonce = [0x07u8; 12];
-        let entry_bytes = encrypt_entry(&key, &nonce, b"owned blob").unwrap();
-        let entry: Value = crate::proto::ctap2::cbor::from_slice(&entry_bytes).unwrap();
-        assert!(entry_decrypts_under_key(&entry, &key));
-    }
-
-    #[test]
-    fn entry_decrypts_under_key_rejects_foreign_entry() {
-        let owner = [0xa1u8; 32];
-        let other = [0xb2u8; 32];
-        let nonce = [0x33u8; 12];
-        let entry_bytes = encrypt_entry(&owner, &nonce, b"someone else's blob").unwrap();
-        let entry: Value = crate::proto::ctap2::cbor::from_slice(&entry_bytes).unwrap();
-        assert!(!entry_decrypts_under_key(&entry, &other));
-    }
-
-    #[test]
-    fn entry_decrypts_under_key_rejects_non_map() {
-        let v = Value::Text("not a map".into());
-        assert!(!entry_decrypts_under_key(&v, &[0u8; 32]));
-    }
-
-    #[test]
-    fn rebuild_appends_and_drops_only_owned() {
-        let owner_a = [0xa1u8; 32];
-        let owner_b = [0xb2u8; 32];
-        let nonce = [0x55u8; 12];
-        let entry_a = encrypt_entry(&owner_a, &nonce, b"alpha").unwrap();
-        let entry_b = encrypt_entry(&owner_b, &nonce, b"bravo").unwrap();
-        let entry_a_v: Value = crate::proto::ctap2::cbor::from_slice(&entry_a).unwrap();
-        let entry_b_v: Value = crate::proto::ctap2::cbor::from_slice(&entry_b).unwrap();
-
-        let new_entry_bytes = encrypt_entry(&owner_a, &[0x99u8; 12], b"alpha v2").unwrap();
-        let new_entry: Value = crate::proto::ctap2::cbor::from_slice(&new_entry_bytes).unwrap();
-
-        let rebuilt =
-            rebuild_serialized_array(&[entry_a_v, entry_b_v.clone()], &owner_a, Some(new_entry))
-                .unwrap();
-
-        let array_bytes = strip_array_trailer(&rebuilt).unwrap();
-        let parsed = parse_large_blob_array_values(array_bytes).unwrap();
-        assert_eq!(
-            parsed.len(),
-            2,
-            "owner_b entry kept + new owner_a entry appended"
-        );
-        assert!(entry_decrypts_under_key(&parsed[0], &owner_b));
-        assert!(entry_decrypts_under_key(&parsed[1], &owner_a));
-    }
-
-    #[test]
-    fn rebuild_delete_drops_only_owned() {
-        let owner_a = [0xa1u8; 32];
-        let owner_b = [0xb2u8; 32];
-        let nonce = [0x55u8; 12];
-        let entry_a = encrypt_entry(&owner_a, &nonce, b"alpha").unwrap();
-        let entry_b = encrypt_entry(&owner_b, &nonce, b"bravo").unwrap();
-        let entry_a_v: Value = crate::proto::ctap2::cbor::from_slice(&entry_a).unwrap();
-        let entry_b_v: Value = crate::proto::ctap2::cbor::from_slice(&entry_b).unwrap();
-
-        let rebuilt = rebuild_serialized_array(&[entry_a_v, entry_b_v], &owner_a, None).unwrap();
-        let array_bytes = strip_array_trailer(&rebuilt).unwrap();
-        let parsed = parse_large_blob_array_values(array_bytes).unwrap();
-        assert_eq!(parsed.len(), 1);
-        assert!(entry_decrypts_under_key(&parsed[0], &owner_b));
-    }
-
-    /// Delete with no matching entry is a no-op: array returns unchanged (+ valid trailer).
-    #[test]
-    fn rebuild_delete_no_match_is_noop() {
-        let owner_a = [0xa1u8; 32];
-        let owner_b = [0xb2u8; 32];
-        let nonce = [0x55u8; 12];
-        let entry_b = encrypt_entry(&owner_b, &nonce, b"bravo").unwrap();
-        let entry_b_v: Value = crate::proto::ctap2::cbor::from_slice(&entry_b).unwrap();
-        let rebuilt = rebuild_serialized_array(&[entry_b_v], &owner_a, None).unwrap();
-        let array_bytes = strip_array_trailer(&rebuilt).unwrap();
-        let parsed = parse_large_blob_array_values(array_bytes).unwrap();
-        assert_eq!(parsed.len(), 1);
-        assert!(entry_decrypts_under_key(&parsed[0], &owner_b));
-    }
-
-    /// Foreign entries with unknown CBOR fields must round-trip unmodified through RMW.
-    #[test]
-    fn rebuild_preserves_unknown_fields_in_foreign_entries() {
-        use std::collections::BTreeMap;
-        let owner_a = [0xa1u8; 32];
-        let owner_b = [0xb2u8; 32];
-
-        let entry_a_bytes = encrypt_entry(&owner_a, &[0x55u8; 12], b"alpha").unwrap();
-        let entry_a_v: Value = crate::proto::ctap2::cbor::from_slice(&entry_a_bytes).unwrap();
-
-        // Construct a "future fields" entry encrypted under owner_b with an extra key 0x07.
-        let entry_b_base = encrypt_entry(&owner_b, &[0x66u8; 12], b"bravo").unwrap();
-        let entry_b_v: Value = crate::proto::ctap2::cbor::from_slice(&entry_b_base).unwrap();
-        let Value::Map(mut map_b) = entry_b_v else {
-            panic!("entry_b is a map");
-        };
-        map_b.insert(Value::Integer(0x07), Value::Text("future field".into()));
-        let entry_b_v = Value::Map(map_b);
-        // Re-extract the unknown-field marker for later inspection.
-        let original_b_clone = entry_b_v.clone();
-
-        let new_entry_bytes = encrypt_entry(&owner_a, &[0x99u8; 12], b"alpha v2").unwrap();
-        let new_entry: Value = crate::proto::ctap2::cbor::from_slice(&new_entry_bytes).unwrap();
-
-        let rebuilt =
-            rebuild_serialized_array(&[entry_a_v, entry_b_v], &owner_a, Some(new_entry)).unwrap();
-        let array_bytes = strip_array_trailer(&rebuilt).unwrap();
-        let parsed = parse_large_blob_array_values(array_bytes).unwrap();
-        assert_eq!(parsed.len(), 2);
-        let kept_b = &parsed[0];
-        assert_eq!(
-            kept_b, &original_b_clone,
-            "foreign entry preserved verbatim"
-        );
-        let Value::Map(map_b) = kept_b else {
-            panic!("kept_b is a map");
-        };
-        let _ = BTreeMap::<&Value, &Value>::from_iter(map_b.iter());
-        assert_eq!(
-            map_b.get(&Value::Integer(0x07)),
-            Some(&Value::Text("future field".into())),
-            "unknown field 0x07 preserved"
-        );
-    }
-
-    #[test]
-    fn rebuild_meets_minimum_17_bytes_when_empty() {
-        // CTAP 2.2 §6.10.2: serialized array length MUST be >= 17.
-        let rebuilt = rebuild_serialized_array(&[], &[0u8; 32], None).unwrap();
-        assert!(rebuilt.len() >= 17);
-        // Empty array: 0x80 (1 byte) + 16-byte trailer = 17 bytes.
-        assert_eq!(rebuilt.len(), 17);
-        assert_eq!(rebuilt[0], 0x80);
-    }
-
-    /// CTAP 2.2 §6.10 spec text: "The initial serialized large-blob array ... is the byte string
-    /// `h'8076be8b528d0075f7aae98d6fa57a6d3c'`". Asserting byte-for-byte locks our canonical CBOR
-    /// emission against future serializer drift.
-    #[test]
-    fn rebuild_empty_array_matches_spec_initial_bytes() {
-        let rebuilt = rebuild_serialized_array(&[], &[0u8; 32], None).unwrap();
-        assert_eq!(hex::encode(&rebuilt), "8076be8b528d0075f7aae98d6fa57a6d3c");
-    }
-
-    /// `upload_serialized_array` issues set_first with the precise pinUvAuthParam derived per CTAP 2.2 §6.10.2.
-    #[tokio::test]
-    async fn upload_single_chunk_uses_set_first_with_correct_auth_param() {
-        use crate::pin::{PinUvAuthProtocol, PinUvAuthProtocolTwo};
-        use crate::proto::ctap2::cbor::{CborRequest, CborResponse};
-        use crate::proto::ctap2::{Ctap2CommandCode, Ctap2LargeBlobsResponse};
-        use crate::transport::mock::channel::MockChannel;
-
-        let key = [0xC0u8; 32];
-        let token = [0x11u8; 32];
-        let proto = PinUvAuthProtocolTwo::new();
-        let plaintext = b"round-trip blob".to_vec();
-
-        let nonce = [0x07u8; 12];
-        let entry_bytes = encrypt_entry(&key, &nonce, &plaintext).unwrap();
-        let entry_v: Value = crate::proto::ctap2::cbor::from_slice(&entry_bytes).unwrap();
-        let serialized = rebuild_serialized_array(&[], &key, Some(entry_v)).unwrap();
-        assert!(
-            serialized.len() <= LARGE_BLOB_DEFAULT_FRAGMENT as usize,
-            "test fixture must fit in one chunk"
-        );
-
-        let auth_param =
-            large_blob_pin_uv_auth_param(&token, &proto, 0, &serialized).expect("auth_param");
-        let set_req = Ctap2LargeBlobsRequest::new_set_first(
-            serialized.clone(),
-            serialized.len() as u32,
-            Some((auth_param, proto.version() as u32)),
-        );
-        let mut channel = MockChannel::new();
-        channel.push_command_pair(
-            CborRequest {
-                command: Ctap2CommandCode::AuthenticatorLargeBlobs,
-                encoded_data: crate::proto::ctap2::cbor::to_vec(&set_req).unwrap(),
-            },
-            CborResponse::new_success_from_slice(
-                &crate::proto::ctap2::cbor::to_vec(&Ctap2LargeBlobsResponse { config: None })
-                    .unwrap(),
-            ),
-        );
-
-        upload_serialized_array(
-            &mut channel,
-            &serialized,
-            LARGE_BLOB_DEFAULT_FRAGMENT,
-            Some((&token, Ctap2PinUvAuthProtocol::Two)),
-            Duration::from_secs(5),
-        )
-        .await
-        .expect("upload");
-    }
-
-    #[tokio::test]
-    async fn upload_chunks_when_array_exceeds_max_fragment() {
-        use crate::pin::{PinUvAuthProtocol, PinUvAuthProtocolTwo};
-        use crate::proto::ctap2::cbor::{CborRequest, CborResponse};
-        use crate::proto::ctap2::{Ctap2CommandCode, Ctap2LargeBlobsResponse};
-        use crate::transport::mock::channel::MockChannel;
-
-        let token = [0x22u8; 32];
-        let proto = PinUvAuthProtocolTwo::new();
-        // Small max_fragment to force chunking with a small payload.
-        const MF: u32 = 32;
-        // Build a synthetic 70-byte "serialized array" (the helpers only check length >= 17).
-        let serialized: Vec<u8> = (0u8..70).collect();
-        assert_eq!(serialized.len(), 70);
-
-        let mut channel = MockChannel::new();
-        // Chunks: 0..32, 32..64, 64..70. Three calls.
-        for (offset, chunk_len) in [(0u32, 32), (32u32, 32), (64u32, 6)] {
-            let chunk = serialized[offset as usize..(offset as usize + chunk_len)].to_vec();
-            let auth_param =
-                large_blob_pin_uv_auth_param(&token, &proto, offset, &chunk).expect("auth_param");
-            let req = if offset == 0 {
-                Ctap2LargeBlobsRequest::new_set_first(
-                    chunk,
-                    70,
-                    Some((auth_param, proto.version() as u32)),
-                )
-            } else {
-                Ctap2LargeBlobsRequest::new_set_continuation(
-                    chunk,
-                    offset,
-                    Some((auth_param, proto.version() as u32)),
-                )
-            };
-            channel.push_command_pair(
-                CborRequest {
-                    command: Ctap2CommandCode::AuthenticatorLargeBlobs,
-                    encoded_data: crate::proto::ctap2::cbor::to_vec(&req).unwrap(),
-                },
-                CborResponse::new_success_from_slice(
-                    &crate::proto::ctap2::cbor::to_vec(&Ctap2LargeBlobsResponse { config: None })
-                        .unwrap(),
-                ),
-            );
-        }
-
-        upload_serialized_array(
-            &mut channel,
-            &serialized,
-            MF,
-            Some((&token, Ctap2PinUvAuthProtocol::Two)),
-            Duration::from_secs(5),
-        )
-        .await
-        .expect("chunked upload");
+        assert_eq!(got, full[..16]);
+        assert_eq!(got.len(), 16);
     }
 }

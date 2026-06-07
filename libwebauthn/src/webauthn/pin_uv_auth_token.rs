@@ -600,8 +600,8 @@ mod test {
 
     use crate::{
         ops::webauthn::{
-            GetAssertionRequest, GetAssertionRequestExtensions, PrfInput, PrfInputValue,
-            UserVerificationRequirement,
+            GetAssertionLargeBlobExtension, GetAssertionRequest, GetAssertionRequestExtensions,
+            PrfInput, PrfInputValue, UserVerificationRequirement,
         },
         pin::persistent_token::{
             build_enc_identifier, MemoryPersistentTokenStore, PersistentTokenRecord,
@@ -2073,5 +2073,137 @@ mod test {
 
         // The connected device's record is evicted after a successful PIN change.
         assert!(store.list().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn pin_protected_large_blob_write_acquires_full_token_when_uv_discouraged() {
+        // largeBlob.write needs a full pinUvAuthToken carrying the `lbw` permission
+        // even when the RP sets UV=Discouraged (CTAP 2.2 §6.10.2); it must NOT be
+        // downgraded to OnlyForSharedSecret. Mirrors full_ceremony_using_pin.
+        let mut channel = MockChannel::new();
+
+        let mut info = create_info(
+            &[
+                ("largeBlobs", true),
+                ("clientPin", true),
+                ("pinUvAuthToken", true),
+            ],
+            None,
+        );
+        info.pin_auth_protos = Some(vec![1]);
+
+        // GetInfo
+        let info_req = CborRequest::new(Ctap2CommandCode::AuthenticatorGetInfo);
+        let info_resp = CborResponse::new_success_from_slice(to_vec(&info).unwrap().as_slice());
+        channel.push_command_pair(info_req, info_resp);
+
+        // PinRetries
+        let pin_retries_req = CborRequest::try_from(&Ctap2ClientPinRequest::new_get_pin_retries(
+            Some(Ctap2PinUvAuthProtocol::One),
+        ))
+        .unwrap();
+        let pin_retries_resp = CborResponse::new_success_from_slice(
+            to_vec(&Ctap2ClientPinResponse {
+                key_agreement: None,
+                pin_uv_auth_token: None,
+                pin_retries: Some(5),
+                power_cycle_state: None,
+                uv_retries: None,
+            })
+            .unwrap()
+            .as_slice(),
+        );
+        channel.push_command_pair(pin_retries_req, pin_retries_resp);
+
+        // KeyAgreement
+        let key_agreement_req = CborRequest::try_from(
+            &Ctap2ClientPinRequest::new_get_key_agreement(Ctap2PinUvAuthProtocol::One),
+        )
+        .unwrap();
+        let key_agreement_resp = CborResponse::new_success_from_slice(
+            to_vec(&Ctap2ClientPinResponse {
+                key_agreement: Some(get_key_agreement()),
+                pin_uv_auth_token: None,
+                pin_retries: None,
+                power_cycle_state: None,
+                uv_retries: None,
+            })
+            .unwrap()
+            .as_slice(),
+        );
+        channel.push_command_pair(key_agreement_req, key_agreement_resp);
+
+        let extensions = Some(GetAssertionRequestExtensions {
+            large_blob: Some(GetAssertionLargeBlobExtension::Write(vec![1, 2, 3, 4])),
+            ..Default::default()
+        });
+        let mut getassertion = create_get_assertion(&info, extensions);
+
+        // The negotiated token must request the lbw permission alongside ga.
+        assert!(getassertion
+            .permissions()
+            .contains(Ctap2AuthTokenPermissionRole::LARGE_BLOB_WRITE));
+
+        // getPinUvAuth request and response
+        let pin_protocol = PinUvAuthProtocolOne::new();
+        let (public_key, shared_secret) = pin_protocol.encapsulate(&get_key_agreement()).unwrap();
+        let pin_hash_enc = pin_protocol
+            .encrypt(&shared_secret, &pin_hash("1234".as_bytes()))
+            .unwrap();
+        let pin_req = CborRequest::try_from(&Ctap2ClientPinRequest::new_get_pin_token_with_perm(
+            Ctap2PinUvAuthProtocol::One,
+            public_key,
+            &pin_hash_enc,
+            getassertion.permissions(),
+            getassertion.permissions_rpid(),
+        ))
+        .unwrap();
+        let token = [5; 16];
+        let encrypted_token = pin_protocol.encrypt(&shared_secret, &token).unwrap();
+        let pin_resp = CborResponse::new_success_from_slice(
+            to_vec(&Ctap2ClientPinResponse {
+                key_agreement: None,
+                pin_uv_auth_token: Some(ByteBuf::from(encrypted_token)),
+                pin_retries: None,
+                power_cycle_state: None,
+                uv_retries: None,
+            })
+            .unwrap()
+            .as_slice(),
+        );
+        channel.push_command_pair(pin_req, pin_resp);
+
+        let mut recv = channel.get_ux_update_receiver();
+        let recv_handle = tokio::task::spawn(async move {
+            let req = recv.recv().await.unwrap();
+            if let UvUpdate::PinRequired(update) = req {
+                update.send_pin("1234").unwrap();
+            } else {
+                panic!("Wrong UxUpdate received! Expected PinRequired");
+            }
+            recv
+        });
+
+        let resp = user_verification(
+            &mut channel,
+            UserVerificationRequirement::Discouraged,
+            &mut getassertion,
+            TIMEOUT,
+        )
+        .await;
+
+        // A full token via PIN, not the OnlyForSharedSecret downgrade.
+        assert_eq!(
+            resp,
+            Ok(UsedPinUvAuthToken::NewlyCalculated(
+                Ctap2UserVerificationOperation::GetPinUvAuthTokenUsingPinWithPermissions,
+            ))
+        );
+        let auth_data = channel.get_auth_data().expect("auth data stored");
+        assert_eq!(auth_data.pin_uv_auth_token.as_ref().unwrap(), &token);
+        assert_eq!(auth_data.shared_secret, shared_secret);
+
+        let recv = recv_handle.await.expect("Failed to join update thread");
+        assert!(recv.is_empty());
     }
 }

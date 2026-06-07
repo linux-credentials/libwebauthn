@@ -24,9 +24,8 @@ use crate::ops::u2f::{RegisterRequest, SignRequest, UpgradableResponse};
 use crate::ops::webauthn::{
     decrypt_first_matching, delete_authenticator_large_blob, fetch_large_blob_entries,
     max_fragment_length, write_authenticator_large_blob, DowngradableRequest,
-    GetAssertionLargeBlobExtension,
-    GetAssertionLargeBlobExtensionOutput, GetAssertionRequest, GetAssertionResponse,
-    GetAssertionResponseUnsignedExtensions, UserVerificationRequirement,
+    GetAssertionLargeBlobExtension, GetAssertionLargeBlobExtensionOutput, GetAssertionRequest,
+    GetAssertionResponse, GetAssertionResponseUnsignedExtensions, UserVerificationRequirement,
 };
 use crate::ops::webauthn::{MakeCredentialRequest, MakeCredentialResponse};
 use crate::proto::ctap1::Ctap1;
@@ -383,7 +382,10 @@ async fn get_assertion_fido2<C: Channel>(
                         },
                         _ => None,
                     };
-                    GetAssertionLargeBlobExtensionOutput { blob, written: None }
+                    GetAssertionLargeBlobExtensionOutput {
+                        blob,
+                        written: None,
+                    }
                 })
                 .collect::<Vec<_>>()
         }
