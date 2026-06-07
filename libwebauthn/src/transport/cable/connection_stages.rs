@@ -1,7 +1,7 @@
 use ::btleplug::api::{AddressType, BDAddr};
 use async_trait::async_trait;
 use tokio::sync::{broadcast, mpsc, watch};
-use tracing::{debug, error, info, instrument, trace, warn};
+use tracing::{debug, info, instrument, trace, warn};
 
 use super::advertisement::{await_advertisement, DecryptedAdvert};
 use super::channel::{CableUpdate, CableUxUpdate, ConnectionState};
@@ -249,7 +249,7 @@ impl UxUpdateSender for MpscUxUpdateSender {
     async fn send_update(&self, update: CableUxUpdate) {
         trace!("Sending UX update");
         if let Err(err) = self.sender.send(update) {
-            warn!(?err, "No receivers found for UX update.");
+            warn!(?err, "No receivers found for UX update");
         }
     }
 
@@ -286,7 +286,7 @@ pub(crate) async fn connection_stage(
     input: ConnectionInput,
     ux_sender: &dyn UxUpdateSender,
 ) -> Result<ConnectionOutput, TransportError> {
-    debug!(?input.tunnel_domain, "Starting connection stage");
+    debug!(tunnel_domain = %input.tunnel_domain, "Starting connection stage");
 
     ux_sender
         .send_update(CableUxUpdate::CableUpdate(CableUpdate::Connecting))
@@ -376,7 +376,7 @@ pub(crate) fn decode_tunnel_domain_from_advert(
 ) -> Result<String, TransportError> {
     tunnel::decode_tunnel_server_domain(advert.encoded_tunnel_server_domain)
         .ok_or_else(|| {
-            error!({ encoded = %advert.encoded_tunnel_server_domain }, "Failed to decode tunnel server domain");
+            warn!(encoded = %advert.encoded_tunnel_server_domain, "Failed to decode tunnel server domain");
             TransportError::InvalidFraming
         })
 }

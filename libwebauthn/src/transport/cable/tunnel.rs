@@ -3,7 +3,7 @@ use sha2::{Digest, Sha256};
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::http::StatusCode;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
-use tracing::{debug, error, trace};
+use tracing::{debug, trace, warn};
 use tungstenite::client::IntoClientRequest;
 
 use super::protocol::CableTunnelConnectionType;
@@ -95,19 +95,19 @@ pub(crate) async fn connect(
                 .or(Err(TransportError::InvalidEndpoint))?,
         );
     }
-    trace!(?request);
+    trace!(?request, "Tunnel server request");
 
     let (ws_stream, response) = match connect_async(request).await {
         Ok((ws_stream, response)) => (ws_stream, response),
         Err(e) => {
-            error!(?e, "Failed to connect to tunnel server");
+            warn!(?e, "Failed to connect to tunnel server");
             return Err(TransportError::ConnectionFailed);
         }
     };
     debug!(?response, "Connected to tunnel server");
 
     if response.status() != StatusCode::SWITCHING_PROTOCOLS {
-        error!(?response, "Failed to switch to websocket protocol");
+        warn!(?response, "Failed to switch to websocket protocol");
         return Err(TransportError::ConnectionFailed);
     }
     debug!("Tunnel server returned success");

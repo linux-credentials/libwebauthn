@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use btleplug::api::{AddressType, BDAddr};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::time::Instant;
-use tracing::{debug, error, warn};
+use tracing::{debug, warn};
 
 use super::data_channel::CableDataChannel;
 use crate::transport::error::TransportError;
@@ -47,7 +47,7 @@ impl L2capDataChannel {
             bluer::l2cap::Stream::connect(bluer::l2cap::SocketAddr::new(addr, addr_type, psm))
                 .await
                 .map_err(|e| {
-                    error!(?e, %addr, psm, "Failed to connect L2CAP CoC");
+                    warn!({ ?e, %addr, psm }, "Failed to connect L2CAP CoC");
                     TransportError::ConnectionFailed
                 })?;
 
@@ -88,11 +88,11 @@ async fn await_send_mtu(stream: &bluer::l2cap::Stream) {
 impl CableDataChannel for L2capDataChannel {
     async fn send(&mut self, message: &[u8]) -> Result<(), TransportError> {
         self.stream.write_all(message).await.map_err(|e| {
-            error!(?e, "Failed to write L2CAP message");
+            warn!(?e, "Failed to write L2CAP message");
             TransportError::IoError(e.kind())
         })?;
         self.stream.write_all(&EOM).await.map_err(|e| {
-            error!(?e, "Failed to write L2CAP EOM");
+            warn!(?e, "Failed to write L2CAP EOM");
             TransportError::IoError(e.kind())
         })?;
         Ok(())
@@ -120,7 +120,7 @@ impl CableDataChannel for L2capDataChannel {
                     0
                 }
                 Err(e) => {
-                    error!(?e, "Failed to read L2CAP message");
+                    warn!(?e, "Failed to read L2CAP message");
                     return Err(TransportError::IoError(e.kind()));
                 }
             };
@@ -129,7 +129,7 @@ impl CableDataChannel for L2capDataChannel {
                 if self.read_buf.is_empty() {
                     return Ok(None);
                 }
-                error!(buffered = self.read_buf.len(), "L2CAP closed mid-message");
+                warn!(buffered = self.read_buf.len(), "L2CAP closed mid-message");
                 return Err(TransportError::ConnectionLost);
             }
             self.read_buf
@@ -154,7 +154,7 @@ fn bdaddr_to_bluer(
     addr_type: Option<AddressType>,
 ) -> Result<(bluer::Address, bluer::AddressType), TransportError> {
     let addr = bluer::Address::from_str(&addr.to_string()).map_err(|e| {
-        error!(?e, "Failed to parse Bluetooth address");
+        warn!(?e, "Failed to parse Bluetooth address");
         TransportError::InvalidEndpoint
     })?;
     let addr_type = match addr_type {

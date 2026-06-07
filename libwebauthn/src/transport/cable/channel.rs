@@ -5,7 +5,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio::{task, time};
-use tracing::error;
+use tracing::warn;
 
 use crate::pin::persistent_token::PersistentTokenStore;
 use crate::proto::{
@@ -141,12 +141,12 @@ impl Channel for CableChannel {
     }
 
     async fn apdu_send(&mut self, _request: &ApduRequest, _timeout: Duration) -> Result<(), Error> {
-        error!("APDU send not supported in caBLE transport");
+        warn!("APDU send not supported in caBLE transport");
         Err(Error::Transport(TransportError::TransportUnavailable))
     }
 
     async fn apdu_recv(&mut self, _timeout: Duration) -> Result<ApduResponse, Error> {
-        error!("APDU recv not supported in caBLE transport");
+        warn!("APDU recv not supported in caBLE transport");
         Err(Error::Transport(TransportError::TransportUnavailable))
     }
 
@@ -158,11 +158,11 @@ impl Channel for CableChannel {
         match time::timeout(timeout, self.cbor_sender.send(request.clone())).await {
             Ok(Ok(_)) => Ok(()),
             Ok(Err(error)) => {
-                error!(%error, "CBOR request send failure");
+                warn!(%error, "CBOR request send failure");
                 Err(Error::Transport(TransportError::TransportUnavailable))
             }
             Err(elapsed) => {
-                error!({ %elapsed, ?timeout }, "CBOR request send timeout");
+                warn!({ %elapsed, ?timeout }, "CBOR request send timeout");
                 Err(Error::Transport(TransportError::Timeout))
             }
         }
@@ -177,7 +177,7 @@ impl Channel for CableChannel {
             Ok(Some(response)) => Ok(response),
             Ok(None) => Err(Error::Transport(TransportError::TransportUnavailable)),
             Err(elapsed) => {
-                error!({ %elapsed, ?timeout }, "CBOR response recv timeout");
+                warn!({ %elapsed, ?timeout }, "CBOR response recv timeout");
                 Err(Error::Transport(TransportError::Timeout))
             }
         }
