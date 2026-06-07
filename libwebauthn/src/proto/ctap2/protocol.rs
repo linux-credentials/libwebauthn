@@ -24,10 +24,9 @@ macro_rules! parse_cbor {
         match cbor::from_slice::<$type>($data) {
             Ok(f) => f,
             Err(e) => {
-                tracing::error!(
-                    "Failed to parse {} from CBOR-data provided by the device. Parsing error: {:?}",
-                    stringify!($type),
-                    e
+                tracing::warn!(
+                    { type_name = stringify!($type), error = ?e },
+                    "Failed to parse device CBOR response"
                 );
                 return Err(WebAuthnError::Platform(
                     PlatformError::InvalidDeviceResponse,
@@ -138,7 +137,7 @@ where
             error => return Err(WebAuthnError::Ctap(error)),
         };
         let data = unwrap_field!(cbor_response.data);
-        trace!("MakeCredential: {:?}", data);
+        trace!(?data, "MakeCredential response");
         let ctap_response = parse_cbor!(Ctap2MakeCredentialResponse, &data);
         debug!("CTAP2 MakeCredential successful");
         trace!(?ctap_response);
@@ -164,7 +163,7 @@ where
             error => return Err(WebAuthnError::Ctap(error)),
         };
         let data = unwrap_field!(cbor_response.data);
-        trace!("GetAssertion: {:?}", data);
+        trace!(?data, "GetAssertion response");
         let ctap_response = parse_cbor!(Ctap2GetAssertionResponse, &data);
         debug!("CTAP2 GetAssertion successful");
         trace!(?ctap_response);
