@@ -12,7 +12,7 @@ use libwebauthn::proto::ctap2::{
     Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialRpEntity,
     Ctap2PublicKeyCredentialUserEntity,
 };
-use libwebauthn::transport::{Channel, Device};
+use libwebauthn::transport::{Channel, ChannelSettings, Device};
 use libwebauthn::webauthn::WebAuthn;
 use libwebauthn::UvUpdate;
 use libwebauthn_tests::virt::get_virtual_device;
@@ -33,7 +33,7 @@ async fn handle_updates(mut state_recv: Receiver<UvUpdate>) {
 #[test(tokio::test)]
 async fn test_webauthn_large_blob_read_returns_planted_blob() {
     let mut device = get_virtual_device();
-    let mut channel = device.channel().await.unwrap();
+    let mut channel = device.channel(ChannelSettings::default()).await.unwrap();
 
     let user_id: [u8; 32] = thread_rng().gen();
     let challenge: [u8; 32] = thread_rng().gen();

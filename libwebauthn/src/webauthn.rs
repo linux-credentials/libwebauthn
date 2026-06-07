@@ -22,7 +22,7 @@ use tracing::{debug, error, info, instrument, trace, warn};
 use crate::fido::FidoProtocol;
 use crate::ops::u2f::{RegisterRequest, SignRequest, UpgradableResponse};
 use crate::ops::webauthn::{
-    max_fragment_length, read_authenticator_large_blob, DowngradableRequest,
+    decrypt_first_matching, fetch_large_blob_entries, max_fragment_length, DowngradableRequest,
     GetAssertionLargeBlobExtension, GetAssertionLargeBlobExtensionOutput, GetAssertionRequest,
     GetAssertionResponse, GetAssertionResponseUnsignedExtensions, UserVerificationRequirement,
 };
@@ -330,40 +330,56 @@ async fn get_assertion_fido2<C: Channel>(
         ctap_responses.push(channel.ctap2_get_next_assertion(op.timeout).await?);
     }
 
-    // largeBlob.read: fetch and decrypt the on-device blob via
-    // authenticatorLargeBlobs(get). Failures are non-fatal; per WebAuthn
-    // L3 §10.1.5 the `blob` field is absent when the read cannot complete.
-    // Resolved here, before the CTAP response is converted to Assertion, so
-    // the per-credential largeBlobKey never leaves this scope.
+    // largeBlob.read via authenticatorLargeBlobs(get). Failures are non-fatal: per WebAuthn L3
+    // §10.1.5 the `blob` field is absent when the read cannot complete. Resolved here, before the
+    // CTAP response is converted to Assertion, so the per-credential largeBlobKey stays in scope.
     let large_blob_read_requested = op.extensions.as_ref().and_then(|e| e.large_blob.as_ref())
         == Some(&GetAssertionLargeBlobExtension::Read);
-    let mut blobs: Vec<Option<Vec<u8>>> = vec![None; ctap_responses.len()];
-    if large_blob_read_requested {
+    let large_blob_outputs: Vec<Option<Vec<u8>>> = if large_blob_read_requested {
         let max_fragment = max_fragment_length(get_info_response.max_msg_size);
-        for (i, resp) in ctap_responses.iter().enumerate() {
-            let Some(key_buf) = resp.large_blob_key.as_ref() else {
-                continue;
-            };
-            let Ok(key) = <[u8; 32]>::try_from(key_buf.as_slice()) else {
-                warn!(
-                    len = key_buf.len(),
-                    "largeBlobKey has unexpected length (expected 32); skipping fetch"
-                );
-                continue;
-            };
-            match read_authenticator_large_blob(channel, &key, max_fragment, op.timeout).await {
-                Ok(blob) => blobs[i] = blob,
-                Err(e) => warn!(?e, "authenticatorLargeBlobs(get) failed; no blob returned"),
+        // The largeBlobArray is device-wide: fetch and parse once, decrypt per credential.
+        let entries = if ctap_responses.iter().any(|r| r.large_blob_key.is_some()) {
+            match fetch_large_blob_entries(channel, max_fragment, op.timeout).await {
+                Ok(entries) => Some(entries),
+                Err(e) => {
+                    warn!(?e, "authenticatorLargeBlobs(get) failed; no blob returned");
+                    None
+                }
             }
-        }
-    }
+        } else {
+            None
+        };
+        ctap_responses
+            .iter()
+            .map(|resp| {
+                let entries = entries.as_ref()?;
+                let key_buf = resp.large_blob_key.as_ref()?;
+                let Ok(key) = <[u8; 32]>::try_from(key_buf.as_slice()) else {
+                    warn!(
+                        len = key_buf.len(),
+                        "largeBlobKey has unexpected length (expected 32); skipping"
+                    );
+                    return None;
+                };
+                match decrypt_first_matching(entries, &key) {
+                    Ok(blob) => blob,
+                    Err(e) => {
+                        warn!(?e, "largeBlob decrypt failed; no blob returned");
+                        None
+                    }
+                }
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
 
     let mut assertions: Vec<_> = ctap_responses
         .into_iter()
         .map(|r| r.into_assertion_output(op, channel.get_auth_data()))
         .collect();
     if large_blob_read_requested {
-        for (assertion, blob) in assertions.iter_mut().zip(blobs) {
+        for (assertion, blob) in assertions.iter_mut().zip(large_blob_outputs) {
             let entry = GetAssertionLargeBlobExtensionOutput { blob };
             match assertion.unsigned_extensions_output.as_mut() {
                 Some(unsigned) => unsigned.large_blob = Some(entry),
