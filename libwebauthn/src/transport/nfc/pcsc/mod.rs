@@ -65,7 +65,7 @@ impl fmt::Display for Info {
 
 impl From<pcsc::Error> for Error {
     fn from(input: pcsc::Error) -> Self {
-        trace!("{:?}", input);
+        trace!(?input, "PC/SC error");
         let output = match input {
             pcsc::Error::NoSmartcard => TransportError::ConnectionFailed,
             _ => TransportError::InvalidFraming,
@@ -126,7 +126,7 @@ where
         command: &[u8],
         response: &mut [u8],
     ) -> apdu_core::Result {
-        trace!("TX: {:?}", command);
+        trace!(?command, "Transmitting APDU");
 
         let card = self
             .card
@@ -136,7 +136,7 @@ where
             .transmit(command, response)
             .map_err(|e| HandleError::Nfc(Box::new(e)))?;
 
-        trace!("RX: {:?}", rapdu);
+        trace!(?rapdu, "Received APDU");
         Ok(rapdu.len())
     }
 }
