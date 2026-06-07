@@ -5,7 +5,7 @@ use tokio_tungstenite::tungstenite::handshake::client::Request;
 use tokio_tungstenite::tungstenite::http::{header::LOCATION, StatusCode};
 use tokio_tungstenite::tungstenite::Error as TungsteniteError;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
-use tracing::{debug, error, trace};
+use tracing::{debug, trace, warn};
 use tungstenite::client::IntoClientRequest;
 use url::Url;
 
@@ -137,13 +137,13 @@ pub(crate) async fn connect(
     for _ in 0..=MAX_TUNNEL_REDIRECTS {
         debug!(?connect_url, "Connecting to tunnel server");
         let request = build_tunnel_request(&connect_url, connection_type)?;
-        trace!(?request);
+        trace!(?request, "Tunnel server request");
 
         let error = match connect_async(request).await {
             Ok((ws_stream, response)) => {
                 debug!(?response, "Connected to tunnel server");
                 if response.status() != StatusCode::SWITCHING_PROTOCOLS {
-                    error!(?response, "Failed to switch to websocket protocol");
+                    warn!(?response, "Failed to switch to websocket protocol");
                     return Err(CableError::ConnectionFailed);
                 }
                 debug!("Tunnel server returned success");
@@ -155,7 +155,7 @@ pub(crate) async fn connect(
         let response = match error {
             TungsteniteError::Http(response) => response,
             error => {
-                error!(?error, "Failed to connect to tunnel server");
+                warn!(?error, "Failed to connect to tunnel server");
                 return Err(CableError::from(error));
             }
         };
@@ -167,7 +167,7 @@ pub(crate) async fn connect(
                 .get(LOCATION)
                 .and_then(|value| value.to_str().ok())
             else {
-                error!(?status, "Tunnel redirect missing a usable Location header");
+                warn!(?status, "Tunnel redirect missing a usable Location header");
                 return Err(CableError::ConnectionFailed);
             };
             connect_url = resolve_redirect_target(&connect_url, location)?;
@@ -175,11 +175,11 @@ pub(crate) async fn connect(
             continue;
         }
 
-        error!(?status, "Tunnel server rejected the connection");
+        warn!(?status, "Tunnel server rejected the connection");
         return Err(tunnel_status_error(status));
     }
 
-    error!("Exceeded the maximum number of tunnel redirects");
+    warn!("Exceeded the maximum number of tunnel redirects");
     Err(CableTunnelError::TooManyRedirects.into())
 }
 

@@ -82,7 +82,7 @@ pub(crate) async fn await_advertisement(
 
     let mut stream = pin!(stream);
     while let Some((peripheral, data)) = stream.as_mut().next().await {
-        debug!({ ?peripheral, ?data }, "Found device with service data");
+        debug!({ ?peripheral, data_len = data.len() }, "Found device with service data");
 
         let Some(device) = btleplug::manager::get_device(peripheral.clone())
             .await
@@ -95,12 +95,12 @@ pub(crate) async fn await_advertisement(
             continue;
         };
 
-        trace!(?device, ?data, ?eid_key);
+        trace!({ ?device, ?data, ?eid_key }, "Trial-decrypting advertisement");
         let Some(decrypted) = trial_decrypt_advert(eid_key, &data) else {
-            warn!(?device, "Trial decrypt failed, ignoring");
+            debug!(?device, "Trial decrypt failed, ignoring");
             continue;
         };
-        trace!(?decrypted);
+        trace!(?decrypted, "Decrypted advertisement");
 
         let mut advert = DecryptedAdvert::from(decrypted);
         if let Some(suffix_bytes) = data.get(20..).filter(|s| !s.is_empty()) {
@@ -110,17 +110,12 @@ pub(crate) async fn await_advertisement(
                     advert.suffix = Some(suffix);
                 }
                 Err(e) => warn!(
-                    ?device,
-                    ?e,
+                    { ?device, ?e },
                     "Failed to parse advertisement suffix, ignoring it"
                 ),
             }
         }
-        debug!(
-            ?device,
-            ?decrypted,
-            "Successfully decrypted advertisement from device"
-        );
+        debug!(?device, "Successfully decrypted advertisement from device");
 
         scan.stop().await;
 
