@@ -237,7 +237,7 @@ impl Ctap2MakeCredentialsRequestExtensions {
         if let Some(cred_protection) = requested_extensions.cred_protect.as_ref() {
             if cred_protection.enforce_policy
                 && cred_protection.policy != CredentialProtectionPolicy::UserVerificationOptional
-                && !info.is_uv_protected()
+                && !info.supports_extension("credProtect")
             {
                 return Err(Error::Ctap(CtapError::UnsupportedExtension));
             }
@@ -498,7 +498,9 @@ pub struct Ctap2MakeCredentialsResponseExtensions {
 mod tests {
     use super::*;
     use crate::ops::webauthn::MakeCredentialLargeBlobExtensionInput;
-    use crate::ops::webauthn::{MakeCredentialPrfInput, MakeCredentialRequest};
+    use crate::ops::webauthn::{
+        CredentialProtectionExtension, MakeCredentialPrfInput, MakeCredentialRequest,
+    };
     use std::collections::HashMap;
     use std::time::Duration;
 
@@ -579,6 +581,78 @@ mod tests {
             Ctap2MakeCredentialsRequestExtensions::from_webauthn_request(&requested, &info)
                 .unwrap();
         assert_eq!(extensions.large_blob_key, None);
+    }
+
+    fn requested_with_cred_protect(
+        policy: CredentialProtectionPolicy,
+        enforce_policy: bool,
+    ) -> MakeCredentialsRequestExtensions {
+        MakeCredentialsRequestExtensions {
+            cred_protect: Some(CredentialProtectionExtension {
+                policy,
+                enforce_policy,
+            }),
+            ..MakeCredentialsRequestExtensions::default()
+        }
+    }
+
+    #[test]
+    fn cred_protect_enforced_above_optional_without_support_returns_unsupported_extension() {
+        // UV-protected but credProtect not advertised: must fail, not silently drop the policy.
+        let info = info_with_options(&[("clientPin", true)]);
+        let requested =
+            requested_with_cred_protect(CredentialProtectionPolicy::UserVerificationRequired, true);
+        let result =
+            Ctap2MakeCredentialsRequestExtensions::from_webauthn_request(&requested, &info);
+        assert!(matches!(
+            result,
+            Err(Error::Ctap(CtapError::UnsupportedExtension))
+        ));
+    }
+
+    #[test]
+    fn cred_protect_enforced_above_optional_with_support_carries_policy() {
+        // credProtect advertised but no PIN/UV set yet: still honour the policy.
+        let info = info_with_extensions(&["credProtect"]);
+        let requested =
+            requested_with_cred_protect(CredentialProtectionPolicy::UserVerificationRequired, true);
+        let extensions =
+            Ctap2MakeCredentialsRequestExtensions::from_webauthn_request(&requested, &info)
+                .unwrap();
+        assert_eq!(
+            extensions.cred_protect,
+            Some(Ctap2CredentialProtectionPolicy::Required)
+        );
+    }
+
+    #[test]
+    fn cred_protect_enforced_optional_is_never_rejected() {
+        let info = Ctap2GetInfoResponse::default();
+        let requested =
+            requested_with_cred_protect(CredentialProtectionPolicy::UserVerificationOptional, true);
+        let extensions =
+            Ctap2MakeCredentialsRequestExtensions::from_webauthn_request(&requested, &info)
+                .unwrap();
+        assert_eq!(
+            extensions.cred_protect,
+            Some(Ctap2CredentialProtectionPolicy::Optional)
+        );
+    }
+
+    #[test]
+    fn cred_protect_not_enforced_above_optional_is_never_rejected() {
+        let info = Ctap2GetInfoResponse::default();
+        let requested = requested_with_cred_protect(
+            CredentialProtectionPolicy::UserVerificationRequired,
+            false,
+        );
+        let extensions =
+            Ctap2MakeCredentialsRequestExtensions::from_webauthn_request(&requested, &info)
+                .unwrap();
+        assert_eq!(
+            extensions.cred_protect,
+            Some(Ctap2CredentialProtectionPolicy::Required)
+        );
     }
 
     fn info_with_extensions(exts: &[&str]) -> Ctap2GetInfoResponse {
