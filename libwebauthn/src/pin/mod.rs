@@ -30,6 +30,8 @@ use sha2::{Digest, Sha256};
 use tracing::{error, instrument, warn};
 use x509_parser::nom::AsBytes;
 
+pub mod persistent_token;
+
 use crate::{
     proto::{
         ctap2::{Ctap2, Ctap2ClientPinRequest, Ctap2GetInfoResponse, Ctap2PinUvAuthProtocol},

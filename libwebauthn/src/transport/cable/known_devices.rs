@@ -10,6 +10,7 @@ use crate::transport::cable::connection_stages::{
 };
 
 use crate::transport::error::TransportError;
+use crate::transport::ChannelSettings;
 use crate::transport::Device;
 use crate::webauthn::error::Error;
 
@@ -191,7 +192,7 @@ impl CableKnownDevice {
 
 #[async_trait]
 impl<'d> Device<'d, Cable, CableChannel> for CableKnownDevice {
-    async fn channel(&'d mut self) -> Result<CableChannel, Error> {
+    async fn channel(&'d mut self, settings: ChannelSettings) -> Result<CableChannel, Error> {
         debug!(?self.device_info.tunnel_domain, "Creating channel to tunnel server");
 
         let (ux_update_sender, _) = broadcast::channel(16);
@@ -245,6 +246,7 @@ impl<'d> Device<'d, Cable, CableChannel> for CableKnownDevice {
             cbor_receiver: cbor_rx_recv,
             ux_update_sender,
             connection_state_receiver,
+            persistent_token_store: settings.persistent_token_store,
         })
     }
 }

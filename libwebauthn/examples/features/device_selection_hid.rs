@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use libwebauthn::transport::hid::channel::HidChannelHandle;
 use libwebauthn::transport::hid::{list_devices, HidDevice};
-use libwebauthn::transport::Device;
+use libwebauthn::transport::{ChannelSettings, Device};
 
 #[path = "../common/mod.rs"]
 mod common;
@@ -28,7 +28,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
 
         tokio::spawn(async move {
             let dev = device.clone();
-            let mut channel = device.channel().await.unwrap();
+            let mut channel = device.channel(ChannelSettings::default()).await.unwrap();
             let handle = channel.get_handle();
             stx.send((idx, dev, handle)).await.unwrap();
             drop(stx);

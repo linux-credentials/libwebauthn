@@ -36,7 +36,7 @@
 //!     SystemPublicSuffixList,
 //! };
 //! use libwebauthn::transport::hid::list_devices;
-//! use libwebauthn::transport::Device;
+//! use libwebauthn::transport::{ChannelSettings, Device};
 //! use libwebauthn::webauthn::WebAuthn;
 //!
 //! # async fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -45,7 +45,7 @@
 //!
 //! for mut device in devices {
 //!     // 2. Open a channel to the device.
-//!     let mut channel = device.channel().await?;
+//!     let mut channel = device.channel(ChannelSettings::default()).await?;
 //!
 //!     // 3. Build a request from its WebAuthn IDL JSON.
 //!     let origin: RequestOrigin = "https://example.org".try_into().expect("invalid origin");

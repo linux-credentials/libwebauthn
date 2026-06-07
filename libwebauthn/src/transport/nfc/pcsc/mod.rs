@@ -2,6 +2,7 @@ use super::channel::{HandlerInCtx, NfcBackend, NfcChannel};
 use super::device::NfcDevice;
 use super::Context;
 use crate::transport::error::TransportError;
+use crate::transport::ChannelSettings;
 use crate::webauthn::Error;
 use apdu::core::HandleError;
 use pcsc;
@@ -84,12 +85,12 @@ impl Info {
         }
     }
 
-    pub fn channel(&self) -> Result<NfcChannel<Context>, Error> {
+    pub fn channel(&self, settings: ChannelSettings) -> Result<NfcChannel<Context>, Error> {
         let context = pcsc::Context::establish(pcsc::Scope::User)?;
         let chan = Channel::new(self, context)?;
 
         let ctx = Context {};
-        let channel = NfcChannel::new(Box::new(chan), ctx);
+        let channel = NfcChannel::new(Box::new(chan), ctx, settings);
         Ok(channel)
     }
 }

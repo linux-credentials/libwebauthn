@@ -11,7 +11,7 @@ use libwebauthn::proto::ctap2::{
 };
 use libwebauthn::proto::CtapError;
 use libwebauthn::transport::hid::channel::HidChannel;
-use libwebauthn::transport::{Channel, Device};
+use libwebauthn::transport::{Channel, ChannelSettings, Device};
 use libwebauthn::webauthn::{Error, WebAuthn};
 use libwebauthn::UvUpdate;
 use libwebauthn_tests::virt::get_virtual_device;
@@ -98,7 +98,7 @@ fn create_credential(id: &[u8]) -> Ctap2PublicKeyCredentialDescriptor {
 async fn preflight_no_exclude_list() {
     // Make credential with exclude_list: None. Should do nothing in preflight and return a credential
     let mut device = get_virtual_device();
-    let mut channel = device.channel().await.unwrap();
+    let mut channel = device.channel(ChannelSettings::default()).await.unwrap();
 
     let user_id: [u8; 32] = thread_rng().gen();
 
@@ -119,7 +119,7 @@ async fn preflight_nonsense_exclude_list() {
     // Make credential with nonsense exclude_list. Should remove everything in preflight and return a credential
 
     let mut device = get_virtual_device();
-    let mut channel = device.channel().await.unwrap();
+    let mut channel = device.channel(ChannelSettings::default()).await.unwrap();
 
     let user_id: [u8; 32] = thread_rng().gen();
 
@@ -147,7 +147,7 @@ async fn preflight_mixed_exclude_list() {
     // Make credential with a mixed exclude_list that contains 2 real ones. Should remove the two fake ones in preflight and return an error
 
     let mut device = get_virtual_device();
-    let mut channel = device.channel().await.unwrap();
+    let mut channel = device.channel(ChannelSettings::default()).await.unwrap();
 
     let user_id: [u8; 32] = thread_rng().gen();
 
@@ -194,7 +194,7 @@ async fn preflight_no_allow_list() {
     // Get assertion with allow_list: None. Should do nothing in preflight and return an error OR credentials, if a discoverable credential for example.org is present on the device
 
     let mut device = get_virtual_device();
-    let mut channel = device.channel().await.unwrap();
+    let mut channel = device.channel(ChannelSettings::default()).await.unwrap();
 
     let user_id: [u8; 32] = thread_rng().gen();
 
@@ -221,7 +221,7 @@ async fn preflight_nonsense_allow_list() {
     // Get assertion with nonsense allow_list. Should remove everything in preflight and return an error, AND run a dummy request to provoke a touch
 
     let mut device = get_virtual_device();
-    let mut channel = device.channel().await.unwrap();
+    let mut channel = device.channel(ChannelSettings::default()).await.unwrap();
 
     let user_id: [u8; 32] = thread_rng().gen();
 
@@ -255,7 +255,7 @@ async fn preflight_with_appid_exclude_finds_legacy_credential() {
     // while passing the legacy rpId as `appid_exclude`. The credential
     // should be detected, matching WebAuthn L3 §10.1.2 semantics.
     let mut device = get_virtual_device();
-    let mut channel = device.channel().await.unwrap();
+    let mut channel = device.channel(ChannelSettings::default()).await.unwrap();
 
     let user_id: [u8; 32] = thread_rng().gen();
     let _state_recv = channel.get_ux_update_receiver();
@@ -305,7 +305,7 @@ async fn preflight_mixed_allow_list() {
     // Get assertion with a mixed allow_list that contains 2 real ones. Should remove the two fake ones in preflight
 
     let mut device = get_virtual_device();
-    let mut channel = device.channel().await.unwrap();
+    let mut channel = device.channel(ChannelSettings::default()).await.unwrap();
 
     let user_id: [u8; 32] = thread_rng().gen();
 

@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use libwebauthn::ops::webauthn::{GetAssertionRequest, GetAssertionRequestExtensions};
 use libwebauthn::proto::ctap2::Ctap2PublicKeyCredentialDescriptor;
-use libwebauthn::transport::{Channel, Device};
+use libwebauthn::transport::{Channel, ChannelSettings, Device};
 use libwebauthn::webauthn::WebAuthn;
 use libwebauthn::UvUpdate;
 use libwebauthn::{
@@ -33,7 +33,7 @@ async fn test_webauthn_basic_ctap2() {
     let challenge: [u8; 32] = thread_rng().gen();
 
     println!("Selected HID authenticator: {}", &device);
-    let mut channel = device.channel().await.unwrap();
+    let mut channel = device.channel(ChannelSettings::default()).await.unwrap();
     channel.wink(TIMEOUT).await.unwrap();
 
     // Make Credentials ceremony

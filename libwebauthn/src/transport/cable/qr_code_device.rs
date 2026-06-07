@@ -25,6 +25,7 @@ use super::tunnel::KNOWN_TUNNEL_DOMAINS;
 use super::{channel::CableChannel, channel::ConnectionState, Cable};
 use crate::proto::ctap2::cbor;
 use crate::transport::cable::digit_encode;
+use crate::transport::ChannelSettings;
 use crate::transport::Device;
 use crate::webauthn::error::Error;
 use crate::webauthn::TransportError;
@@ -239,7 +240,7 @@ impl Display for CableQrCodeDevice {
 
 #[async_trait]
 impl<'d> Device<'d, Cable, CableChannel> for CableQrCodeDevice {
-    async fn channel(&'d mut self) -> Result<CableChannel, Error> {
+    async fn channel(&'d mut self, settings: ChannelSettings) -> Result<CableChannel, Error> {
         let (ux_update_sender, _) = broadcast::channel(16);
         let (cbor_tx_send, cbor_tx_recv) = mpsc::channel(16);
         let (cbor_rx_send, cbor_rx_recv) = mpsc::channel(16);
@@ -290,6 +291,7 @@ impl<'d> Device<'d, Cable, CableChannel> for CableQrCodeDevice {
             cbor_receiver: cbor_rx_recv,
             ux_update_sender,
             connection_state_receiver,
+            persistent_token_store: settings.persistent_token_store,
         })
     }
 

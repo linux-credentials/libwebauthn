@@ -4,16 +4,20 @@ use apdu_core;
 use async_trait::async_trait;
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc::{self, Sender};
 #[allow(unused_imports)]
 use tracing::{debug, instrument, trace, warn, Level};
 
+use crate::pin::persistent_token::PersistentTokenStore;
 use crate::proto::ctap1::apdu::{ApduRequest, ApduResponse};
 use crate::proto::ctap2::cbor::{CborRequest, CborResponse};
 use crate::proto::ctap2::Ctap2;
-use crate::transport::channel::{AuthTokenData, Channel, ChannelStatus, Ctap2AuthTokenStore};
+use crate::transport::channel::{
+    AuthTokenData, Channel, ChannelSettings, ChannelStatus, Ctap2AuthTokenStore,
+};
 use crate::transport::device::SupportedProtocols;
 use crate::transport::error::TransportError;
 use crate::webauthn::Error;
@@ -99,6 +103,7 @@ where
 {
     delegate: Box<dyn NfcBackend<Ctx> + Send + Sync>,
     auth_token_data: Option<AuthTokenData>,
+    persistent_token_store: Option<Arc<dyn PersistentTokenStore>>,
     ux_update_sender: broadcast::Sender<UvUpdate>,
     handle: NfcChannelHandle,
     ctx: Ctx,
@@ -121,13 +126,18 @@ impl<Ctx> NfcChannel<Ctx>
 where
     Ctx: fmt::Debug + Display + Copy + Send + Sync,
 {
-    pub fn new(delegate: Box<dyn NfcBackend<Ctx> + Send + Sync>, ctx: Ctx) -> Self {
+    pub fn new(
+        delegate: Box<dyn NfcBackend<Ctx> + Send + Sync>,
+        ctx: Ctx,
+        settings: ChannelSettings,
+    ) -> Self {
         let (ux_update_sender, _) = broadcast::channel(16);
         let (handle_tx, _handle_rx) = mpsc::channel(1);
         let handle = NfcChannelHandle { tx: handle_tx };
         NfcChannel {
             delegate,
             auth_token_data: None,
+            persistent_token_store: settings.persistent_token_store,
             ux_update_sender,
             handle,
             ctx,
@@ -341,6 +351,10 @@ where
 
     fn clear_uv_auth_token_store(&mut self) {
         self.auth_token_data = None;
+    }
+
+    fn persistent_token_store(&self) -> Option<Arc<dyn PersistentTokenStore>> {
+        self.persistent_token_store.clone()
     }
 }
 

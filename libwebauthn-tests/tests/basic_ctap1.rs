@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use libwebauthn::ops::u2f::{RegisterRequest, SignRequest};
-use libwebauthn::transport::{Channel, Device};
+use libwebauthn::transport::{Channel, ChannelSettings, Device};
 use libwebauthn::u2f::U2F;
 use libwebauthn::UvUpdate;
 use libwebauthn_tests::virt::get_virtual_device;
@@ -21,7 +21,7 @@ async fn test_webauthn_basic_ctap1() {
     let mut device = get_virtual_device();
 
     println!("Selected HID authenticator: {}", &device);
-    let mut channel = device.channel().await.unwrap();
+    let mut channel = device.channel(ChannelSettings::default()).await.unwrap();
     channel.wink(TIMEOUT).await.unwrap();
 
     const APP_ID: &str = "https://foo.example.org";

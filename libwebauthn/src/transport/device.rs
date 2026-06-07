@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use crate::transport::ble::btleplug::manager::SupportedRevisions;
 use crate::webauthn::error::Error;
 
-use super::{Channel, Transport};
+use super::{Channel, ChannelSettings, Transport};
 
 #[async_trait]
 pub trait Device<'d, T, C>: Send + Display
@@ -14,7 +14,7 @@ where
     T: Transport,
     C: Channel + 'd,
 {
-    async fn channel(&'d mut self) -> Result<C, Error>;
+    async fn channel(&'d mut self, settings: ChannelSettings) -> Result<C, Error>;
     // async fn supported_protocols(&mut self) -> Result<SupportedProtocols, Error>;
 }
 

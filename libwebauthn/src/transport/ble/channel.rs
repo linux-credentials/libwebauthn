@@ -1,13 +1,17 @@
 use std::convert::TryInto;
 use std::fmt::{Display, Formatter};
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::fido::FidoRevision;
+use crate::pin::persistent_token::PersistentTokenStore;
 use crate::proto::ctap1::apdu::{ApduRequest, ApduResponse};
 use crate::proto::ctap2::cbor::{CborRequest, CborResponse};
 use crate::proto::CtapError;
 use crate::transport::ble::btleplug;
-use crate::transport::channel::{AuthTokenData, Channel, ChannelStatus, Ctap2AuthTokenStore};
+use crate::transport::channel::{
+    AuthTokenData, Channel, ChannelSettings, ChannelStatus, Ctap2AuthTokenStore,
+};
 use crate::transport::device::SupportedProtocols;
 use crate::transport::error::TransportError;
 use crate::webauthn::error::Error;
@@ -29,6 +33,7 @@ pub struct BleChannel<'a> {
     connection: Connection,
     revision: FidoRevision,
     auth_token_data: Option<AuthTokenData>,
+    persistent_token_store: Option<Arc<dyn PersistentTokenStore>>,
     ux_update_sender: broadcast::Sender<UvUpdate>,
 }
 
@@ -36,6 +41,7 @@ impl<'a> BleChannel<'a> {
     pub async fn new(
         device: &'a BleDevice,
         revisions: &SupportedRevisions,
+        settings: ChannelSettings,
     ) -> Result<BleChannel<'a>, Error> {
         let (ux_update_sender, _) = broadcast::channel(16);
 
@@ -51,6 +57,7 @@ impl<'a> BleChannel<'a> {
             connection,
             revision,
             auth_token_data: None,
+            persistent_token_store: settings.persistent_token_store,
             ux_update_sender,
         };
         channel
@@ -188,5 +195,9 @@ impl Ctap2AuthTokenStore for BleChannel<'_> {
 
     fn clear_uv_auth_token_store(&mut self) {
         self.auth_token_data = None;
+    }
+
+    fn persistent_token_store(&self) -> Option<Arc<dyn PersistentTokenStore>> {
+        self.persistent_token_store.clone()
     }
 }

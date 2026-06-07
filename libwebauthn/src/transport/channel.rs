@@ -1,6 +1,8 @@
 use std::fmt::{Debug, Display};
+use std::sync::Arc;
 use std::time::Duration;
 
+use crate::pin::persistent_token::PersistentTokenStore;
 use crate::proto::ctap2::{
     Ctap2AuthTokenPermissionRole, Ctap2PinUvAuthProtocol, Ctap2UserVerificationOperation,
 };
@@ -23,6 +25,17 @@ pub enum ChannelStatus {
     Ready, // Channels are created asynchrounously, and are always ready.
     Processing,
     Closed,
+}
+
+/// Per-channel configuration supplied by the caller when opening a channel via
+/// [`Device::channel`](crate::transport::Device::channel). Transport-agnostic, so the
+/// same options apply to HID, BLE, NFC, and hybrid (caBLE).
+#[derive(Debug, Default, Clone)]
+pub struct ChannelSettings {
+    /// Caller-supplied store for persistent pinUvAuthTokens (pcmr). When set, read-only
+    /// credential management reuses a stored token across sessions instead of
+    /// re-prompting for the PIN. See [`PersistentTokenStore`].
+    pub persistent_token_store: Option<Arc<dyn PersistentTokenStore>>,
 }
 
 #[async_trait]
@@ -163,5 +176,11 @@ pub trait Ctap2AuthTokenStore {
                 || stored_data.uv_operation == Ctap2UserVerificationOperation::GetPinToken;
         }
         false
+    }
+
+    /// Caller-supplied persistent pinUvAuthToken (pcmr) store, if one is configured.
+    /// Defaults to `None`; only channels wired with a store override this.
+    fn persistent_token_store(&self) -> Option<Arc<dyn PersistentTokenStore>> {
+        None
     }
 }

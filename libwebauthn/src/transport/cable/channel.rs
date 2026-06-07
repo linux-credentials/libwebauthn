@@ -1,4 +1,5 @@
 use std::fmt::{Display, Formatter};
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -6,6 +7,7 @@ use tokio::sync::{broadcast, mpsc, watch};
 use tokio::{task, time};
 use tracing::error;
 
+use crate::pin::persistent_token::PersistentTokenStore;
 use crate::proto::{
     ctap1::apdu::{ApduRequest, ApduResponse},
     ctap2::cbor::{CborRequest, CborResponse},
@@ -44,6 +46,7 @@ pub struct CableChannel {
     pub(crate) cbor_receiver: mpsc::Receiver<CborResponse>,
     pub(crate) ux_update_sender: broadcast::Sender<CableUxUpdate>,
     pub(crate) connection_state_receiver: watch::Receiver<ConnectionState>,
+    pub(crate) persistent_token_store: Option<Arc<dyn PersistentTokenStore>>,
 }
 
 impl CableChannel {
@@ -198,4 +201,8 @@ impl Ctap2AuthTokenStore for CableChannel {
     }
 
     fn clear_uv_auth_token_store(&mut self) {}
+
+    fn persistent_token_store(&self) -> Option<Arc<dyn PersistentTokenStore>> {
+        self.persistent_token_store.clone()
+    }
 }

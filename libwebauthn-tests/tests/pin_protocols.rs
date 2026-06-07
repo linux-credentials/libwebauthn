@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use libwebauthn::pin::PinManagement;
 use libwebauthn::proto::ctap2::Ctap2PinUvAuthProtocol;
-use libwebauthn::transport::{Channel, Device};
+use libwebauthn::transport::{Channel, ChannelSettings, Device};
 use libwebauthn::UvUpdate;
 use libwebauthn_tests::virt::get_virtual_device;
 use test_log::test;
@@ -23,7 +23,7 @@ async fn test_webauthn_change_pin_once() {
     let protos = [Ctap2PinUvAuthProtocol::One, Ctap2PinUvAuthProtocol::Two];
     for proto in protos {
         let mut device = get_virtual_device();
-        let mut channel = device.channel().await.unwrap();
+        let mut channel = device.channel(ChannelSettings::default()).await.unwrap();
 
         let mut state_recv = channel.get_ux_update_receiver();
 
@@ -43,7 +43,7 @@ async fn test_webauthn_change_pin_twice() {
     let protos = [Ctap2PinUvAuthProtocol::One, Ctap2PinUvAuthProtocol::Two];
     for proto in protos {
         let mut device = get_virtual_device();
-        let mut channel = device.channel().await.unwrap();
+        let mut channel = device.channel(ChannelSettings::default()).await.unwrap();
 
         let state_recv = channel.get_ux_update_receiver();
         let update_handle = tokio::spawn(handle_updates(state_recv));

@@ -6,7 +6,7 @@ use libwebauthn::ops::webauthn::{
 };
 use libwebauthn::proto::ctap2::Ctap2PublicKeyCredentialDescriptor;
 use libwebauthn::transport::ble::list_devices;
-use libwebauthn::transport::{Channel as _, Device};
+use libwebauthn::transport::{Channel as _, ChannelSettings, Device};
 use libwebauthn::webauthn::WebAuthn;
 
 #[path = "../common/mod.rs"]
@@ -21,7 +21,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
 
     for mut device in devices {
         println!("Selected BLE authenticator: {}", &device);
-        let mut channel = device.channel().await?;
+        let mut channel = device.channel(ChannelSettings::default()).await?;
 
         let request_origin: RequestOrigin =
             "https://example.org".try_into().expect("Invalid origin");
