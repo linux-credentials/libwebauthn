@@ -188,6 +188,11 @@ impl Ctap2GetInfoResponse {
         self.option_enabled("credMgmt") || self.option_enabled("credentialMgmtPreview")
     }
 
+    /// CTAP 2.2+ persistent pinUvAuthToken for read-only credential management (pcmr).
+    pub fn supports_persistent_credential_management_read_only(&self) -> bool {
+        self.option_enabled("perCredMgmtRO")
+    }
+
     pub fn supports_bio_enrollment(&self) -> bool {
         if let Some(options) = &self.options {
             return options.get("bioEnroll").is_some()
@@ -316,6 +321,18 @@ mod test {
         assert!(!info.can_establish_shared_secret());
         assert_eq!(info.uv_operation(false), None);
         assert_eq!(info.uv_operation(true), None);
+    }
+
+    #[test]
+    fn per_cred_mgmt_ro_detection() {
+        assert!(
+            !Ctap2GetInfoResponse::default().supports_persistent_credential_management_read_only()
+        );
+        assert!(!create_info(&[]).supports_persistent_credential_management_read_only());
+        assert!(!create_info(&[("perCredMgmtRO", false)])
+            .supports_persistent_credential_management_read_only());
+        assert!(create_info(&[("perCredMgmtRO", true)])
+            .supports_persistent_credential_management_read_only());
     }
 
     #[test]

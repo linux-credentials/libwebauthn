@@ -47,7 +47,7 @@ macro_rules! handle_errors {
     ($channel: expr, $resp: expr, $uv_auth_used: expr, $timeout: expr) => {
         match $resp {
             Err(Error::Ctap(CtapError::PINAuthInvalid))
-                if $uv_auth_used == UsedPinUvAuthToken::FromStorage =>
+                if $uv_auth_used == UsedPinUvAuthToken::FromEphemeralStorage =>
             {
                 info!("PINAuthInvalid: Clearing auth token storage and trying again.");
                 $channel.clear_uv_auth_token_store();
