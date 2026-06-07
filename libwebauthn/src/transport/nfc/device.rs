@@ -77,7 +77,7 @@ impl NfcDevice {
         &self,
         settings: ChannelSettings,
     ) -> Result<NfcChannel<Context>, WebAuthnError<NfcError>> {
-        trace!("nfc channel {:?}", self);
+        trace!(?self, "Opening NFC channel");
         let mut channel: NfcChannel<Context> = match &self.info {
             #[cfg(feature = "nfc-backend-libnfc")]
             DeviceInfo::LibNfc(info) => info.channel(settings),
