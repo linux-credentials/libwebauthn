@@ -4,6 +4,9 @@ pub enum TransportError {
     ConnectionFailed,
     #[error("connection lost")]
     ConnectionLost,
+    /// The tunnel server returned HTTP 410 Gone for the contacted resource.
+    #[error("tunnel server reported the resource is gone")]
+    TunnelServerGone,
     #[error("invalid endpoint")]
     InvalidEndpoint,
     #[error("invalid framing")]
