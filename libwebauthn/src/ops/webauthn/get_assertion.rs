@@ -25,8 +25,8 @@ use crate::{
     },
     pin::PinUvAuthProtocol,
     proto::ctap2::{
-        Ctap2AttestationStatement, Ctap2GetAssertionResponseExtensions,
-        Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialUserEntity,
+        Ctap2GetAssertionResponseExtensions, Ctap2PublicKeyCredentialDescriptor,
+        Ctap2PublicKeyCredentialUserEntity,
     },
     webauthn::CtapError,
 };
@@ -452,8 +452,6 @@ pub struct Assertion {
     pub credentials_count: Option<u32>,
     pub user_selected: Option<bool>,
     pub unsigned_extensions_output: Option<GetAssertionResponseUnsignedExtensions>,
-    pub enterprise_attestation: Option<bool>,
-    pub attestation_statement: Option<Ctap2AttestationStatement>,
 }
 
 impl WebAuthnIDLResponse for Assertion {
@@ -1229,8 +1227,6 @@ mod tests {
             credentials_count: None,
             user_selected: None,
             unsigned_extensions_output: None,
-            enterprise_attestation: None,
-            attestation_statement: None,
         }
     }
 
