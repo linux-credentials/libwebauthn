@@ -10,6 +10,7 @@ const APDU_SHORT_MAX_LE: usize = 0x100;
 const APDU_SHORT_LE: usize = APDU_SHORT_MAX_LE;
 
 const APDI_LONG_MAX_DATA: usize = 0xFF_FF_FF;
+const APDU_EXTENDED_MAX_LE: usize = 0x1_0000;
 
 const U2F_REGISTER: u8 = 0x01;
 const U2F_AUTHENTICATE: u8 = 0x02;
@@ -127,7 +128,8 @@ impl From<&Ctap1RegisterRequest> for ApduRequest {
             CONTROL_BYTE_ENFORCE_UP_AND_SIGN,
             0x00,
             Some(&data),
-            Some(APDU_SHORT_LE),
+            // Register response can exceed 256B, so request full length (Le=0000 wildcard).
+            Some(APDU_EXTENDED_MAX_LE),
         )
     }
 }
@@ -260,27 +262,21 @@ mod tests {
     }
 
     #[test]
-    fn apdu_raw_long_register_request_is_case_4() {
-        // Mirrors the encoding produced by `From<&Ctap1RegisterRequest> for ApduRequest`.
-        let mut payload = vec![0x11u8; 32]; // challenge
-        payload.extend(vec![0x22u8; 32]); // app id hash
-        let apdu = ApduRequest::new(
-            0x01, // U2F_REGISTER
-            0x03, // CONTROL_BYTE_ENFORCE_UP_AND_SIGN
-            0x00,
-            Some(&payload),
-            Some(0x100),
-        );
+    fn apdu_raw_long_register_request_uses_le_wildcard() {
+        use crate::proto::ctap1::Ctap1RegisterRequest;
+        use std::time::Duration;
+
+        let request = Ctap1RegisterRequest::dummy(Duration::from_secs(1));
+        let apdu: ApduRequest = (&request).into();
         let serialized = apdu.raw_long().unwrap();
         // Header (4) + extended Lc (3) + payload (64) + extended Le (2)
         assert_eq!(serialized.len(), 4 + 3 + 64 + 2);
-        // Must terminate with the 2-byte Le; otherwise it is Case 3 and
-        // strict authenticators reject it.
+        // Must be the Le=0000 wildcard, not 256 (0x0100), which truncates on HID/BLE.
         let trailing = &serialized[serialized.len() - 2..];
         assert_eq!(
             trailing,
-            &[0x01, 0x00],
-            "REGISTER must be Case 4 with Le=256 (extended)",
+            &[0x00, 0x00],
+            "REGISTER must request full-length response (Le=0000 wildcard)",
         );
     }
 }
