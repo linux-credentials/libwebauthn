@@ -149,7 +149,7 @@ impl Ctap2MakeCredentialRequest {
             }
             Some(ResidentKeyRequirement::Required) => {
                 if !info.option_enabled("rk") {
-                    warn!("This request will potentially fail. Discoverable credential required, but device does not support it.");
+                    warn!("Discoverable credential required but device does not support it");
                 }
                 // We still send the request to the device and let it sort it out.
                 // We only add a warning for easier debugging.
@@ -308,7 +308,7 @@ impl Ctap2MakeCredentialsRequestExtensions {
             Err(err) => {
                 error!(
                     ?err,
-                    "Failed to encrypt hmac-secret-mc salts; dropping extension"
+                    "Failed to encrypt hmac-secret-mc salts, dropping extension"
                 );
                 return Ok(());
             }

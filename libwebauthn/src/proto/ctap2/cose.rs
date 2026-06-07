@@ -74,7 +74,7 @@ type CoseMap = std::collections::BTreeMap<Value, Value>;
 
 fn parse_cose_map(bytes: &[u8]) -> Result<CoseMap, Error> {
     let value: Value = serde_cbor_2::from_slice(bytes).map_err(|e| {
-        warn!(%e, "failed to parse COSE_Key as CBOR");
+        warn!(%e, "Failed to parse COSE_Key as CBOR");
         Error::Platform(PlatformError::InvalidDeviceResponse)
     })?;
     match value {
@@ -176,7 +176,7 @@ pub fn to_spki(bytes: &[u8]) -> Result<Option<Vec<u8>>, Error> {
 fn require_kty(map: &CoseMap, expected: i128) -> Result<(), Error> {
     let kty = map_integer(map, COSE_KEY_LABEL_KTY)?;
     if kty != expected {
-        warn!(expected, got = kty, "COSE_Key kty mismatch");
+        warn!({ expected, got = kty }, "COSE_Key kty mismatch");
         return Err(Error::Platform(PlatformError::InvalidDeviceResponse));
     }
     Ok(())
@@ -185,7 +185,7 @@ fn require_kty(map: &CoseMap, expected: i128) -> Result<(), Error> {
 fn require_crv(map: &CoseMap, expected: i128) -> Result<(), Error> {
     let crv = map_integer(map, COSE_KEY_LABEL_CRV)?;
     if crv != expected {
-        warn!(expected, got = crv, "COSE_Key crv mismatch");
+        warn!({ expected, got = crv }, "COSE_Key crv mismatch");
         return Err(Error::Platform(PlatformError::InvalidDeviceResponse));
     }
     Ok(())
@@ -194,8 +194,7 @@ fn require_crv(map: &CoseMap, expected: i128) -> Result<(), Error> {
 fn p256_spki(x: &[u8], y: &[u8]) -> Result<Vec<u8>, Error> {
     if x.len() != 32 || y.len() != 32 {
         warn!(
-            x_len = x.len(),
-            y_len = y.len(),
+            { x_len = x.len(), y_len = y.len() },
             "P-256 coordinates wrong size"
         );
         return Err(Error::Platform(PlatformError::InvalidDeviceResponse));
