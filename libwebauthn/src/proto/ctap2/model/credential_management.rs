@@ -31,6 +31,11 @@ pub struct Ctap2CredentialManagementRequest {
 
     #[serde(skip)]
     pub use_legacy_preview: bool,
+
+    /// Cached gate: request a persistent (pcmr) token instead of an ephemeral `cm` one.
+    /// Set from getInfo and store availability before `permissions()` is read.
+    #[serde(skip)]
+    pub use_persistent_token: bool,
 }
 
 #[repr(u32)]
@@ -43,6 +48,21 @@ pub enum Ctap2CredentialManagementSubcommand {
     EnumerateCredentialsGetNextCredential = 0x05,
     DeleteCredential = 0x06,
     UpdateUserInformation = 0x07,
+}
+
+impl Ctap2CredentialManagementSubcommand {
+    /// Read-only subcommands can be authorized by a persistent (pcmr) token; the write
+    /// subcommands (deleteCredential, updateUserInformation) cannot.
+    pub fn is_read_only(self) -> bool {
+        matches!(
+            self,
+            Self::GetCredsMetadata
+                | Self::EnumerateRPsBegin
+                | Self::EnumerateRPsGetNextRP
+                | Self::EnumerateCredentialsBegin
+                | Self::EnumerateCredentialsGetNextCredential
+        )
+    }
 }
 
 #[derive(Debug, Clone, SerializeIndexed)]
@@ -129,6 +149,7 @@ impl Ctap2CredentialManagementRequest {
             protocol: None,
             uv_auth_param: None,
             use_legacy_preview: false,
+            use_persistent_token: false,
         }
     }
 
@@ -139,6 +160,7 @@ impl Ctap2CredentialManagementRequest {
             protocol: None,
             uv_auth_param: None,
             use_legacy_preview: false,
+            use_persistent_token: false,
         }
     }
 
@@ -149,6 +171,7 @@ impl Ctap2CredentialManagementRequest {
             protocol: None,
             uv_auth_param: None,
             use_legacy_preview: false,
+            use_persistent_token: false,
         }
     }
 
@@ -163,6 +186,7 @@ impl Ctap2CredentialManagementRequest {
             protocol: None,
             uv_auth_param: None,
             use_legacy_preview: false,
+            use_persistent_token: false,
         }
     }
 
@@ -175,6 +199,7 @@ impl Ctap2CredentialManagementRequest {
             protocol: None,
             uv_auth_param: None,
             use_legacy_preview: false,
+            use_persistent_token: false,
         }
     }
 
@@ -189,6 +214,7 @@ impl Ctap2CredentialManagementRequest {
             protocol: None,
             uv_auth_param: None,
             use_legacy_preview: false,
+            use_persistent_token: false,
         }
     }
 
@@ -206,6 +232,7 @@ impl Ctap2CredentialManagementRequest {
             protocol: None,
             uv_auth_param: None,
             use_legacy_preview: false,
+            use_persistent_token: false,
         }
     }
 }
@@ -266,5 +293,34 @@ pub struct Ctap2RPData {
 impl Ctap2RPData {
     pub fn new(rp: Ctap2PublicKeyCredentialRpEntity, rp_id_hash: Vec<u8>) -> Self {
         Self { rp, rp_id_hash }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::Ctap2CredentialManagementSubcommand as Sub;
+
+    #[test]
+    fn read_only_classification() {
+        // Read-only: authorizable by a pcmr token.
+        for subcommand in [
+            Sub::GetCredsMetadata,
+            Sub::EnumerateRPsBegin,
+            Sub::EnumerateRPsGetNextRP,
+            Sub::EnumerateCredentialsBegin,
+            Sub::EnumerateCredentialsGetNextCredential,
+        ] {
+            assert!(
+                subcommand.is_read_only(),
+                "{subcommand:?} should be read-only"
+            );
+        }
+        // Writes: never pcmr.
+        for subcommand in [Sub::DeleteCredential, Sub::UpdateUserInformation] {
+            assert!(
+                !subcommand.is_read_only(),
+                "{subcommand:?} should be a write"
+            );
+        }
     }
 }

@@ -6,6 +6,9 @@ use tracing::{debug, error, info, instrument, warn};
 use cosey::PublicKey;
 
 use crate::ops::webauthn::UserVerificationRequirement;
+use crate::pin::persistent_token::{
+    recognize_authenticator, store_minted_token, PersistentTokenRecordId,
+};
 use crate::pin::{
     internal::PinManagementInternal, pin_hash, PinNotSetReason, PinRequestReason,
     PinUvAuthProtocol, PinUvAuthProtocolOne, PinUvAuthProtocolTwo,
@@ -19,10 +22,12 @@ use crate::transport::{AuthTokenData, Channel, Ctap2AuthTokenPermission};
 pub use crate::webauthn::error::{CtapError, Error, PlatformError};
 use crate::{PinNotSetUpdate, PinRequiredUpdate, UvUpdate};
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum UsedPinUvAuthToken {
     FromEphemeralStorage,
+    /// A persistent (pcmr) token reused from the store. Carries the record id so the
+    /// invalidation path can evict it on rejection.
+    FromPersistentStorage(PersistentTokenRecordId),
     NewlyCalculated(Ctap2UserVerificationOperation),
     LegacyUV,
     SharedSecretOnly,
@@ -70,6 +75,24 @@ where
 {
     let mut get_info_response = channel.ctap2_get_info().await?;
     ctap2_request.handle_legacy_preview(&get_info_response);
+
+    // Decide whether this request acquires a persistent (pcmr) token. A persistent token
+    // outranks a same-session ephemeral one, so try it first.
+    let persistent_token_store = channel.persistent_token_store();
+    ctap2_request.set_persistent_token_use(&get_info_response, persistent_token_store.is_some());
+    if ctap2_request.wants_persistent_token() {
+        if let Some(store) = &persistent_token_store {
+            if let Some((id, record)) =
+                recognize_authenticator(store.as_ref(), &get_info_response).await
+            {
+                let uv_proto = record.pin_uv_auth_protocol.create_protocol_object();
+                ctap2_request
+                    .calculate_and_set_uv_auth(uv_proto.as_ref(), &record.persistent_token)?;
+                return Ok(UsedPinUvAuthToken::FromPersistentStorage(id));
+            }
+        }
+    }
+
     let maybe_uv_proto = select_uv_proto(
         #[cfg(feature = "virt")]
         channel.get_forced_pin_protocol(),
@@ -377,22 +400,39 @@ where
                     return Err(Error::Ctap(CtapError::Other));
                 }
 
-                let token_identifier = Ctap2AuthTokenPermission::new(
-                    uv_proto.version(),
-                    ctap2_request.permissions(),
-                    ctap2_request.permissions_rpid(),
-                );
+                if ctap2_request.wants_persistent_token() {
+                    // pcmr mint: persist for cross-session reuse, and keep it out of the
+                    // ephemeral cache entirely so reuse always flows through recognition.
+                    if let Some(store) = channel.persistent_token_store() {
+                        if let Err(e) = store_minted_token(
+                            store.as_ref(),
+                            get_info_response,
+                            &uv_auth_token,
+                            uv_proto.version(),
+                        )
+                        .await
+                        {
+                            warn!(?e, "Failed to persist minted pcmr token; continuing");
+                        }
+                    }
+                } else {
+                    let token_identifier = Ctap2AuthTokenPermission::new(
+                        uv_proto.version(),
+                        ctap2_request.permissions(),
+                        ctap2_request.permissions_rpid(),
+                    );
 
-                // Storing auth token for later (re)use
-                let auth_token_data = AuthTokenData {
-                    shared_secret: shared_secret.to_vec(),
-                    permission: Some(token_identifier),
-                    pin_uv_auth_token: Some(uv_auth_token.clone()),
-                    protocol_version: uv_proto.version(),
-                    key_agreement: public_key,
-                    uv_operation,
-                };
-                channel.store_auth_data(auth_token_data);
+                    // Storing auth token for later (re)use
+                    let auth_token_data = AuthTokenData {
+                        shared_secret: shared_secret.to_vec(),
+                        permission: Some(token_identifier),
+                        pin_uv_auth_token: Some(uv_auth_token.clone()),
+                        protocol_version: uv_proto.version(),
+                        key_agreement: public_key,
+                        uv_operation,
+                    };
+                    channel.store_auth_data(auth_token_data);
+                }
 
                 // If successful, the platform creates the pinUvAuthParam parameter by calling
                 // authenticate(pinUvAuthToken, clientDataHash), and goes to Step 1.1.1.
@@ -548,17 +588,24 @@ mod test {
     use serde_bytes::ByteBuf;
     use tokio::sync::broadcast::Receiver;
 
+    use std::sync::Arc;
+
     use crate::{
         ops::webauthn::{
             GetAssertionRequest, GetAssertionRequestExtensions, PrfInput, PrfInputValue,
             UserVerificationRequirement,
         },
+        pin::persistent_token::{
+            build_enc_identifier, MemoryPersistentTokenStore, PersistentTokenRecord,
+            PersistentTokenStore,
+        },
         pin::{pin_hash, PinNotSetReason, PinUvAuthProtocol, PinUvAuthProtocolOne},
         proto::ctap2::{
             cbor::{to_vec, CborRequest, CborResponse},
-            Ctap2ClientPinRequest, Ctap2ClientPinResponse, Ctap2CommandCode,
-            Ctap2GetAssertionRequest, Ctap2GetInfoResponse, Ctap2PinUvAuthProtocol,
-            Ctap2UserVerifiableRequest, Ctap2UserVerificationOperation,
+            Ctap2AuthTokenPermissionRole, Ctap2ClientPinRequest, Ctap2ClientPinResponse,
+            Ctap2CommandCode, Ctap2CredentialManagementRequest, Ctap2GetAssertionRequest,
+            Ctap2GetInfoResponse, Ctap2PinUvAuthProtocol, Ctap2UserVerifiableRequest,
+            Ctap2UserVerificationOperation,
         },
         transport::{mock::channel::MockChannel, Channel, Ctap2AuthTokenStore},
         webauthn::UsedPinUvAuthToken,
@@ -1406,5 +1453,231 @@ mod test {
             // No more updates should be sent
             assert!(recv.is_empty());
         }
+    }
+
+    fn pcmr_get_info(
+        options: &[(&'static str, bool)],
+        token: &[u8],
+        device_identifier: [u8; 16],
+        aaguid: [u8; 16],
+    ) -> Ctap2GetInfoResponse {
+        let mut opts = HashMap::new();
+        for (key, value) in options {
+            opts.insert(key.to_string(), *value);
+        }
+        Ctap2GetInfoResponse {
+            options: Some(opts),
+            pin_auth_protos: Some(vec![1]),
+            aaguid: ByteBuf::from(aaguid.to_vec()),
+            enc_identifier: Some(ByteBuf::from(build_enc_identifier(
+                token,
+                &device_identifier,
+                &[0x33; 16],
+            ))),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn read_only_credmgmt_requests_pcmr_with_store_and_support() {
+        let info = create_info(&[("perCredMgmtRO", true)], None);
+        let mut req = Ctap2CredentialManagementRequest::new_get_credential_metadata();
+        req.set_persistent_token_use(&info, true);
+        assert!(req.wants_persistent_token());
+        assert_eq!(
+            req.permissions(),
+            Ctap2AuthTokenPermissionRole::PERSISTENT_CREDENTIAL_MANAGEMENT_READ_ONLY
+        );
+    }
+
+    #[test]
+    fn read_only_credmgmt_keeps_cm_without_store() {
+        let info = create_info(&[("perCredMgmtRO", true)], None);
+        let mut req = Ctap2CredentialManagementRequest::new_get_credential_metadata();
+        req.set_persistent_token_use(&info, false);
+        assert!(!req.wants_persistent_token());
+        assert_eq!(
+            req.permissions(),
+            Ctap2AuthTokenPermissionRole::CREDENTIAL_MANAGEMENT
+        );
+    }
+
+    #[test]
+    fn read_only_credmgmt_keeps_cm_without_support() {
+        let info = create_info(&[], None);
+        let mut req = Ctap2CredentialManagementRequest::new_get_credential_metadata();
+        req.set_persistent_token_use(&info, true);
+        assert!(!req.wants_persistent_token());
+        assert_eq!(
+            req.permissions(),
+            Ctap2AuthTokenPermissionRole::CREDENTIAL_MANAGEMENT
+        );
+    }
+
+    #[tokio::test]
+    async fn persistent_token_reused_on_recognition() {
+        let mut channel = MockChannel::new();
+        let status_recv = channel.get_ux_update_receiver();
+
+        let token = vec![0x5A; 32];
+        let device_identifier = [0x42; 16];
+        let aaguid = [0x01; 16];
+
+        let store = Arc::new(MemoryPersistentTokenStore::new());
+        store
+            .put(
+                &"rec-1".to_string(),
+                &PersistentTokenRecord {
+                    persistent_token: token.clone(),
+                    pin_uv_auth_protocol: Ctap2PinUvAuthProtocol::One,
+                    device_identifier,
+                    aaguid,
+                },
+            )
+            .await;
+        channel.set_persistent_token_store(store.clone());
+
+        let info = pcmr_get_info(
+            &[
+                ("clientPin", true),
+                ("pinUvAuthToken", true),
+                ("perCredMgmtRO", true),
+            ],
+            &token,
+            device_identifier,
+            aaguid,
+        );
+        let info_req = CborRequest::new(Ctap2CommandCode::AuthenticatorGetInfo);
+        let info_resp = CborResponse::new_success_from_slice(to_vec(&info).unwrap().as_slice());
+        channel.push_command_pair(info_req, info_resp);
+
+        let mut req = Ctap2CredentialManagementRequest::new_get_credential_metadata();
+        let result = user_verification(
+            &mut channel,
+            UserVerificationRequirement::Preferred,
+            &mut req,
+            TIMEOUT,
+        )
+        .await;
+
+        // Reused from the persistent store, carrying the record id for invalidation.
+        assert_eq!(
+            result,
+            Ok(UsedPinUvAuthToken::FromPersistentStorage(
+                "rec-1".to_string()
+            ))
+        );
+        // The reused token must never enter the ephemeral cache.
+        assert!(channel.get_auth_data().is_none());
+        // No PIN or presence prompt, because nothing was minted.
+        assert!(status_recv.is_empty());
+        // The request carries a pinUvAuthParam computed under the record's protocol.
+        assert!(req.uv_auth_param.is_some());
+        assert_eq!(req.protocol, Some(Ctap2PinUvAuthProtocol::One));
+    }
+
+    #[tokio::test]
+    async fn persistent_token_minted_with_pcmr_permission() {
+        let mut channel = MockChannel::new();
+        let device_identifier = [0x42; 16];
+        let aaguid = [0x07; 16];
+        let token = [0x05; 16];
+
+        let store = Arc::new(MemoryPersistentTokenStore::new());
+        channel.set_persistent_token_store(store.clone());
+
+        // UV path (uv + pinUvAuthToken), so no PIN entry; perCredMgmtRO advertised.
+        let info = pcmr_get_info(
+            &[
+                ("uv", true),
+                ("pinUvAuthToken", true),
+                ("perCredMgmtRO", true),
+            ],
+            &token,
+            device_identifier,
+            aaguid,
+        );
+        let info_req = CborRequest::new(Ctap2CommandCode::AuthenticatorGetInfo);
+        let info_resp = CborResponse::new_success_from_slice(to_vec(&info).unwrap().as_slice());
+        channel.push_command_pair(info_req, info_resp);
+
+        let key_agreement_req = CborRequest::try_from(
+            &Ctap2ClientPinRequest::new_get_key_agreement(Ctap2PinUvAuthProtocol::One),
+        )
+        .unwrap();
+        let key_agreement_resp = CborResponse::new_success_from_slice(
+            to_vec(&Ctap2ClientPinResponse {
+                key_agreement: Some(get_key_agreement()),
+                pin_uv_auth_token: None,
+                pin_retries: None,
+                power_cycle_state: None,
+                uv_retries: None,
+            })
+            .unwrap()
+            .as_slice(),
+        );
+        channel.push_command_pair(key_agreement_req, key_agreement_resp);
+
+        let pin_protocol = PinUvAuthProtocolOne::new();
+        let (public_key, shared_secret) = pin_protocol.encapsulate(&get_key_agreement()).unwrap();
+        // The token request MUST carry pcmr (0x40) as the sole permission. MockChannel
+        // asserts request equality, so a wrong permission bit fails here.
+        let uv_token_req =
+            CborRequest::try_from(&Ctap2ClientPinRequest::new_get_uv_token_with_perm(
+                Ctap2PinUvAuthProtocol::One,
+                public_key,
+                Ctap2AuthTokenPermissionRole::PERSISTENT_CREDENTIAL_MANAGEMENT_READ_ONLY,
+                None,
+            ))
+            .unwrap();
+        let encrypted_token = pin_protocol.encrypt(&shared_secret, &token).unwrap();
+        let uv_token_resp = CborResponse::new_success_from_slice(
+            to_vec(&Ctap2ClientPinResponse {
+                key_agreement: None,
+                pin_uv_auth_token: Some(ByteBuf::from(encrypted_token)),
+                pin_retries: None,
+                power_cycle_state: None,
+                uv_retries: None,
+            })
+            .unwrap()
+            .as_slice(),
+        );
+        channel.push_command_pair(uv_token_req, uv_token_resp);
+
+        let mut recv = channel.get_ux_update_receiver();
+        let recv_handle = tokio::task::spawn(async move {
+            assert_eq!(recv.recv().await, Ok(UvUpdate::PresenceRequired));
+            recv
+        });
+
+        let mut req = Ctap2CredentialManagementRequest::new_get_credential_metadata();
+        let result = user_verification(
+            &mut channel,
+            UserVerificationRequirement::Preferred,
+            &mut req,
+            TIMEOUT,
+        )
+        .await;
+
+        assert_eq!(
+            result,
+            Ok(UsedPinUvAuthToken::NewlyCalculated(
+                Ctap2UserVerificationOperation::GetPinUvAuthTokenUsingUvWithPermissions
+            ))
+        );
+        // The minted pcmr token is persisted, not cached ephemerally.
+        assert!(channel.get_auth_data().is_none());
+        let listed = store.list().await;
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].1.device_identifier, device_identifier);
+        assert_eq!(listed[0].1.persistent_token, token.to_vec());
+        assert_eq!(listed[0].1.aaguid, aaguid);
+        assert_eq!(
+            listed[0].1.pin_uv_auth_protocol,
+            Ctap2PinUvAuthProtocol::One
+        );
+
+        let recv = recv_handle.await.expect("Failed to join update thread");
+        assert!(recv.is_empty());
     }
 }

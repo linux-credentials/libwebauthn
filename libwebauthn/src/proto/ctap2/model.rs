@@ -310,6 +310,15 @@ pub trait Ctap2UserVerifiableRequest {
     fn handle_legacy_preview(&mut self, info: &Ctap2GetInfoResponse);
     /// We need to establish a shared secret, even if no PIN or UV is set on the device
     fn needs_shared_secret(&self, info: &Ctap2GetInfoResponse) -> bool;
+    /// Decide, and cache on the request, whether to acquire a persistent (pcmr) token.
+    /// Called once from the UV flow with whether a persistent token store is available.
+    /// Default: never request one.
+    fn set_persistent_token_use(&mut self, _info: &Ctap2GetInfoResponse, _store_available: bool) {}
+    /// Whether this request will reuse or mint a persistent (pcmr) token, per the cached
+    /// decision from [`Self::set_persistent_token_use`]. Default false.
+    fn wants_persistent_token(&self) -> bool {
+        false
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
