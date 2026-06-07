@@ -505,6 +505,10 @@ impl Display for HidChannel<'_> {
 impl Channel for HidChannel<'_> {
     type UxUpdate = UvUpdate;
 
+    fn transport(&self) -> Option<crate::Transport> {
+        Some(crate::Transport::Usb)
+    }
+
     async fn supported_protocols(&self) -> Result<SupportedProtocols, Error> {
         let cbor_supported = self.init.caps.contains(Caps::CBOR);
         let apdu_supported = !self.init.caps.contains(Caps::NO_MSG);

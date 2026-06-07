@@ -489,6 +489,7 @@ impl WebAuthnIDLResponse for Assertion {
     fn to_idl_model(
         &self,
         request: &Self::Context,
+        _transport: Option<crate::Transport>,
     ) -> Result<Self::IdlModel, ResponseSerializationError> {
         // Get credential ID - either from credential_id field or from authenticator_data
         let credential_id_bytes = self
@@ -1306,7 +1307,7 @@ mod tests {
 
         let assertion = create_test_assertion();
         let request = create_test_request();
-        let json = assertion.to_json_string(&request, JsonFormat::default());
+        let json = assertion.to_json_string(&request, None, JsonFormat::default());
         assert!(json.is_ok());
 
         let json_str = json.unwrap();
@@ -1332,7 +1333,7 @@ mod tests {
     fn test_assertion_to_idl_model() {
         let assertion = create_test_assertion();
         let request = create_test_request();
-        let model = assertion.to_idl_model(&request).unwrap();
+        let model = assertion.to_idl_model(&request, None).unwrap();
 
         // Verify the credential ID
         assert_eq!(model.raw_id.0, vec![0x01, 0x02, 0x03, 0x04]);
@@ -1354,7 +1355,7 @@ mod tests {
         ));
 
         let request = create_test_request();
-        let model = assertion.to_idl_model(&request).unwrap();
+        let model = assertion.to_idl_model(&request, None).unwrap();
 
         // Verify user handle is present
         assert!(model.response.user_handle.is_some());
@@ -1381,7 +1382,7 @@ mod tests {
         });
 
         let request = create_test_request();
-        let model = assertion.to_idl_model(&request).unwrap();
+        let model = assertion.to_idl_model(&request, None).unwrap();
 
         // Verify extension outputs - PRF should be set with correct values
         let prf = model.client_extension_results.prf.as_ref().unwrap();
@@ -1403,7 +1404,7 @@ mod tests {
         });
 
         let request = create_test_request();
-        let model = assertion.to_idl_model(&request).unwrap();
+        let model = assertion.to_idl_model(&request, None).unwrap();
         assert_eq!(model.client_extension_results.appid, Some(true));
 
         // The output should also round-trip through the JSON wire format.
@@ -1427,7 +1428,7 @@ mod tests {
         });
 
         let request = create_test_request();
-        let model = assertion.to_idl_model(&request).unwrap();
+        let model = assertion.to_idl_model(&request, None).unwrap();
         assert_eq!(model.client_extension_results.appid, None);
 
         let json = serde_json::to_value(&model.client_extension_results).unwrap();

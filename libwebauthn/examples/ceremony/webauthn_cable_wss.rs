@@ -110,7 +110,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
 
         let response = retry_user_errors!(channel.webauthn_make_credential(&request)).unwrap();
         let response_json = response
-            .to_json_string(&request, JsonFormat::Prettified)
+            .to_json_string(&request, channel.transport(), JsonFormat::Prettified)
             .expect("Failed to serialize MakeCredential response");
         println!("WebAuthn MakeCredential response (JSON):\n{response_json}");
     }
@@ -182,7 +182,7 @@ async fn run_get_assertion(
     let response = retry_user_errors!(channel.webauthn_get_assertion(&request)).unwrap();
     for assertion in &response.assertions {
         let assertion_json = assertion
-            .to_json_string(&request, JsonFormat::Prettified)
+            .to_json_string(&request, channel.transport(), JsonFormat::Prettified)
             .expect("Failed to serialize GetAssertion response");
         println!("WebAuthn GetAssertion response (JSON):\n{assertion_json}");
     }

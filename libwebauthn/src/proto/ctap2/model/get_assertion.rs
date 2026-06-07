@@ -1337,7 +1337,7 @@ mod tests {
         );
         let assertion = parsed.into_assertion_output(&request, None);
         let json_str = assertion
-            .to_json_string(&request, JsonFormat::default())
+            .to_json_string(&request, None, JsonFormat::default())
             .unwrap();
         let json: serde_json::Value = serde_json::from_str(&json_str).unwrap();
 
@@ -1442,7 +1442,7 @@ mod tests {
         let request = make_request(vec![make_credential(b"cred-1")]);
         let assertion = parsed.into_assertion_output(&request, None);
         let json_str = assertion
-            .to_json_string(&request, JsonFormat::default())
+            .to_json_string(&request, None, JsonFormat::default())
             .unwrap();
         let json: serde_json::Value = serde_json::from_str(&json_str).unwrap();
 

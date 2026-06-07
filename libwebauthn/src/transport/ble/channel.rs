@@ -81,6 +81,10 @@ impl Display for BleChannel<'_> {
 impl<'a> Channel for BleChannel<'a> {
     type UxUpdate = UvUpdate;
 
+    fn transport(&self) -> Option<crate::Transport> {
+        Some(crate::Transport::Ble)
+    }
+
     async fn supported_protocols(&self) -> Result<SupportedProtocols, Error> {
         Ok(self.revision.into())
     }

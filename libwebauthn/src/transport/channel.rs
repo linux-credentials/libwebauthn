@@ -64,6 +64,12 @@ pub trait Channel: Send + Sync + Display + Ctap2AuthTokenStore {
     async fn status(&self) -> ChannelStatus;
     async fn close(&mut self);
 
+    /// The transport this channel speaks over, used to populate the registration
+    /// response `transports` member. `None` means unknown.
+    fn transport(&self) -> Option<crate::Transport> {
+        None
+    }
+
     async fn apdu_send(&mut self, request: &ApduRequest, timeout: Duration) -> Result<(), Error>;
     async fn apdu_recv(&mut self, timeout: Duration) -> Result<ApduResponse, Error>;
 

@@ -79,7 +79,11 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
                 .unwrap();
         println!("WebAuthn MakeCredential response: {:?}", response);
 
-        match response.to_json_string(&make_credentials_request, JsonFormat::Prettified) {
+        match response.to_json_string(
+            &make_credentials_request,
+            channel.transport(),
+            JsonFormat::Prettified,
+        ) {
             Ok(response_json) => {
                 println!(
                     "WebAuthn MakeCredential response (JSON):\n{}",
@@ -117,7 +121,11 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         println!("WebAuthn GetAssertion response: {:?}", response);
 
         for assertion in &response.assertions {
-            match assertion.to_json_string(&get_assertion, JsonFormat::Prettified) {
+            match assertion.to_json_string(
+                &get_assertion,
+                channel.transport(),
+                JsonFormat::Prettified,
+            ) {
                 Ok(assertion_json) => {
                     println!("WebAuthn GetAssertion response (JSON):\n{}", assertion_json);
                 }

@@ -29,7 +29,7 @@ use crate::{
             cbor, cbor::Value, cose, parse_unsigned_prf, Ctap2AttestationStatement,
             Ctap2COSEAlgorithmIdentifier, Ctap2CredentialType, Ctap2GetInfoResponse,
             Ctap2MakeCredentialsResponseExtensions, Ctap2PublicKeyCredentialDescriptor,
-            Ctap2PublicKeyCredentialRpEntity, Ctap2PublicKeyCredentialUserEntity,
+            Ctap2PublicKeyCredentialRpEntity, Ctap2PublicKeyCredentialUserEntity, Ctap2Transport,
             UnsignedPrfOutput,
         },
     },
@@ -60,6 +60,21 @@ struct AttestationObject<'a> {
     attestation_statement: &'a Ctap2AttestationStatement,
 }
 
+/// Maps the active transport to AuthenticatorTransport tokens for the registration
+/// `transports` member. The list is deduplicated and lexicographically sorted per
+/// WebAuthn L3 §5.2.1.1, and is empty when the transport is unknown.
+fn registration_transports(transport: Option<crate::Transport>) -> Vec<String> {
+    let mut tokens: Vec<String> = transport
+        .into_iter()
+        .map(Ctap2Transport::from)
+        .filter_map(|t| serde_json::to_value(t).ok())
+        .filter_map(|v| v.as_str().map(str::to_owned))
+        .collect();
+    tokens.sort();
+    tokens.dedup();
+    tokens
+}
+
 impl WebAuthnIDLResponse for MakeCredentialResponse {
     type IdlModel = RegistrationResponseJSON;
     type Context = MakeCredentialRequest;
@@ -67,6 +82,7 @@ impl WebAuthnIDLResponse for MakeCredentialResponse {
     fn to_idl_model(
         &self,
         request: &Self::Context,
+        transport: Option<crate::Transport>,
     ) -> Result<Self::IdlModel, ResponseSerializationError> {
         // The AT flag MUST be set on makeCredential responses per CTAP 2.2 §6.1.
         let attested = self
@@ -102,8 +118,7 @@ impl WebAuthnIDLResponse for MakeCredentialResponse {
         // Build attestation object (CBOR map with authData, fmt, attStmt)
         let attestation_object_bytes = self.build_attestation_object(&authenticator_data_bytes)?;
 
-        // Get transports (we don't have direct access, so return empty for now)
-        let transports = Vec::new();
+        let transports = registration_transports(transport);
 
         // Build client extension results
         let client_extension_results = self.build_client_extension_results();
@@ -1434,7 +1449,7 @@ mod tests {
 
         let response = create_test_response();
         let request = create_test_request();
-        let json = response.to_json_string(&request, JsonFormat::default());
+        let json = response.to_json_string(&request, None, JsonFormat::default());
         assert!(json.is_ok());
 
         let json_str = json.unwrap();
@@ -1489,7 +1504,7 @@ mod tests {
     fn test_response_to_idl_model() {
         let response = create_test_response();
         let request = create_test_request();
-        let model = response.to_idl_model(&request).unwrap();
+        let model = response.to_idl_model(&request, None).unwrap();
 
         // Verify the credential ID
         assert_eq!(model.raw_id.0, vec![0x01, 0x02, 0x03, 0x04]);
@@ -1504,6 +1519,41 @@ mod tests {
     }
 
     #[test]
+    fn test_response_to_idl_model_populates_transports() {
+        // WebAuthn L3 §5.2.1.1: the registration `transports` member reports the
+        // transport the credential was created over, as AuthenticatorTransport tokens.
+        // Both the FIDO2 and U2F-downgrade paths converge on this serialization.
+        let response = create_test_response();
+        let request = create_test_request();
+
+        for (transport, token) in [
+            (crate::Transport::Usb, "usb"),
+            (crate::Transport::Ble, "ble"),
+            (crate::Transport::Nfc, "nfc"),
+            (crate::Transport::Hybrid, "hybrid"),
+        ] {
+            let model = response.to_idl_model(&request, Some(transport)).unwrap();
+            assert_eq!(model.response.transports, vec![token.to_string()]);
+        }
+
+        // The token reaches the JSON wire format too.
+        let json = response
+            .to_json_string(
+                &request,
+                Some(crate::Transport::Nfc),
+                crate::ops::webauthn::idl::response::JsonFormat::default(),
+            )
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let transports = parsed["response"]["transports"].as_array().unwrap();
+        assert_eq!(transports, &vec![serde_json::Value::from("nfc")]);
+
+        // An unknown transport leaves the list empty.
+        let model = response.to_idl_model(&request, None).unwrap();
+        assert!(model.response.transports.is_empty());
+    }
+
+    #[test]
     fn test_response_emits_spki_for_es256() {
         // The test fixture builds an ES256 P-256 credential, so getPublicKey()
         // must return DER-encoded SubjectPublicKeyInfo per WebAuthn L3 §5.2.1.1.
@@ -1512,7 +1562,7 @@ mod tests {
         // by the secp256r1 OID and the uncompressed point.
         let response = create_test_response();
         let request = create_test_request();
-        let model = response.to_idl_model(&request).unwrap();
+        let model = response.to_idl_model(&request, None).unwrap();
 
         let public_key_bytes = model
             .response
@@ -1536,7 +1586,7 @@ mod tests {
     fn test_response_attestation_object_format() {
         let response = create_test_response();
         let request = create_test_request();
-        let model = response.to_idl_model(&request).unwrap();
+        let model = response.to_idl_model(&request, None).unwrap();
 
         // Decode the attestation object
         let attestation_bytes = model.response.attestation_object.0;
@@ -1581,7 +1631,7 @@ mod tests {
         };
 
         let request = create_test_request();
-        let model = response.to_idl_model(&request).unwrap();
+        let model = response.to_idl_model(&request, None).unwrap();
 
         // Verify cred_props extension
         let cred_props = model.client_extension_results.cred_props.as_ref().unwrap();

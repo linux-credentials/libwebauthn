@@ -76,7 +76,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
 
         let response = retry_user_errors!(channel.webauthn_make_credential(&request)).unwrap();
         let response_json = response
-            .to_json_string(&request, JsonFormat::Prettified)
+            .to_json_string(&request, channel.transport(), JsonFormat::Prettified)
             .expect("Failed to serialize MakeCredential response");
         println!("WebAuthn MakeCredential response (JSON):\n{response_json}");
     }

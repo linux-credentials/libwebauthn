@@ -259,6 +259,10 @@ where
 {
     type UxUpdate = UvUpdate;
 
+    fn transport(&self) -> Option<crate::Transport> {
+        Some(crate::Transport::Nfc)
+    }
+
     async fn supported_protocols(&self) -> Result<SupportedProtocols, Error> {
         Ok(self.supported)
     }

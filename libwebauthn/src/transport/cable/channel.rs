@@ -125,6 +125,10 @@ impl From<UvUpdate> for CableUxUpdate {
 impl Channel for CableChannel {
     type UxUpdate = CableUxUpdate;
 
+    fn transport(&self) -> Option<crate::Transport> {
+        Some(crate::Transport::Hybrid)
+    }
+
     async fn supported_protocols(&self) -> Result<SupportedProtocols, Error> {
         Ok(SupportedProtocols::fido2_only())
     }

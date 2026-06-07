@@ -167,6 +167,17 @@ impl From<&Ctap1Transport> for Ctap2Transport {
     }
 }
 
+impl From<crate::Transport> for Ctap2Transport {
+    fn from(transport: crate::Transport) -> Ctap2Transport {
+        match transport {
+            crate::Transport::Usb => Ctap2Transport::Usb,
+            crate::Transport::Ble => Ctap2Transport::Ble,
+            crate::Transport::Nfc => Ctap2Transport::Nfc,
+            crate::Transport::Hybrid => Ctap2Transport::Hybrid,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Ctap2PublicKeyCredentialDescriptor {
     pub id: ByteBuf,

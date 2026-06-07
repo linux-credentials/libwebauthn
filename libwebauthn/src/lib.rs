@@ -120,10 +120,12 @@ macro_rules! unwrap_field {
 use pin::{PinNotSetReason, PinRequestReason};
 pub(crate) use unwrap_field;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Transport {
     Usb,
     Ble,
+    Nfc,
+    Hybrid,
 }
 
 #[derive(Debug, Clone)]
@@ -213,6 +215,36 @@ impl PartialEq for PinNotSetUpdate {
     }
 }
 
+/// Transports compiled into this build. Hybrid/caBLE is always included. Using it
+/// at runtime still needs a BLE adapter (see `transport::cable::is_available`).
+/// NFC appears only when an `nfc-backend-*` feature is enabled.
 pub fn available_transports() -> Vec<Transport> {
-    vec![Transport::Usb, Transport::Ble]
+    [
+        Transport::Usb,
+        Transport::Ble,
+        Transport::Hybrid,
+        #[cfg(any(feature = "nfc-backend-pcsc", feature = "nfc-backend-libnfc"))]
+        Transport::Nfc,
+    ]
+    .into_iter()
+    .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn available_transports_reports_compiled_in() {
+        let transports = available_transports();
+        assert!(transports.contains(&Transport::Usb));
+        assert!(transports.contains(&Transport::Ble));
+        assert!(transports.contains(&Transport::Hybrid));
+
+        let nfc_compiled = cfg!(any(
+            feature = "nfc-backend-pcsc",
+            feature = "nfc-backend-libnfc"
+        ));
+        assert_eq!(transports.contains(&Transport::Nfc), nfc_compiled);
+    }
 }
