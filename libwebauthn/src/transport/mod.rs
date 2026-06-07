@@ -30,6 +30,7 @@ pub mod nfc {
         false
     }
 }
+pub mod usb;
 
 mod channel;
 #[allow(clippy::module_inception)]
@@ -43,3 +44,4 @@ pub use channel::ChannelStatus;
 
 pub use device::Device;
 pub use transport::Transport;
+pub use usb::UsbDeviceId;

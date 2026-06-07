@@ -4,8 +4,8 @@ use libwebauthn::ops::webauthn::{
     GetAssertionRequest, JsonFormat, MakeCredentialRequest, OriginValidation, RelatedOrigins,
     RequestOrigin, RequestSettings, SystemPublicSuffixList, WebAuthnIDLResponse as _,
 };
-use libwebauthn::transport::nfc::{get_nfc_device, is_nfc_available};
-use libwebauthn::transport::{Channel as _, ChannelSettings, Device};
+use libwebauthn::transport::nfc::NfcDeviceSliceExt;
+use libwebauthn::transport::{hid, nfc, Channel as _, ChannelSettings, Device};
 use libwebauthn::webauthn::WebAuthn;
 
 #[path = "../common/mod.rs"]
@@ -15,16 +15,38 @@ mod common;
 pub async fn main() -> Result<(), Box<dyn Error>> {
     common::setup_logging();
 
-    if !is_nfc_available() {
+    if !nfc::is_nfc_available() {
         println!("No NFC-Reader found. NFC is not available on your system.");
         return Err("NFC not available".into());
     }
 
-    let Some(mut device) = get_nfc_device().await? else {
+    // A USB key's CCID interface also shows up as a PC/SC reader, so drop the
+    // NFC entries that duplicate a connected HID key.
+    let hid_devices = hid::list_devices().await.unwrap_or_default();
+    let nfc_devices = nfc::list_devices().await;
+    let discovered = nfc_devices.len();
+    let nfc_devices = nfc_devices.without_hid_duplicates(&hid_devices);
+    println!(
+        "Discovered {discovered} NFC device(s); dropped {} that duplicate a connected HID key.",
+        discovered - nfc_devices.len()
+    );
+
+    // Unfiltered, so keep the first survivor that opens a FIDO channel.
+    let mut selected = None;
+    for mut device in nfc_devices {
+        match device.channel(ChannelSettings::default()).await {
+            Ok(channel) => {
+                println!("Selected NFC authenticator: {device}");
+                selected = Some(channel);
+                break;
+            }
+            Err(error) => println!("Skipping NFC reader (no FIDO applet): {error}"),
+        }
+    }
+    let Some(mut channel) = selected else {
+        println!("No FIDO NFC authenticator found after de-duplication.");
         return Ok(());
     };
-    println!("Selected NFC authenticator: {}", device);
-    let mut channel = device.channel(ChannelSettings::default()).await?;
 
     let request_origin: RequestOrigin = "https://example.org".try_into().expect("Invalid origin");
     let psl = SystemPublicSuffixList::auto().expect(
