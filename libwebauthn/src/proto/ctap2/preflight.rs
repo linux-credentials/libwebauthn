@@ -1,6 +1,6 @@
 use serde_bytes::ByteBuf;
 use std::time::Duration;
-use tracing::{debug, info};
+use tracing::{debug, trace};
 
 use super::{Ctap2GetAssertionRequest, Ctap2PublicKeyCredentialDescriptor};
 use crate::{
@@ -40,12 +40,16 @@ pub async fn ctap2_preflight_with_appid<C: Channel>(
     rp: &str,
     appid_exclude: Option<&str>,
 ) -> Result<Vec<Ctap2PublicKeyCredentialDescriptor>, WebAuthnError<C::TransportError>> {
-    info!("Credential list BEFORE preflight: {credentials:?}");
+    debug!(
+        cred_count = credentials.len(),
+        "Credential list before preflight"
+    );
+    trace!(?credentials, "Credential list before preflight");
     let mut filtered_list = Vec::new();
     for credential in credentials {
         // Test against the canonical rpId first.
         if let Some(matched) = preflight_one(channel, credential, client_data_hash, rp).await? {
-            debug!("Pre-flight: Found already known credential under rpId {credential:?}");
+            trace!(?credential, "Found already known credential under rpId");
             filtered_list.push(matched);
             continue;
         }
@@ -58,16 +62,21 @@ pub async fn ctap2_preflight_with_appid<C: Channel>(
             if let Some(matched) =
                 preflight_one(channel, credential, client_data_hash, appid).await?
             {
-                debug!(
-                    "Pre-flight: Found already known credential under appidExclude {credential:?}"
+                trace!(
+                    ?credential,
+                    "Found already known credential under appidExclude"
                 );
                 filtered_list.push(matched);
                 continue;
             }
         }
-        debug!("Pre-flight: Filtering out {credential:?}");
+        trace!(?credential, "Filtering out credential");
     }
-    info!("Credential list AFTER preflight: {filtered_list:?}");
+    debug!(
+        cred_count = filtered_list.len(),
+        "Credential list after preflight"
+    );
+    trace!(?filtered_list, "Credential list after preflight");
     Ok(filtered_list)
 }
 
@@ -111,12 +120,12 @@ async fn preflight_one<C: Channel>(
         }
         // Only CTAP2_ERR_NO_CREDENTIALS proves the credential is absent.
         Err(WebAuthnError::Ctap(CtapError::NoCredentials)) => {
-            debug!("Pre-flight: Not found under {rp:?}");
+            debug!(rp = %rp, "Credential not found under rp");
             Ok(None)
         }
         // Any other error is transient or unexpected, not absence: propagate it.
         Err(e) => {
-            debug!("Pre-flight: Error testing under {rp:?}: {e:?}");
+            debug!({ rp = %rp, error = ?e }, "Preflight request failed under rp");
             Err(e)
         }
     }
