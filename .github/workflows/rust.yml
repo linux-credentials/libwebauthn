@@ -29,5 +29,9 @@ jobs:
         run: cargo test --workspace --verbose
         env:
           LIBWEBAUTHN_PSL_SYSTEM_TEST: "1"
+      - name: Run tests with nfc-backend-pcsc
+        run: cargo test -p libwebauthn --lib --features nfc-backend-pcsc --verbose
+        env:
+          LIBWEBAUTHN_PSL_SYSTEM_TEST: "1"
       - name: Verify libwebauthn publishes cleanly
         run: cargo publish --dry-run -p libwebauthn
