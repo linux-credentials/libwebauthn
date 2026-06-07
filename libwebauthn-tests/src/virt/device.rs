@@ -170,7 +170,7 @@ impl HidDevice for Device<'_> {
 
             if let Some(response) = self.0.borrow_mut().pop() {
                 return if buffer.len() >= response.len() {
-                    info!("received response: {} bytes", response.len());
+                    info!(len = response.len(), "Received response");
                     buffer[..response.len()].copy_from_slice(&response);
                     Ok(&buffer[..response.len()])
                 } else {
