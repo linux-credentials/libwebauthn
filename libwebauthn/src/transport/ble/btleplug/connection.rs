@@ -79,7 +79,7 @@ impl Connection {
 
         if max_fragment_length.len() != 2 {
             warn!(
-                { len = max_fragment_length.len() },
+                len = max_fragment_length.len(),
                 "Control point length endpoint returned an unexpected number of bytes",
             );
             return Err(Error::OperationFailed);
@@ -102,7 +102,7 @@ impl Connection {
 
         for (i, fragment) in fragments.iter().enumerate() {
             debug!({ fragment = i, len = fragment.len() }, "Sending fragment");
-            trace!(?fragment);
+            trace!(?fragment, "Sending fragment");
 
             self.peripheral
                 .write(&self.services.control_point, fragment, write_type)
@@ -173,7 +173,7 @@ impl Connection {
             };
 
             debug!("Received fragment");
-            trace!(?fragment);
+            trace!(?fragment, "Received fragment");
 
             let status = parser.update(&fragment).or(Err(Error::InvalidFraming))?;
             match status {
@@ -186,7 +186,7 @@ impl Connection {
                             parser.reset();
                         }
                         BleCommand::Cancel => {
-                            info!("Device canceled operation");
+                            debug!("Device canceled operation");
                             return Err(Error::Canceled);
                         }
                         BleCommand::Error => {
