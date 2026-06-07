@@ -194,7 +194,8 @@ where
         Ok(res)
     }
 
-    pub fn handle<'a>(
+    /// Returns the full response, payload plus SW1/SW2 trailer, without interpreting the status.
+    fn handle_raw<'a>(
         &'a mut self,
         ctx: Ctx,
         command: impl Into<Command<'a>>,
@@ -223,6 +224,15 @@ where
         }
 
         rapdu.extend_from_slice(&[sw1, sw2]);
+        Ok(rapdu)
+    }
+
+    pub fn handle<'a>(
+        &'a mut self,
+        ctx: Ctx,
+        command: impl Into<Command<'a>>,
+    ) -> Result<Vec<u8>, NfcError> {
+        let rapdu = self.handle_raw(ctx, command)?;
         Result::from(Response::from(rapdu.as_slice()))
             .map(|p| p.to_vec())
             .map_err(|e| {
@@ -259,10 +269,11 @@ where
 
     #[instrument(level = Level::DEBUG, skip_all)]
     async fn apdu_send(&mut self, request: &ApduRequest, _timeout: Duration) -> Result<(), Error> {
-        let resp = self.handle(self.ctx, request)?;
+        let resp = self.handle_raw(self.ctx, request)?;
         trace!("apdu_send {:?}", resp);
 
-        let apdu_response = ApduResponse::new_success(&resp);
+        let apdu_response = ApduResponse::try_from(&resp)
+            .or(Err(Error::Transport(TransportError::InvalidFraming)))?;
         self.apdu_response = Some(apdu_response);
         Ok(())
     }
@@ -360,7 +371,13 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::is_fido2_version;
+    use std::fmt::{Display, Formatter};
+    use std::time::Duration;
+
+    use super::{is_fido2_version, ChannelSettings, HandlerInCtx, NfcBackend, NfcChannel};
+    use crate::proto::ctap1::apdu::{ApduRequest, ApduResponseStatus};
+    use crate::proto::CtapError;
+    use crate::transport::channel::Channel;
 
     #[test]
     fn fido2_versions_are_recognised() {
@@ -385,5 +402,56 @@ mod tests {
         assert!(!is_fido2_version(b"FIDO_3_0"));
         assert!(!is_fido2_version(b"fido_2_0"));
         assert!(!is_fido2_version(b"FIDO_2_0\0"));
+    }
+
+    /// Backend that echoes a fixed APDU response regardless of the command.
+    struct FixedResponseBackend {
+        response: Vec<u8>,
+    }
+
+    impl Display for FixedResponseBackend {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            write!(f, "FixedResponseBackend")
+        }
+    }
+
+    impl HandlerInCtx<u8> for FixedResponseBackend {
+        fn handle_in_ctx(
+            &mut self,
+            _ctx: u8,
+            _command: &[u8],
+            response: &mut [u8],
+        ) -> apdu_core::Result {
+            let n = self.response.len();
+            response[..n].copy_from_slice(&self.response);
+            Ok(n)
+        }
+    }
+
+    impl NfcBackend<u8> for FixedResponseBackend {}
+
+    #[tokio::test]
+    async fn u2f_wrong_data_status_word_is_preserved() {
+        // SW_WRONG_DATA (0x6A80) must surface as NoCredentials, not InvalidFraming.
+        let backend = FixedResponseBackend {
+            response: vec![0x6A, 0x80],
+        };
+        let mut channel = NfcChannel::new(Box::new(backend), 0u8, ChannelSettings::default());
+        let request = ApduRequest::new(0x02, 0x00, 0x00, None, None);
+
+        channel
+            .apdu_send(&request, Duration::from_secs(1))
+            .await
+            .expect("non-success SW must not collapse to InvalidFraming");
+        let response = channel.apdu_recv(Duration::from_secs(1)).await.unwrap();
+
+        assert_eq!(
+            response.status().unwrap(),
+            ApduResponseStatus::InvalidKeyHandle
+        );
+        assert_eq!(
+            CtapError::from(response.status().unwrap()),
+            CtapError::NoCredentials
+        );
     }
 }

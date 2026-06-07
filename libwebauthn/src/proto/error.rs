@@ -84,6 +84,7 @@ impl From<ApduResponseStatus> for CtapError {
         match status {
             ApduResponseStatus::NoError => CtapError::Ok,
             ApduResponseStatus::UserPresenceTestFailed => CtapError::UserPresenceRequired,
+            ApduResponseStatus::CommandNotAllowed => CtapError::NotAllowed,
             ApduResponseStatus::InvalidKeyHandle => CtapError::NoCredentials,
             ApduResponseStatus::InvalidRequestLength => CtapError::InvalidLength,
             ApduResponseStatus::InvalidClassByte => CtapError::Other,
