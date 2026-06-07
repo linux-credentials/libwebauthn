@@ -29,10 +29,12 @@ use crate::ops::webauthn::{
 };
 use crate::ops::webauthn::{MakeCredentialRequest, MakeCredentialResponse};
 use crate::proto::ctap1::Ctap1;
+use crate::proto::ctap2::cbor::CborRequest;
 use crate::proto::ctap2::preflight::{ctap2_preflight, ctap2_preflight_with_appid};
 use crate::proto::ctap2::{
     Ctap2, Ctap2ClientPinRequest, Ctap2GetAssertionRequest, Ctap2GetAssertionResponse,
-    Ctap2MakeCredentialRequest, Ctap2UserVerificationOperation,
+    Ctap2GetInfoResponse, Ctap2MakeCredentialRequest, Ctap2PublicKeyCredentialDescriptor,
+    Ctap2UserVerificationOperation,
 };
 pub use crate::transport::error::TransportError;
 use crate::transport::{AuthTokenData, Channel};
@@ -44,6 +46,56 @@ use pin_uv_auth_token::{user_verification, UsedPinUvAuthToken};
 // See W3C webauthn#2337.
 fn prf_forces_uv_upgrade(prf_present: bool, uv: UserVerificationRequirement) -> bool {
     prf_present && !uv.is_required()
+}
+
+/// Drop credential ids longer than maxCredentialIdLength, which cannot belong to this device.
+fn filter_oversized_credentials(
+    info: &Ctap2GetInfoResponse,
+    credentials: &mut Vec<Ctap2PublicKeyCredentialDescriptor>,
+) {
+    if let Some(max_len) = info.max_credential_id_length() {
+        credentials.retain(|credential| credential.id.len() <= max_len);
+    }
+}
+
+fn ensure_credential_count(count: usize, info: &Ctap2GetInfoResponse) -> Result<(), Error> {
+    if let Some(max) = info.max_credential_count_in_list() {
+        if count > max {
+            warn!(
+                count,
+                max, "credential list exceeds maxCredentialCountInList"
+            );
+            return Err(Error::Platform(PlatformError::RequestTooLarge));
+        }
+    }
+    Ok(())
+}
+
+fn ensure_msg_size(request: &CborRequest, info: &Ctap2GetInfoResponse) -> Result<(), Error> {
+    let size = request.ctap_hid_data().len();
+    let max = info.max_msg_size();
+    if size > max {
+        warn!(size, max, "serialized request exceeds maxMsgSize");
+        return Err(Error::Platform(PlatformError::RequestTooLarge));
+    }
+    Ok(())
+}
+
+fn enforce_get_assertion_limits(
+    request: &Ctap2GetAssertionRequest,
+    info: &Ctap2GetInfoResponse,
+) -> Result<(), Error> {
+    ensure_credential_count(request.allow.len(), info)?;
+    ensure_msg_size(&request.try_into()?, info)
+}
+
+fn enforce_make_credential_limits(
+    request: &Ctap2MakeCredentialRequest,
+    info: &Ctap2GetInfoResponse,
+) -> Result<(), Error> {
+    let exclude_count = request.exclude.as_ref().map_or(0, Vec::len);
+    ensure_credential_count(exclude_count, info)?;
+    ensure_msg_size(&request.try_into()?, info)
 }
 
 macro_rules! handle_errors {
@@ -178,8 +230,11 @@ async fn make_credential_fido2<C: Channel>(
     let get_info_response = channel.ctap2_get_info().await?;
     let mut ctap2_request =
         Ctap2MakeCredentialRequest::from_webauthn_request(op, &get_info_response)?;
+    if let Some(exclude) = ctap2_request.exclude.as_mut() {
+        filter_oversized_credentials(&get_info_response, exclude);
+    }
     if C::supports_preflight() {
-        if let Some(exclude_list) = &op.exclude {
+        if let Some(exclude_list) = ctap2_request.exclude.clone() {
             // FIDO AppID Exclusion (WebAuthn L3 §10.1.2): if the relying
             // party supplied a legacy AppID, the preflight must test
             // each excludeList entry against both `SHA-256(rp.id)` and
@@ -191,7 +246,7 @@ async fn make_credential_fido2<C: Channel>(
                 .and_then(|e| e.appid_exclude.as_deref());
             let filtered_exclude_list = ctap2_preflight_with_appid(
                 channel,
-                exclude_list,
+                &exclude_list,
                 &op.client_data_hash(),
                 &op.relying_party.id,
                 appid_exclude,
@@ -200,6 +255,7 @@ async fn make_credential_fido2<C: Channel>(
             ctap2_request.exclude = Some(filtered_exclude_list);
         }
     }
+    enforce_make_credential_limits(&ctap2_request, &get_info_response)?;
     let response = loop {
         let uv_auth_used = user_verification(
             channel,
@@ -275,11 +331,12 @@ async fn get_assertion_fido2<C: Channel>(
     let get_info_response = channel.ctap2_get_info().await?;
     let mut ctap2_request =
         Ctap2GetAssertionRequest::from_webauthn_request(op, &get_info_response)?;
+    filter_oversized_credentials(&get_info_response, &mut ctap2_request.allow);
 
     if C::supports_preflight() {
         let filtered_allow_list = ctap2_preflight(
             channel,
-            &op.allow,
+            &ctap2_request.allow,
             &op.client_data_hash(),
             &op.relying_party_id,
         )
@@ -300,7 +357,12 @@ async fn get_assertion_fido2<C: Channel>(
             return Err(Error::Ctap(CtapError::NoCredentials));
         }
         ctap2_request.allow = filtered_allow_list;
+    } else if ctap2_request.allow.is_empty() && !op.allow.is_empty() {
+        // No preflight (cable): all entries were oversized, so don't fall through to an empty allowList.
+        return Err(Error::Ctap(CtapError::NoCredentials));
     }
+
+    enforce_get_assertion_limits(&ctap2_request, &get_info_response)?;
 
     let response = loop {
         let uv_auth_used = user_verification(
@@ -667,5 +729,255 @@ mod tests {
             true,
             UserVerificationRequirement::Required
         ));
+    }
+
+    mod limits {
+        use super::*;
+        use crate::fido::AuthenticatorDataFlags;
+        use crate::proto::ctap1::apdu::{ApduRequest, ApduResponse};
+        use crate::proto::ctap2::cbor::{self, CborRequest, CborResponse, Value};
+        use crate::proto::ctap2::{
+            Ctap2CommandCode, Ctap2GetInfoResponse, Ctap2PublicKeyCredentialDescriptor,
+            Ctap2PublicKeyCredentialType,
+        };
+        use crate::transport::mock::channel::MockChannel;
+        use crate::transport::{
+            device::SupportedProtocols, AuthTokenData, ChannelStatus, Ctap2AuthTokenStore,
+        };
+        use async_trait::async_trait;
+        use serde_bytes::ByteBuf;
+        use std::collections::BTreeMap;
+        use std::fmt::{Display, Formatter};
+        use std::time::Duration;
+        use tokio::sync::broadcast;
+
+        /// MockChannel wrapper whose `supports_preflight()` returns false, modelling cable.
+        struct NoPreflightChannel {
+            inner: MockChannel,
+        }
+
+        impl NoPreflightChannel {
+            fn new() -> Self {
+                Self {
+                    inner: MockChannel::new(),
+                }
+            }
+
+            fn push_command_pair(&mut self, request: CborRequest, response: CborResponse) {
+                self.inner.push_command_pair(request, response);
+            }
+        }
+
+        impl Display for NoPreflightChannel {
+            fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+                write!(f, "NoPreflightChannel")
+            }
+        }
+
+        impl Ctap2AuthTokenStore for NoPreflightChannel {
+            fn store_auth_data(&mut self, auth_token_data: AuthTokenData) {
+                self.inner.store_auth_data(auth_token_data);
+            }
+            fn get_auth_data(&self) -> Option<&AuthTokenData> {
+                self.inner.get_auth_data()
+            }
+            fn clear_uv_auth_token_store(&mut self) {
+                self.inner.clear_uv_auth_token_store();
+            }
+            fn set_cred_mgmt_preview(&mut self, uses_preview: bool) {
+                self.inner.set_cred_mgmt_preview(uses_preview);
+            }
+            fn cred_mgmt_preview(&self) -> bool {
+                self.inner.cred_mgmt_preview()
+            }
+        }
+
+        #[async_trait]
+        impl Channel for NoPreflightChannel {
+            type UxUpdate = UvUpdate;
+
+            fn get_ux_update_sender(&self) -> &broadcast::Sender<Self::UxUpdate> {
+                self.inner.get_ux_update_sender()
+            }
+            async fn supported_protocols(&self) -> Result<SupportedProtocols, Error> {
+                self.inner.supported_protocols().await
+            }
+            async fn status(&self) -> ChannelStatus {
+                ChannelStatus::Ready
+            }
+            async fn close(&mut self) {}
+            async fn apdu_send(
+                &mut self,
+                request: &ApduRequest,
+                timeout: Duration,
+            ) -> Result<(), Error> {
+                self.inner.apdu_send(request, timeout).await
+            }
+            async fn apdu_recv(&mut self, timeout: Duration) -> Result<ApduResponse, Error> {
+                self.inner.apdu_recv(timeout).await
+            }
+            async fn cbor_send(
+                &mut self,
+                request: &CborRequest,
+                timeout: Duration,
+            ) -> Result<(), Error> {
+                self.inner.cbor_send(request, timeout).await
+            }
+            async fn cbor_recv(&mut self, timeout: Duration) -> Result<CborResponse, Error> {
+                self.inner.cbor_recv(timeout).await
+            }
+            fn supports_preflight() -> bool {
+                false
+            }
+        }
+
+        fn descriptor(id: &[u8]) -> Ctap2PublicKeyCredentialDescriptor {
+            Ctap2PublicKeyCredentialDescriptor {
+                id: ByteBuf::from(id.to_vec()),
+                r#type: Ctap2PublicKeyCredentialType::PublicKey,
+                transports: None,
+            }
+        }
+
+        fn get_info_response(info: &Ctap2GetInfoResponse) -> CborResponse {
+            CborResponse {
+                status_code: CtapError::Ok,
+                data: Some(cbor::to_vec(info).unwrap()),
+            }
+        }
+
+        fn get_assertion_response() -> CborResponse {
+            let mut auth_data = vec![0u8; 37];
+            auth_data[32] = AuthenticatorDataFlags::USER_PRESENT.bits();
+            let mut map: BTreeMap<u64, Value> = BTreeMap::new();
+            map.insert(0x02, Value::Bytes(auth_data));
+            map.insert(0x03, Value::Bytes(vec![0xAAu8; 64]));
+            CborResponse {
+                status_code: CtapError::Ok,
+                data: Some(cbor::to_vec(&map).unwrap()),
+            }
+        }
+
+        fn assertion_request(
+            allow: Vec<Ctap2PublicKeyCredentialDescriptor>,
+        ) -> GetAssertionRequest {
+            GetAssertionRequest {
+                relying_party_id: "example.com".to_string(),
+                challenge: vec![0u8; 32],
+                origin: "https://example.com".to_string(),
+                top_origin: None,
+                allow,
+                extensions: None,
+                user_verification: UserVerificationRequirement::Discouraged,
+                timeout: Duration::from_secs(30),
+            }
+        }
+
+        // Cable has no preflight, so the whole allowList is serialized into one getAssertion.
+        // An id longer than maxCredentialIdLength cannot belong to this device and must be
+        // dropped before sending (CTAP 2.1/2.2 6.4).
+        #[tokio::test]
+        async fn oversized_allow_entries_are_filtered_before_send_on_cable() {
+            let valid = descriptor(&[1u8; 16]);
+            let oversized = descriptor(&[2u8; 64]);
+            let info = Ctap2GetInfoResponse {
+                max_credential_id_length: Some(32),
+                ..Default::default()
+            };
+
+            let op = assertion_request(vec![valid.clone(), oversized]);
+
+            // The request that must reach the device: oversized entry removed.
+            let expected_request = Ctap2GetAssertionRequest::from_webauthn_request(
+                &assertion_request(vec![valid]),
+                &info,
+            )
+            .unwrap();
+            let expected_cbor: CborRequest = (&expected_request).try_into().unwrap();
+
+            let mut channel = NoPreflightChannel::new();
+            let get_info_request = CborRequest::new(Ctap2CommandCode::AuthenticatorGetInfo);
+            channel.push_command_pair(get_info_request.clone(), get_info_response(&info));
+            channel.push_command_pair(get_info_request, get_info_response(&info));
+            channel.push_command_pair(expected_cbor, get_assertion_response());
+
+            let result = get_assertion_fido2(&mut channel, &op).await;
+            assert!(
+                result.is_ok(),
+                "oversized allowList entry was not filtered before sending: {result:?}"
+            );
+        }
+
+        fn ctap2_get_assertion(
+            allow: Vec<Ctap2PublicKeyCredentialDescriptor>,
+        ) -> Ctap2GetAssertionRequest {
+            Ctap2GetAssertionRequest {
+                relying_party_id: "example.com".to_string(),
+                client_data_hash: ByteBuf::from(vec![0u8; 32]),
+                allow,
+                extensions: None,
+                options: None,
+                pin_auth_param: None,
+                pin_auth_proto: None,
+            }
+        }
+
+        #[test]
+        fn allow_list_over_max_credential_count_is_rejected() {
+            let info = Ctap2GetInfoResponse {
+                max_credential_count: Some(2),
+                ..Default::default()
+            };
+            let request =
+                ctap2_get_assertion(vec![descriptor(b"a"), descriptor(b"b"), descriptor(b"c")]);
+            assert_eq!(
+                enforce_get_assertion_limits(&request, &info),
+                Err(Error::Platform(PlatformError::RequestTooLarge))
+            );
+        }
+
+        #[test]
+        fn allow_list_within_max_credential_count_is_accepted() {
+            let info = Ctap2GetInfoResponse {
+                max_credential_count: Some(2),
+                ..Default::default()
+            };
+            let request = ctap2_get_assertion(vec![descriptor(b"a"), descriptor(b"b")]);
+            assert_eq!(enforce_get_assertion_limits(&request, &info), Ok(()));
+        }
+
+        #[test]
+        fn exclude_list_over_max_credential_count_is_rejected() {
+            let info = Ctap2GetInfoResponse {
+                max_credential_count: Some(1),
+                ..Default::default()
+            };
+            let mut request = Ctap2MakeCredentialRequest::dummy();
+            request.exclude = Some(vec![descriptor(b"a"), descriptor(b"b")]);
+            assert_eq!(
+                enforce_make_credential_limits(&request, &info),
+                Err(Error::Platform(PlatformError::RequestTooLarge))
+            );
+        }
+
+        // maxMsgSize is absent, so the 1024-byte spec default must bound the request.
+        #[test]
+        fn request_over_default_max_msg_size_is_rejected() {
+            let info = Ctap2GetInfoResponse::default();
+            assert_eq!(info.max_msg_size(), 1024);
+            // A single 2000-byte credential id keeps the count at 1 but blows past 1024 bytes.
+            let request = ctap2_get_assertion(vec![descriptor(&[0u8; 2000])]);
+            assert_eq!(
+                enforce_get_assertion_limits(&request, &info),
+                Err(Error::Platform(PlatformError::RequestTooLarge))
+            );
+        }
+
+        #[test]
+        fn request_within_default_max_msg_size_is_accepted() {
+            let info = Ctap2GetInfoResponse::default();
+            let request = ctap2_get_assertion(vec![descriptor(&[0u8; 16])]);
+            assert_eq!(enforce_get_assertion_limits(&request, &info), Ok(()));
+        }
     }
 }
