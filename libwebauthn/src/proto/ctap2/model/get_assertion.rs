@@ -370,11 +370,7 @@ pub struct Ctap2GetAssertionResponse {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(index = 0x08)]
-    pub enterprise_attestation: Option<bool>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(index = 0x09)]
-    pub attestation_statement: Option<Ctap2AttestationStatement>,
+    pub unsigned_extension_outputs: Option<BTreeMap<Value, Value>>,
 }
 
 impl Ctap2UserVerifiableRequest for Ctap2GetAssertionRequest {
@@ -462,8 +458,6 @@ impl Ctap2GetAssertionResponse {
             credentials_count: self.credentials_count,
             user_selected: self.user_selected,
             unsigned_extensions_output,
-            enterprise_attestation: self.enterprise_attestation,
-            attestation_statement: self.attestation_statement,
         }
     }
 }
@@ -575,8 +569,7 @@ mod tests {
             credentials_count: None,
             user_selected: None,
             large_blob_key: None,
-            enterprise_attestation: None,
-            attestation_statement: None,
+            unsigned_extension_outputs: None,
         }
     }
 
@@ -659,5 +652,29 @@ mod tests {
             .expect("largeBlob extension output present");
 
         assert!(large_blob.blob.is_none());
+    }
+
+    #[test]
+    fn decodes_unsigned_extension_outputs_at_index_0x08() {
+        // 0x08 is unsignedExtensionOutputs (a CBOR map), not enterprise attestation.
+        let mut auth_data = vec![0u8; 37];
+        auth_data[32] = AuthenticatorDataFlags::USER_PRESENT.bits();
+
+        let mut ueo = BTreeMap::new();
+        ueo.insert(
+            Value::Text("thirdPartyPayment".to_string()),
+            Value::Bool(true),
+        );
+
+        let mut response: BTreeMap<u64, Value> = BTreeMap::new();
+        response.insert(0x02, Value::Bytes(auth_data));
+        response.insert(0x03, Value::Bytes(vec![0xAAu8; 64]));
+        response.insert(0x08, Value::Map(ueo.clone()));
+
+        let bytes = crate::proto::ctap2::cbor::to_vec(&response).unwrap();
+        let parsed: Ctap2GetAssertionResponse =
+            crate::proto::ctap2::cbor::from_slice(&bytes).unwrap();
+
+        assert_eq!(parsed.unsigned_extension_outputs, Some(ueo));
     }
 }
