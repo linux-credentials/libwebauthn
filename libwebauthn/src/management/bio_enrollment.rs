@@ -220,13 +220,9 @@ where
         }?;
 
         let remaining_samples = unwrap_field!(resp.remaining_samples);
-        let template_id = unwrap_field!(resp.template_id).clone();
+        let template_id = unwrap_field!(resp.template_id);
         let sample_status = unwrap_field!(resp.last_enroll_sample_status);
-        Ok((
-            cbor::to_vec(&template_id)?,
-            sample_status,
-            remaining_samples,
-        ))
+        Ok((template_id.into_vec(), sample_status, remaining_samples))
     }
 
     async fn capture_next_bio_enrollment_sample(
@@ -343,5 +339,67 @@ impl Ctap2UserVerifiableRequest for Ctap2BioEnrollmentRequest {
 
     fn needs_shared_secret(&self, _get_info_response: &Ctap2GetInfoResponse) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::time::Duration;
+
+    use serde_bytes::ByteBuf;
+    use serde_indexed::SerializeIndexed;
+
+    use super::BioEnrollment;
+    use crate::proto::ctap2::cbor::{self, CborRequest, CborResponse};
+    use crate::proto::ctap2::{
+        Ctap2BioEnrollmentRequest, Ctap2CommandCode, Ctap2GetInfoResponse,
+        Ctap2LastEnrollmentSampleStatus,
+    };
+    use crate::transport::mock::channel::MockChannel;
+
+    const TIMEOUT: Duration = Duration::from_secs(1);
+
+    // Indexed map enrollBegin returns: templateId (0x04), lastEnrollSampleStatus (0x05), remainingSamples (0x06).
+    #[derive(SerializeIndexed)]
+    struct EnrollBeginResponse {
+        #[serde(index = 0x04)]
+        template_id: ByteBuf,
+        #[serde(index = 0x05)]
+        last_enroll_sample_status: Ctap2LastEnrollmentSampleStatus,
+        #[serde(index = 0x06)]
+        remaining_samples: u64,
+    }
+
+    // GetInfo for a device without any UV, so user_verification returns without a PIN/UV round-trip.
+    fn push_no_uv_get_info(channel: &mut MockChannel) {
+        let info = Ctap2GetInfoResponse::default();
+        let req = CborRequest::new(Ctap2CommandCode::AuthenticatorGetInfo);
+        let resp = CborResponse::new_success_from_slice(&cbor::to_vec(&info).unwrap());
+        channel.push_command_pair(req, resp);
+    }
+
+    #[tokio::test]
+    async fn start_new_bio_enrollment_returns_raw_template_id() {
+        let template = [0x1D_u8; 16];
+        let mut channel = MockChannel::new();
+        push_no_uv_get_info(&mut channel);
+
+        let req = Ctap2BioEnrollmentRequest::new_start_new_enrollment(None);
+        let fixture = EnrollBeginResponse {
+            template_id: ByteBuf::from(template.to_vec()),
+            last_enroll_sample_status: Ctap2LastEnrollmentSampleStatus::Ctap2EnrollFeedbackFpGood,
+            remaining_samples: 4,
+        };
+        let resp = CborResponse::new_success_from_slice(&cbor::to_vec(&fixture).unwrap());
+        channel.push_command_pair((&req).try_into().unwrap(), resp);
+
+        let (template_id, _status, remaining) = channel
+            .start_new_bio_enrollment(None, TIMEOUT)
+            .await
+            .unwrap();
+        assert_eq!(remaining, 4);
+        // Raw template id, not a CBOR byte string (0x50 || template = 17 bytes).
+        assert_eq!(template_id.len(), template.len());
+        assert_eq!(template_id, template.to_vec());
     }
 }

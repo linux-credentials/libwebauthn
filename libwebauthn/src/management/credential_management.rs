@@ -114,7 +114,7 @@ where
         Ok((
             Ctap2RPData::new(
                 unwrap_field!(resp.rp),
-                cbor::to_vec(&unwrap_field!(&resp.rp_id_hash))?,
+                unwrap_field!(resp.rp_id_hash).into_vec(),
             ),
             unwrap_field!(resp.total_rps),
         ))
@@ -142,7 +142,7 @@ where
         }?;
         Ok(Ctap2RPData::new(
             unwrap_field!(resp.rp),
-            cbor::to_vec(unwrap_field!(&resp.rp_id_hash))?,
+            unwrap_field!(resp.rp_id_hash).into_vec(),
         ))
     }
 
@@ -353,5 +353,64 @@ impl Ctap2UserVerifiableRequest for Ctap2CredentialManagementRequest {
 
     fn persistent_token_rejected(&self) -> bool {
         self.persistent_token_rejected
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::time::Duration;
+
+    use serde_bytes::ByteBuf;
+    use serde_indexed::SerializeIndexed;
+
+    use super::CredentialManagement;
+    use crate::proto::ctap2::cbor::{self, CborRequest, CborResponse};
+    use crate::proto::ctap2::{
+        Ctap2CommandCode, Ctap2CredentialManagementRequest, Ctap2GetInfoResponse,
+        Ctap2PublicKeyCredentialRpEntity,
+    };
+    use crate::transport::mock::channel::MockChannel;
+
+    const TIMEOUT: Duration = Duration::from_secs(1);
+
+    // Indexed map enumerateRPs returns: rp (0x03), rpIDHash (0x04), totalRPs (0x05).
+    #[derive(SerializeIndexed)]
+    struct EnumerateRpsResponse {
+        #[serde(index = 0x03)]
+        rp: Ctap2PublicKeyCredentialRpEntity,
+        #[serde(index = 0x04)]
+        rp_id_hash: ByteBuf,
+        #[serde(index = 0x05)]
+        total_rps: u64,
+    }
+
+    // GetInfo for a device without any UV, so user_verification returns without a PIN/UV round-trip.
+    fn push_no_uv_get_info(channel: &mut MockChannel) {
+        let info = Ctap2GetInfoResponse::default();
+        let req = CborRequest::new(Ctap2CommandCode::AuthenticatorGetInfo);
+        let resp = CborResponse::new_success_from_slice(&cbor::to_vec(&info).unwrap());
+        channel.push_command_pair(req, resp);
+    }
+
+    #[tokio::test]
+    async fn enumerate_rps_begin_returns_raw_rp_id_hash() {
+        let hash = [0xAB_u8; 32];
+        let mut channel = MockChannel::new();
+        push_no_uv_get_info(&mut channel);
+
+        let req = Ctap2CredentialManagementRequest::new_enumerate_rps_begin();
+        let fixture = EnumerateRpsResponse {
+            rp: Ctap2PublicKeyCredentialRpEntity::new("example.com", "Example"),
+            rp_id_hash: ByteBuf::from(hash.to_vec()),
+            total_rps: 1,
+        };
+        let resp = CborResponse::new_success_from_slice(&cbor::to_vec(&fixture).unwrap());
+        channel.push_command_pair((&req).try_into().unwrap(), resp);
+
+        let (rp_data, total) = channel.enumerate_rps_begin(TIMEOUT).await.unwrap();
+        assert_eq!(total, 1);
+        // Raw 32-byte hash, not a 34-byte CBOR byte string (0x58 0x20 || hash).
+        assert_eq!(rp_data.rp_id_hash.len(), 32);
+        assert_eq!(rp_data.rp_id_hash, hash.to_vec());
     }
 }
