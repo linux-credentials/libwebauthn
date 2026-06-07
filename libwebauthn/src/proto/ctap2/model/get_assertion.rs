@@ -563,6 +563,7 @@ mod tests {
                 signature_count: 0,
                 attested_credential: None,
                 extensions: None,
+                raw: None,
             },
             signature: ByteBuf::from(vec![0u8; 32]),
             user: None,
