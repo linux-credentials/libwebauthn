@@ -389,6 +389,9 @@ impl Ctap2UserVerifiableRequest for Ctap2MakeCredentialRequest {
         let uv_auth_param = uv_proto.authenticate(uv_auth_token, hash)?;
         self.pin_auth_proto = Some(uv_proto.version() as u32);
         self.pin_auth_param = Some(ByteBuf::from(uv_auth_param));
+        if let Some(ref mut options) = self.options {
+            options.deprecated_require_user_verification = None;
+        }
         Ok(())
     }
 
