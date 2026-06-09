@@ -121,25 +121,8 @@ where
     }
 
     async fn enumerate_rps_next_rp(&mut self, timeout: Duration) -> Result<Ctap2RPData, Error> {
-        let mut req = Ctap2CredentialManagementRequest::new_enumerate_rps_next_rp();
-        let resp = loop {
-            let uv_auth_used = user_verification(
-                self,
-                UserVerificationRequirement::Preferred,
-                &mut req,
-                timeout,
-            )
-            .await?;
-
-            // On success, this is an all-empty Ctap2AuthenticatorConfigResponse
-            handle_errors!(
-                self,
-                self.ctap2_credential_management(&req, timeout).await,
-                uv_auth_used,
-                timeout,
-                req
-            )
-        }?;
+        let req = Ctap2CredentialManagementRequest::new_enumerate_rps_next_rp();
+        let resp = self.ctap2_credential_management(&req, timeout).await?;
         Ok(Ctap2RPData::new(
             unwrap_field!(resp.rp),
             unwrap_field!(resp.rp_id_hash).into_vec(),
@@ -185,25 +168,8 @@ where
         &mut self,
         timeout: Duration,
     ) -> Result<Ctap2CredentialData, Error> {
-        let mut req = Ctap2CredentialManagementRequest::new_enumerate_credentials_next();
-        let resp = loop {
-            let uv_auth_used = user_verification(
-                self,
-                UserVerificationRequirement::Preferred,
-                &mut req,
-                timeout,
-            )
-            .await?;
-
-            // On success, this is an all-empty Ctap2AuthenticatorConfigResponse
-            handle_errors!(
-                self,
-                self.ctap2_credential_management(&req, timeout).await,
-                uv_auth_used,
-                timeout,
-                req
-            )
-        }?;
+        let req = Ctap2CredentialManagementRequest::new_enumerate_credentials_next();
+        let resp = self.ctap2_credential_management(&req, timeout).await?;
         let cred = Ctap2CredentialData::new(
             unwrap_field!(resp.user),
             unwrap_field!(resp.credential_id),
