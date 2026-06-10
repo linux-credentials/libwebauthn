@@ -32,12 +32,14 @@ pub use client_pin::{
 mod make_credential;
 pub use make_credential::{
     Ctap2MakeCredentialOptions, Ctap2MakeCredentialRequest, Ctap2MakeCredentialResponse,
-    Ctap2MakeCredentialsResponseExtensions,
+    Ctap2MakeCredentialsResponseExtensions, Ctap2PrfMakeCredentialInput,
 };
 mod get_assertion;
+pub(crate) use get_assertion::{parse_unsigned_prf, UnsignedPrfOutput};
 pub use get_assertion::{
     Ctap2AttestationStatement, Ctap2GetAssertionOptions, Ctap2GetAssertionRequest,
-    Ctap2GetAssertionResponse, Ctap2GetAssertionResponseExtensions, FidoU2fAttestationStmt,
+    Ctap2GetAssertionResponse, Ctap2GetAssertionResponseExtensions, Ctap2PrfGetAssertionInput,
+    Ctap2PrfSalts, FidoU2fAttestationStmt,
 };
 mod credential_management;
 pub use credential_management::{

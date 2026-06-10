@@ -20,6 +20,7 @@ pub use model::{
     Ctap2UserVerificationOperation, FidoU2fAttestationStmt,
 };
 
+pub(crate) use model::{parse_unsigned_prf, UnsignedPrfOutput};
 pub use model::{
     Ctap2AuthenticatorConfigCommand, Ctap2AuthenticatorConfigParams,
     Ctap2AuthenticatorConfigRequest,
@@ -34,10 +35,12 @@ pub use model::{
 };
 pub use model::{
     Ctap2GetAssertionRequest, Ctap2GetAssertionResponse, Ctap2GetAssertionResponseExtensions,
+    Ctap2PrfGetAssertionInput, Ctap2PrfSalts,
 };
 pub use model::{Ctap2LargeBlobsRequest, Ctap2LargeBlobsResponse};
 pub use model::{
-    Ctap2MakeCredentialRequest, Ctap2MakeCredentialResponse, Ctap2MakeCredentialsResponseExtensions,
+    Ctap2MakeCredentialRequest, Ctap2MakeCredentialResponse,
+    Ctap2MakeCredentialsResponseExtensions, Ctap2PrfMakeCredentialInput,
 };
 pub mod preflight;
 pub use protocol::Ctap2;
