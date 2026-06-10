@@ -1044,6 +1044,104 @@ mod tests {
     }
 
     #[test]
+    fn native_prf_request_serializes_extensions_at_0x04() {
+        // Regression guard for the original bug: the prf input used to vanish
+        // from the serialized request entirely.
+        let request = prf_request(
+            vec![],
+            Some(PrfInputValue {
+                first: b"input".to_vec(),
+                second: None,
+            }),
+            HashMap::new(),
+        );
+        let info = info_with_extensions(&["prf"]);
+        let ctap2 = Ctap2GetAssertionRequest::from_webauthn_request(&request, &info).unwrap();
+
+        let bytes = crate::proto::ctap2::cbor::to_vec(&ctap2).unwrap();
+        let parsed: BTreeMap<u64, Value> = crate::proto::ctap2::cbor::from_slice(&bytes).unwrap();
+        let Some(Value::Map(extensions)) = parsed.get(&0x04) else {
+            panic!("extensions (0x04) missing from the wire")
+        };
+        assert!(extensions.contains_key(&Value::Text("prf".to_string())));
+    }
+
+    #[test]
+    fn native_prf_composes_with_large_blob_write() {
+        let mut request = prf_request(
+            vec![make_credential(b"cred-1")],
+            Some(PrfInputValue {
+                first: b"input".to_vec(),
+                second: None,
+            }),
+            HashMap::new(),
+        );
+        request.extensions.as_mut().unwrap().large_blob =
+            Some(GetAssertionLargeBlobExtension::Write(b"blob".to_vec()));
+        let info = Ctap2GetInfoResponse {
+            extensions: Some(vec!["prf".to_string()]),
+            options: Some(
+                [("largeBlobs".to_string(), true), ("uv".to_string(), true)]
+                    .into_iter()
+                    .collect(),
+            ),
+            ..Default::default()
+        };
+
+        let ctap2 = Ctap2GetAssertionRequest::from_webauthn_request(&request, &info).unwrap();
+        let ext = ctap2.extensions.as_ref().unwrap();
+        assert!(ext.prf.is_some());
+        assert!(ext.hmac_or_prf.is_none());
+        assert_eq!(ext.large_blob_key, Some(true));
+        // The pinUvAuthToken is still negotiated for the lbw permission.
+        assert!(ctap2.needs_pin_uv_auth_token(&info));
+        assert!(ctap2.needs_shared_secret(&info));
+    }
+
+    #[test]
+    fn native_prf_forwards_all_matching_eval_by_credential_entries() {
+        let mut by_cred = HashMap::new();
+        for (id, salt) in [
+            (&b"cred-1"[..], &b"salt-1"[..]),
+            (b"cred-2", b"salt-2"),
+            (b"unknown-cred", b"salt-3"),
+        ] {
+            by_cred.insert(
+                base64_url::encode(id),
+                PrfInputValue {
+                    first: salt.to_vec(),
+                    second: None,
+                },
+            );
+        }
+        let request = prf_request(
+            vec![make_credential(b"cred-1"), make_credential(b"cred-2")],
+            None,
+            by_cred,
+        );
+        let info = info_with_extensions(&["prf"]);
+
+        let ctap2 = Ctap2GetAssertionRequest::from_webauthn_request(&request, &info).unwrap();
+        let prf = ctap2.extensions.as_ref().unwrap().prf.as_ref().unwrap();
+        let by_cred = prf.eval_by_credential.as_ref().unwrap();
+        assert_eq!(by_cred.len(), 2);
+        assert_eq!(
+            by_cred
+                .get(&ByteBuf::from(b"cred-1".to_vec()))
+                .unwrap()
+                .first,
+            hashed_salt(b"salt-1")
+        );
+        assert_eq!(
+            by_cred
+                .get(&ByteBuf::from(b"cred-2".to_vec()))
+                .unwrap()
+                .first,
+            hashed_salt(b"salt-2")
+        );
+    }
+
+    #[test]
     fn native_prf_invalid_eval_by_credential_keys_are_syntax_errors() {
         let info = info_with_extensions(&["prf"]);
         let cred = make_credential(b"cred-1");
@@ -1198,6 +1296,62 @@ mod tests {
         let parsed =
             parse_unsigned_prf(&unsigned_prf_outputs(&[0xAB; 32], Some(&[0xCD; 16]))).unwrap();
         assert!(parsed.results.is_none());
+
+        // Non-bool enabled is ignored
+        let mut prf = BTreeMap::new();
+        prf.insert(Value::Text("enabled".to_string()), Value::Integer(1));
+        let mut outputs = BTreeMap::new();
+        outputs.insert(Value::Text("prf".to_string()), Value::Map(prf));
+        let parsed = parse_unsigned_prf(&outputs).unwrap();
+        assert!(parsed.enabled.is_none());
+    }
+
+    #[test]
+    fn surfaces_passthrough_prf_results_in_client_extension_results() {
+        use crate::ops::webauthn::idl::response::{JsonFormat, WebAuthnIDLResponse};
+
+        // End-to-end GPM shape: results only in unsignedExtensionOutputs (0x08),
+        // no signed extensions, ED flag unset.
+        let mut auth_data = vec![0u8; 37];
+        auth_data[32] = AuthenticatorDataFlags::USER_PRESENT.bits();
+
+        let mut response: BTreeMap<u64, Value> = BTreeMap::new();
+        response.insert(0x02, Value::Bytes(auth_data));
+        response.insert(0x03, Value::Bytes(vec![0xAAu8; 64]));
+        response.insert(
+            0x08,
+            Value::Map(unsigned_prf_outputs(&[0xAB; 32], Some(&[0xCD; 32]))),
+        );
+
+        let bytes = crate::proto::ctap2::cbor::to_vec(&response).unwrap();
+        let parsed: Ctap2GetAssertionResponse =
+            crate::proto::ctap2::cbor::from_slice(&bytes).unwrap();
+
+        let request = prf_request(
+            vec![make_credential(b"cred-1")],
+            Some(PrfInputValue {
+                first: b"input".to_vec(),
+                second: None,
+            }),
+            HashMap::new(),
+        );
+        let assertion = parsed.into_assertion_output(&request, None);
+        let json_str = assertion
+            .to_json_string(&request, JsonFormat::default())
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+
+        let prf = &json["clientExtensionResults"]["prf"];
+        assert_eq!(
+            prf["results"]["first"],
+            serde_json::json!(base64_url::encode(&[0xAB; 32]))
+        );
+        assert_eq!(
+            prf["results"]["second"],
+            serde_json::json!(base64_url::encode(&[0xCD; 32]))
+        );
+        // Exactly one prf member: the raw passthrough must not emit a duplicate.
+        assert_eq!(json_str.matches("\"prf\"").count(), 1);
     }
 
     #[test]
