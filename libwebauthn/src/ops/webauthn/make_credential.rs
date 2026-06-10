@@ -1460,6 +1460,32 @@ mod tests {
     }
 
     #[test]
+    fn prf_output_serialized_into_client_extension_results() {
+        let mut response = create_test_response();
+        response.unsigned_extensions_output = MakeCredentialsResponseUnsignedExtensions {
+            prf: Some(MakeCredentialPrfOutput {
+                enabled: Some(true),
+                results: Some(PrfOutputValue {
+                    first: [0xAB; 32],
+                    second: Some([0xCD; 32]),
+                }),
+            }),
+            ..Default::default()
+        };
+
+        let results = serde_json::to_value(response.build_client_extension_results()).unwrap();
+        assert_eq!(results["prf"]["enabled"], serde_json::json!(true));
+        assert_eq!(
+            results["prf"]["results"]["first"],
+            serde_json::json!(base64_url::encode(&[0xAB; 32]))
+        );
+        assert_eq!(
+            results["prf"]["results"]["second"],
+            serde_json::json!(base64_url::encode(&[0xCD; 32]))
+        );
+    }
+
+    #[test]
     fn test_response_to_idl_model() {
         let response = create_test_response();
         let request = create_test_request();

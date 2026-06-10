@@ -729,6 +729,77 @@ mod tests {
     }
 
     #[test]
+    fn native_prf_request_serializes_extensions_at_0x06() {
+        let info = info_with_extensions(&["prf"]);
+        let req = mc_request_with_prf(Some(PrfInputValue {
+            first: b"input".to_vec(),
+            second: None,
+        }));
+        let ctap = Ctap2MakeCredentialRequest::from_webauthn_request(&req, &info).unwrap();
+
+        let bytes = crate::proto::ctap2::cbor::to_vec(&ctap).unwrap();
+        let parsed: BTreeMap<u64, Value> = crate::proto::ctap2::cbor::from_slice(&bytes).unwrap();
+        let Some(Value::Map(extensions)) = parsed.get(&0x06) else {
+            panic!("extensions (0x06) missing from the wire")
+        };
+        assert!(extensions.contains_key(&Value::Text("prf".to_string())));
+    }
+
+    #[test]
+    fn hmac_create_secret_not_rerouted_by_prf_support() {
+        // The passthrough applies to the prf extension only.
+        let info = info_with_extensions(&["prf"]);
+        let req = MakeCredentialRequest {
+            extensions: Some(MakeCredentialsRequestExtensions {
+                hmac_create_secret: Some(true),
+                ..Default::default()
+            }),
+            ..mc_request_with_prf(None)
+        };
+        let ctap = Ctap2MakeCredentialRequest::from_webauthn_request(&req, &info).unwrap();
+        let ext = ctap.extensions.unwrap();
+        assert!(ext.prf.is_none());
+        assert_eq!(ext.hmac_secret, Some(true));
+    }
+
+    #[test]
+    fn prf_create_time_results_parsed_from_unsigned_extension_outputs() {
+        // Google Password Manager phones evaluate eval at creation and return
+        // results alongside enabled.
+        let mut results = BTreeMap::new();
+        results.insert(
+            Value::Text("first".to_string()),
+            Value::Bytes(vec![0xAB; 32]),
+        );
+        results.insert(
+            Value::Text("second".to_string()),
+            Value::Bytes(vec![0xCD; 32]),
+        );
+        let mut prf_entry = BTreeMap::new();
+        prf_entry.insert(Value::Text("enabled".to_string()), Value::Bool(true));
+        prf_entry.insert(Value::Text("results".to_string()), Value::Map(results));
+        let mut outputs = BTreeMap::new();
+        outputs.insert(Value::Text("prf".to_string()), Value::Map(prf_entry));
+
+        let req = mc_request_with_prf(Some(PrfInputValue {
+            first: b"input".to_vec(),
+            second: Some(b"input-2".to_vec()),
+        }));
+        let out = MakeCredentialsResponseUnsignedExtensions::from_signed_extensions(
+            &None,
+            Some(&outputs),
+            &req,
+            None,
+            None,
+        );
+        let prf = out.prf.expect("prf output present");
+        assert_eq!(prf.enabled, Some(true));
+        let results = prf.results.expect("create-time results present");
+        assert_eq!(results.first, [0xAB; 32]);
+        assert_eq!(results.second, Some([0xCD; 32]));
+    }
+
+    #[test]
     fn decodes_unsigned_extension_outputs_at_index_0x06() {
         // 0x06 is unsignedExtensionOutputs (CTAP 2.2 §6.1).
         let mut auth_data = vec![0u8; 37];
