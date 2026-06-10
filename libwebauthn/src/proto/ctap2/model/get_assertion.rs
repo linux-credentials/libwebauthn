@@ -692,6 +692,37 @@ mod tests {
     }
 
     #[test]
+    fn pin_uv_auth_param_clears_uv_option() {
+        use crate::ops::webauthn::UserVerificationRequirement;
+        use crate::pin::PinUvAuthProtocolOne;
+
+        let mut request = make_request(vec![]);
+        request.user_verification = UserVerificationRequirement::Required;
+        let mut ctap2 = Ctap2GetAssertionRequest::from(request);
+        assert!(ctap2.options.unwrap().require_user_verification);
+
+        let proto = PinUvAuthProtocolOne::new();
+        ctap2
+            .calculate_and_set_uv_auth(&proto, &[0xAA; 32])
+            .unwrap();
+
+        assert!(ctap2.pin_auth_param.is_some());
+        assert!(!ctap2.options.unwrap().require_user_verification);
+
+        // Wire check: the options map (0x05) must not contain "uv".
+        let bytes = crate::proto::ctap2::cbor::to_vec(&ctap2).unwrap();
+        let parsed: BTreeMap<u64, Value> = crate::proto::ctap2::cbor::from_slice(&bytes).unwrap();
+        let Some(Value::Map(options)) = parsed.get(&0x05) else {
+            panic!("options map missing from serialized request");
+        };
+        assert!(!options.contains_key(&Value::Text("uv".to_string())));
+        assert_eq!(
+            options.get(&Value::Text("up".to_string())),
+            Some(&Value::Bool(true))
+        );
+    }
+
+    #[test]
     fn decodes_unsigned_extension_outputs_at_index_0x08() {
         // 0x08 is unsignedExtensionOutputs (a CBOR map), not enterprise attestation.
         let mut auth_data = vec![0u8; 37];

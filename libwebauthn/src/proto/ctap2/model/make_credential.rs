@@ -702,6 +702,33 @@ mod tests {
     }
 
     #[test]
+    fn pin_uv_auth_param_clears_deprecated_uv_option() {
+        use crate::pin::PinUvAuthProtocolOne;
+
+        let info = Ctap2GetInfoResponse::default();
+        let req = mc_request_with_prf(None);
+        let mut ctap2 = Ctap2MakeCredentialRequest::from_webauthn_request(&req, &info).unwrap();
+
+        ctap2.ensure_uv_set();
+        assert_eq!(
+            ctap2.options.unwrap().deprecated_require_user_verification,
+            Some(true)
+        );
+
+        let proto = PinUvAuthProtocolOne::new();
+        ctap2
+            .calculate_and_set_uv_auth(&proto, &[0xAA; 32])
+            .unwrap();
+
+        assert!(ctap2.pin_auth_param.is_some());
+        assert!(ctap2
+            .options
+            .unwrap()
+            .deprecated_require_user_verification
+            .is_none());
+    }
+
+    #[test]
     fn from_signed_extensions_decrypts_results_with_auth_data() {
         use crate::proto::ctap2::Ctap2UserVerificationOperation;
         use cosey::{Bytes, PublicKey};
