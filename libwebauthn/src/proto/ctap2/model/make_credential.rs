@@ -1,8 +1,9 @@
 use super::{
-    get_assertion::CalculatedHMACGetSecretInput, Ctap2AttestationStatement,
-    Ctap2AuthTokenPermissionRole, Ctap2CredentialType, Ctap2GetInfoResponse,
-    Ctap2PinUvAuthProtocol, Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialRpEntity,
-    Ctap2PublicKeyCredentialUserEntity, Ctap2UserVerifiableRequest,
+    get_assertion::{CalculatedHMACGetSecretInput, Ctap2PrfSalts},
+    Ctap2AttestationStatement, Ctap2AuthTokenPermissionRole, Ctap2CredentialType,
+    Ctap2GetInfoResponse, Ctap2PinUvAuthProtocol, Ctap2PublicKeyCredentialDescriptor,
+    Ctap2PublicKeyCredentialRpEntity, Ctap2PublicKeyCredentialUserEntity,
+    Ctap2UserVerifiableRequest,
 };
 use crate::{
     fido::AuthenticatorData,
@@ -12,7 +13,7 @@ use crate::{
         MakeCredentialsResponseUnsignedExtensions, PrfInputValue, ResidentKeyRequirement,
     },
     pin::PinUvAuthProtocol,
-    proto::CtapError,
+    proto::{ctap2::cbor::Value, CtapError},
     transport::AuthTokenData,
     webauthn::{Error, PlatformError},
 };
@@ -20,6 +21,7 @@ use ctap_types::ctap2::credential_management::CredentialProtectionPolicy as Ctap
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 use serde_indexed::{DeserializeIndexed, SerializeIndexed};
+use std::collections::BTreeMap;
 use tracing::{error, warn};
 
 #[derive(Debug, Default, Clone, Copy, Serialize)]
@@ -180,6 +182,10 @@ impl Ctap2MakeCredentialRequest {
 #[serde(rename_all = "camelCase")]
 pub struct Ctap2MakeCredentialsRequestExtensions {
     // Field order is CTAP2 canonical CBOR map order: shortest key first, then bytewise.
+    /// Native `prf` extension, used by phone/platform authenticators that advertise
+    /// `prf` in getInfo instead of `hmac-secret` (e.g. over hybrid).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prf: Option<Ctap2PrfMakeCredentialInput>,
     #[serde(skip_serializing_if = "Option::is_none", with = "serde_bytes")]
     pub cred_blob: Option<Vec<u8>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -200,13 +206,20 @@ pub struct Ctap2MakeCredentialsRequestExtensions {
 
 impl Ctap2MakeCredentialsRequestExtensions {
     pub fn skip_serializing(&self) -> bool {
-        self.cred_blob.is_none()
+        self.prf.is_none()
+            && self.cred_blob.is_none()
             && self.cred_protect.is_none()
             && self.hmac_secret.is_none()
             && self.large_blob_key.is_none()
             && self.min_pin_length.is_none()
             && self.hmac_secret_mc.is_none()
     }
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize)]
+pub struct Ctap2PrfMakeCredentialInput {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub eval: Option<Ctap2PrfSalts>,
 }
 
 impl Ctap2MakeCredentialsRequestExtensions {
@@ -257,8 +270,12 @@ impl Ctap2MakeCredentialsRequestExtensions {
             _ => None,
         };
 
+        // Prefer the native `prf` extension when advertised; otherwise map the
+        // WebAuthn PRF input onto hmac-secret (+ hmac-secret-mc where available).
+        let native_prf = requested_extensions.prf.is_some() && info.supports_extension("prf");
+
         let hmac_secret = if requested_extensions.hmac_create_secret == Some(true)
-            || requested_extensions.prf.is_some()
+            || (requested_extensions.prf.is_some() && !native_prf)
         {
             Some(true)
         } else {
@@ -270,10 +287,24 @@ impl Ctap2MakeCredentialsRequestExtensions {
             .as_ref()
             .and_then(|prf| prf.eval.clone())
             .filter(|_| {
-                info.supports_extension("hmac-secret-mc") && info.supports_extension("hmac-secret")
+                !native_prf
+                    && info.supports_extension("hmac-secret-mc")
+                    && info.supports_extension("hmac-secret")
             });
 
+        let prf = if native_prf {
+            requested_extensions
+                .prf
+                .as_ref()
+                .map(|prf| Ctap2PrfMakeCredentialInput {
+                    eval: prf.eval.as_ref().map(Ctap2PrfSalts::from),
+                })
+        } else {
+            None
+        };
+
         Ok(Ctap2MakeCredentialsRequestExtensions {
+            prf,
             cred_blob: requested_extensions
                 .cred_blob
                 .as_ref()
@@ -343,6 +374,12 @@ pub struct Ctap2MakeCredentialResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(index = 0x05)]
     pub large_blob_key: Option<ByteBuf>,
+
+    /// unsignedExtensionOutputs (CTAP 2.2 §6.1), where the native `prf` output
+    /// is returned by phone authenticators.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x06)]
+    pub unsigned_extension_outputs: Option<BTreeMap<Value, Value>>,
 }
 
 impl Ctap2MakeCredentialResponse {
@@ -355,6 +392,7 @@ impl Ctap2MakeCredentialResponse {
         let unsigned_extensions_output =
             MakeCredentialsResponseUnsignedExtensions::from_signed_extensions(
                 &self.authenticator_data.extensions,
+                self.unsigned_extension_outputs.as_ref(),
                 request,
                 info,
                 auth_data,
@@ -603,6 +641,118 @@ mod tests {
     }
 
     #[test]
+    fn native_prf_used_when_getinfo_advertises_prf() {
+        let info = info_with_extensions(&["prf"]);
+        let req = mc_request_with_prf(Some(PrfInputValue {
+            first: b"create-first".to_vec(),
+            second: None,
+        }));
+        let ctap = Ctap2MakeCredentialRequest::from_webauthn_request(&req, &info).unwrap();
+        let ext = ctap.extensions.as_ref().unwrap();
+        assert!(ext.hmac_secret.is_none(), "hmac-secret must not be sent");
+        assert!(ext.prf_input.is_none(), "no hmac-secret-mc buffering");
+        let prf = ext.prf.as_ref().expect("native prf set");
+        let eval = prf.eval.as_ref().expect("eval present");
+        let expected = PrfInputValue {
+            first: b"create-first".to_vec(),
+            second: None,
+        }
+        .to_hmac_secret_input();
+        assert_eq!(eval.first, expected.salt1);
+        assert!(!ctap.needs_shared_secret(&info));
+
+        // Wire format: {"prf": {"eval": {"first": h'..32 bytes..'}}}
+        let bytes = crate::proto::ctap2::cbor::to_vec(&ext).unwrap();
+        let parsed: std::collections::BTreeMap<String, Value> =
+            crate::proto::ctap2::cbor::from_slice(&bytes).unwrap();
+        assert_eq!(parsed.len(), 1);
+        let Some(Value::Map(prf_map)) = parsed.get("prf") else {
+            panic!("prf entry missing")
+        };
+        let Some(Value::Map(eval_map)) = prf_map.get(&Value::Text("eval".to_string())) else {
+            panic!("eval entry missing")
+        };
+        // The salt must encode as a 32-byte CBOR byte string.
+        match eval_map.get(&Value::Text("first".to_string())) {
+            Some(Value::Bytes(bytes)) => assert_eq!(bytes.len(), 32),
+            other => panic!("first must be a byte string, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn native_prf_without_eval_sends_empty_map() {
+        let info = info_with_extensions(&["prf"]);
+        let req = mc_request_with_prf(None);
+        let ctap = Ctap2MakeCredentialRequest::from_webauthn_request(&req, &info).unwrap();
+        let ext = ctap.extensions.as_ref().unwrap();
+        assert_eq!(ext.prf, Some(Ctap2PrfMakeCredentialInput { eval: None }));
+        assert!(!ext.skip_serializing());
+
+        // {"prf": {}}
+        let bytes = crate::proto::ctap2::cbor::to_vec(&ext).unwrap();
+        assert_eq!(bytes, vec![0xA1, 0x63, b'p', b'r', b'f', 0xA0]);
+    }
+
+    #[test]
+    fn native_prf_preferred_over_hmac_secret_when_both_advertised() {
+        let info = info_with_extensions(&["hmac-secret", "hmac-secret-mc", "prf"]);
+        let req = mc_request_with_prf(Some(PrfInputValue {
+            first: b"x".to_vec(),
+            second: None,
+        }));
+        let ctap = Ctap2MakeCredentialRequest::from_webauthn_request(&req, &info).unwrap();
+        let ext = ctap.extensions.as_ref().unwrap();
+        assert!(ext.prf.is_some());
+        assert!(ext.hmac_secret.is_none());
+        assert!(ext.prf_input.is_none());
+    }
+
+    #[test]
+    fn prf_enabled_parsed_from_unsigned_extension_outputs() {
+        // Phone case: no signed extensions, prf enabled in unsignedExtensionOutputs (0x06).
+        let mut prf_entry = BTreeMap::new();
+        prf_entry.insert(Value::Text("enabled".to_string()), Value::Bool(true));
+        let mut outputs = BTreeMap::new();
+        outputs.insert(Value::Text("prf".to_string()), Value::Map(prf_entry));
+
+        let req = mc_request_with_prf(None);
+        let out = MakeCredentialsResponseUnsignedExtensions::from_signed_extensions(
+            &None,
+            Some(&outputs),
+            &req,
+            None,
+            None,
+        );
+        let prf = out.prf.expect("prf output present");
+        assert_eq!(prf.enabled, Some(true));
+        assert!(prf.results.is_none());
+    }
+
+    #[test]
+    fn decodes_unsigned_extension_outputs_at_index_0x06() {
+        // 0x06 is unsignedExtensionOutputs (CTAP 2.2 §6.1).
+        let mut auth_data = vec![0u8; 37];
+        auth_data[32] = crate::fido::AuthenticatorDataFlags::USER_PRESENT.bits();
+
+        let mut prf_entry = BTreeMap::new();
+        prf_entry.insert(Value::Text("enabled".to_string()), Value::Bool(true));
+        let mut ueo = BTreeMap::new();
+        ueo.insert(Value::Text("prf".to_string()), Value::Map(prf_entry));
+
+        let mut response: BTreeMap<u64, Value> = BTreeMap::new();
+        response.insert(0x01, Value::Text("none".to_string()));
+        response.insert(0x02, Value::Bytes(auth_data));
+        response.insert(0x03, Value::Map(BTreeMap::new()));
+        response.insert(0x06, Value::Map(ueo.clone()));
+
+        let bytes = crate::proto::ctap2::cbor::to_vec(&response).unwrap();
+        let parsed: Ctap2MakeCredentialResponse =
+            crate::proto::ctap2::cbor::from_slice(&bytes).unwrap();
+
+        assert_eq!(parsed.unsigned_extension_outputs, Some(ueo));
+    }
+
+    #[test]
     fn needs_shared_secret_true_only_when_mc_advertised_and_buffered() {
         let info_mc = info_with_extensions(&["hmac-secret", "hmac-secret-mc"]);
         let info_no_mc = info_with_extensions(&["hmac-secret"]);
@@ -736,6 +886,7 @@ mod tests {
 
         let out = MakeCredentialsResponseUnsignedExtensions::from_signed_extensions(
             &Some(signed),
+            None,
             &req,
             None,
             Some(&auth_data),
@@ -774,6 +925,7 @@ mod tests {
         }
 
         let ext = Ctap2MakeCredentialsRequestExtensions {
+            prf: None,
             cred_protect: Some(Ctap2CredentialProtectionPolicy::Required),
             cred_blob: Some(vec![1, 2, 3]),
             large_blob_key: Some(true),
