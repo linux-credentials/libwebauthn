@@ -159,6 +159,10 @@ pub trait Ctap2AuthTokenStore {
     fn store_auth_data(&mut self, auth_token_data: AuthTokenData);
     fn get_auth_data(&self) -> Option<&AuthTokenData>;
     fn clear_uv_auth_token_store(&mut self);
+    /// Command set resolved by the last credMgmt state-initializing request, so
+    /// stateful GetNext continuations reuse it without re-fetching getInfo.
+    fn set_cred_mgmt_preview(&mut self, uses_preview: bool);
+    fn cred_mgmt_preview(&self) -> bool;
     fn get_uv_auth_token(&self, requested_permission: &Ctap2AuthTokenPermission) -> Option<&[u8]> {
         if let Some(stored_data) = self.get_auth_data() {
             if let Some(permission) = &stored_data.permission {

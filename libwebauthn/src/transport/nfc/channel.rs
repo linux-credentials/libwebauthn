@@ -103,6 +103,7 @@ where
 {
     delegate: Box<dyn NfcBackend<Ctx> + Send + Sync>,
     auth_token_data: Option<AuthTokenData>,
+    cred_mgmt_preview: bool,
     persistent_token_store: Option<Arc<dyn PersistentTokenStore>>,
     ux_update_sender: broadcast::Sender<UvUpdate>,
     handle: NfcChannelHandle,
@@ -137,6 +138,7 @@ where
         NfcChannel {
             delegate,
             auth_token_data: None,
+            cred_mgmt_preview: false,
             persistent_token_store: settings.persistent_token_store,
             ux_update_sender,
             handle,
@@ -362,6 +364,14 @@ where
 
     fn clear_uv_auth_token_store(&mut self) {
         self.auth_token_data = None;
+    }
+
+    fn set_cred_mgmt_preview(&mut self, uses_preview: bool) {
+        self.cred_mgmt_preview = uses_preview;
+    }
+
+    fn cred_mgmt_preview(&self) -> bool {
+        self.cred_mgmt_preview
     }
 
     fn persistent_token_store(&self) -> Option<Arc<dyn PersistentTokenStore>> {

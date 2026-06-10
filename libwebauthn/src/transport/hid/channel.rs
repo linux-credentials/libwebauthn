@@ -82,6 +82,7 @@ pub struct HidChannel<'d> {
     open_device: OpenHidDevice,
     init: InitResponse,
     auth_token_data: Option<AuthTokenData>,
+    cred_mgmt_preview: bool,
     persistent_token_store: Option<Arc<dyn PersistentTokenStore>>,
     ux_update_sender: broadcast::Sender<UvUpdate>,
     handle: HidChannelHandle,
@@ -113,6 +114,7 @@ impl<'d> HidChannel<'d> {
             },
             init: InitResponse::default(),
             auth_token_data: None,
+            cred_mgmt_preview: false,
             persistent_token_store: settings.persistent_token_store,
             ux_update_sender,
             handle,
@@ -613,6 +615,14 @@ impl Ctap2AuthTokenStore for HidChannel<'_> {
 
     fn clear_uv_auth_token_store(&mut self) {
         self.auth_token_data = None;
+    }
+
+    fn set_cred_mgmt_preview(&mut self, uses_preview: bool) {
+        self.cred_mgmt_preview = uses_preview;
+    }
+
+    fn cred_mgmt_preview(&self) -> bool {
+        self.cred_mgmt_preview
     }
 
     fn persistent_token_store(&self) -> Option<Arc<dyn PersistentTokenStore>> {

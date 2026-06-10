@@ -111,6 +111,7 @@ where
                 req
             )
         }?;
+        self.set_cred_mgmt_preview(req.use_legacy_preview);
         Ok((
             Ctap2RPData::new(
                 unwrap_field!(resp.rp),
@@ -122,24 +123,8 @@ where
 
     async fn enumerate_rps_next_rp(&mut self, timeout: Duration) -> Result<Ctap2RPData, Error> {
         let mut req = Ctap2CredentialManagementRequest::new_enumerate_rps_next_rp();
-        let resp = loop {
-            let uv_auth_used = user_verification(
-                self,
-                UserVerificationRequirement::Preferred,
-                &mut req,
-                timeout,
-            )
-            .await?;
-
-            // On success, this is an all-empty Ctap2AuthenticatorConfigResponse
-            handle_errors!(
-                self,
-                self.ctap2_credential_management(&req, timeout).await,
-                uv_auth_used,
-                timeout,
-                req
-            )
-        }?;
+        req.use_legacy_preview = self.cred_mgmt_preview();
+        let resp = self.ctap2_credential_management(&req, timeout).await?;
         Ok(Ctap2RPData::new(
             unwrap_field!(resp.rp),
             unwrap_field!(resp.rp_id_hash).into_vec(),
@@ -170,6 +155,7 @@ where
                 req
             )
         }?;
+        self.set_cred_mgmt_preview(req.use_legacy_preview);
         let cred = Ctap2CredentialData::new(
             unwrap_field!(resp.user),
             unwrap_field!(resp.credential_id),
@@ -186,24 +172,8 @@ where
         timeout: Duration,
     ) -> Result<Ctap2CredentialData, Error> {
         let mut req = Ctap2CredentialManagementRequest::new_enumerate_credentials_next();
-        let resp = loop {
-            let uv_auth_used = user_verification(
-                self,
-                UserVerificationRequirement::Preferred,
-                &mut req,
-                timeout,
-            )
-            .await?;
-
-            // On success, this is an all-empty Ctap2AuthenticatorConfigResponse
-            handle_errors!(
-                self,
-                self.ctap2_credential_management(&req, timeout).await,
-                uv_auth_used,
-                timeout,
-                req
-            )
-        }?;
+        req.use_legacy_preview = self.cred_mgmt_preview();
+        let resp = self.ctap2_credential_management(&req, timeout).await?;
         let cred = Ctap2CredentialData::new(
             unwrap_field!(resp.user),
             unwrap_field!(resp.credential_id),
@@ -367,9 +337,11 @@ mod test {
     use crate::proto::ctap2::cbor::{self, CborRequest, CborResponse};
     use crate::proto::ctap2::{
         Ctap2CommandCode, Ctap2CredentialManagementRequest, Ctap2GetInfoResponse,
-        Ctap2PublicKeyCredentialRpEntity,
+        Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialRpEntity,
+        Ctap2PublicKeyCredentialType, Ctap2PublicKeyCredentialUserEntity,
     };
     use crate::transport::mock::channel::MockChannel;
+    use std::collections::{BTreeMap, HashMap};
 
     const TIMEOUT: Duration = Duration::from_secs(1);
 
@@ -412,5 +384,136 @@ mod test {
         // Raw 32-byte hash, not a 34-byte CBOR byte string (0x58 0x20 || hash).
         assert_eq!(rp_data.rp_id_hash.len(), 32);
         assert_eq!(rp_data.rp_id_hash, hash.to_vec());
+    }
+
+    // GetNextRP returns only rp (0x03) and rpIDHash (0x04).
+    #[derive(SerializeIndexed)]
+    struct EnumerateRpsNextResponse {
+        #[serde(index = 0x03)]
+        rp: Ctap2PublicKeyCredentialRpEntity,
+        #[serde(index = 0x04)]
+        rp_id_hash: ByteBuf,
+    }
+
+    // GetNextCredential returns user (0x06), credentialID (0x07), publicKey (0x08), credProtect (0x0A).
+    #[derive(SerializeIndexed)]
+    struct EnumerateCredsNextResponse {
+        #[serde(index = 0x06)]
+        user: Ctap2PublicKeyCredentialUserEntity,
+        #[serde(index = 0x07)]
+        credential_id: Ctap2PublicKeyCredentialDescriptor,
+        #[serde(index = 0x08)]
+        public_key: BTreeMap<i8, i8>,
+        #[serde(index = 0x0A)]
+        cred_protect: u64,
+    }
+
+    #[tokio::test]
+    async fn enumerate_rps_next_rp_sends_only_the_subcommand() {
+        let req = Ctap2CredentialManagementRequest::new_enumerate_rps_next_rp();
+        let cbor_req: CborRequest = (&req).try_into().unwrap();
+        assert_eq!(
+            cbor_req.command,
+            Ctap2CommandCode::AuthenticatorCredentialManagement
+        );
+        // CTAP 2.1 §6.8.3: {subCommand: enumerateRPsGetNextRP}, no pinUvAuth keys.
+        assert_eq!(cbor_req.encoded_data, vec![0xA1, 0x01, 0x03]);
+
+        let hash = [0xCD_u8; 32];
+        let fixture = EnumerateRpsNextResponse {
+            rp: Ctap2PublicKeyCredentialRpEntity::new("example.org", "Example"),
+            rp_id_hash: ByteBuf::from(hash.to_vec()),
+        };
+        let resp = CborResponse::new_success_from_slice(&cbor::to_vec(&fixture).unwrap());
+        // Queue only the GetNext exchange: any interleaved command panics the mock.
+        let mut channel = MockChannel::new();
+        channel.push_command_pair(cbor_req, resp);
+
+        let rp_data = channel.enumerate_rps_next_rp(TIMEOUT).await.unwrap();
+        assert_eq!(rp_data.rp_id_hash, hash.to_vec());
+    }
+
+    #[tokio::test]
+    async fn enumerate_credentials_next_sends_only_the_subcommand() {
+        let req = Ctap2CredentialManagementRequest::new_enumerate_credentials_next();
+        let cbor_req: CborRequest = (&req).try_into().unwrap();
+        assert_eq!(
+            cbor_req.command,
+            Ctap2CommandCode::AuthenticatorCredentialManagement
+        );
+        // CTAP 2.1 §6.8.4: {subCommand: enumerateCredentialsGetNextCredential}, no pinUvAuth keys.
+        assert_eq!(cbor_req.encoded_data, vec![0xA1, 0x01, 0x05]);
+
+        let fixture = EnumerateCredsNextResponse {
+            user: Ctap2PublicKeyCredentialUserEntity::new(&[0x0B; 16], "bob", "bob"),
+            credential_id: Ctap2PublicKeyCredentialDescriptor {
+                id: ByteBuf::from(vec![0x1D; 32]),
+                r#type: Ctap2PublicKeyCredentialType::PublicKey,
+                transports: None,
+            },
+            public_key: BTreeMap::from([(1, 2), (3, -7)]),
+            cred_protect: 1,
+        };
+        let resp = CborResponse::new_success_from_slice(&cbor::to_vec(&fixture).unwrap());
+        let mut channel = MockChannel::new();
+        channel.push_command_pair(cbor_req, resp);
+
+        let cred = channel.enumerate_credentials_next(TIMEOUT).await.unwrap();
+        assert_eq!(cred.user.id, ByteBuf::from(vec![0x0B; 16]));
+        assert_eq!(cred.cred_protect, 1);
+        assert!(cred.large_blob_key.is_none());
+    }
+
+    #[tokio::test]
+    async fn get_next_reuses_preview_command_resolved_by_begin() {
+        let mut channel = MockChannel::new();
+
+        // Device advertises credentialMgmtPreview only: Begin must resolve 0x41.
+        let info = Ctap2GetInfoResponse {
+            options: Some(HashMap::from([("credentialMgmtPreview".to_string(), true)])),
+            ..Default::default()
+        };
+        let info_req = CborRequest::new(Ctap2CommandCode::AuthenticatorGetInfo);
+        let info_resp = CborResponse::new_success_from_slice(&cbor::to_vec(&info).unwrap());
+        channel.push_command_pair(info_req, info_resp);
+
+        let mut begin_req = Ctap2CredentialManagementRequest::new_enumerate_rps_begin();
+        begin_req.use_legacy_preview = true;
+        let begin_cbor: CborRequest = (&begin_req).try_into().unwrap();
+        assert_eq!(
+            begin_cbor.command,
+            Ctap2CommandCode::AuthenticatorCredentialManagementPreview
+        );
+        let begin_fixture = EnumerateRpsResponse {
+            rp: Ctap2PublicKeyCredentialRpEntity::new("example.com", "Example"),
+            rp_id_hash: ByteBuf::from(vec![0xEF; 32]),
+            total_rps: 2,
+        };
+        channel.push_command_pair(
+            begin_cbor,
+            CborResponse::new_success_from_slice(&cbor::to_vec(&begin_fixture).unwrap()),
+        );
+
+        let mut next_req = Ctap2CredentialManagementRequest::new_enumerate_rps_next_rp();
+        next_req.use_legacy_preview = true;
+        let next_cbor: CborRequest = (&next_req).try_into().unwrap();
+        assert_eq!(
+            next_cbor.command,
+            Ctap2CommandCode::AuthenticatorCredentialManagementPreview
+        );
+        assert_eq!(next_cbor.encoded_data, vec![0xA1, 0x01, 0x03]);
+        let next_fixture = EnumerateRpsNextResponse {
+            rp: Ctap2PublicKeyCredentialRpEntity::new("example.org", "Example Two"),
+            rp_id_hash: ByteBuf::from(vec![0x11; 32]),
+        };
+        channel.push_command_pair(
+            next_cbor,
+            CborResponse::new_success_from_slice(&cbor::to_vec(&next_fixture).unwrap()),
+        );
+
+        let (_, total) = channel.enumerate_rps_begin(TIMEOUT).await.unwrap();
+        assert_eq!(total, 2);
+        let rp_data = channel.enumerate_rps_next_rp(TIMEOUT).await.unwrap();
+        assert_eq!(rp_data.rp_id_hash, vec![0x11; 32]);
     }
 }
