@@ -202,6 +202,12 @@ impl Ctap2AuthTokenStore for CableChannel {
 
     fn clear_uv_auth_token_store(&mut self) {}
 
+    fn set_cred_mgmt_preview(&mut self, _uses_preview: bool) {}
+
+    fn cred_mgmt_preview(&self) -> bool {
+        false
+    }
+
     fn persistent_token_store(&self) -> Option<Arc<dyn PersistentTokenStore>> {
         self.persistent_token_store.clone()
     }
