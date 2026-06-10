@@ -405,6 +405,9 @@ impl Ctap2UserVerifiableRequest for Ctap2GetAssertionRequest {
         let uv_auth_param = uv_proto.authenticate(uv_auth_token, hash)?;
         self.pin_auth_proto = Some(uv_proto.version() as u32);
         self.pin_auth_param = Some(ByteBuf::from(uv_auth_param));
+        if let Some(ref mut options) = self.options {
+            options.require_user_verification = false;
+        }
         Ok(())
     }
 
@@ -686,6 +689,37 @@ mod tests {
             .expect("largeBlob extension output present");
 
         assert!(large_blob.blob.is_none());
+    }
+
+    #[test]
+    fn pin_uv_auth_param_clears_uv_option() {
+        use crate::ops::webauthn::UserVerificationRequirement;
+        use crate::pin::PinUvAuthProtocolOne;
+
+        let mut request = make_request(vec![]);
+        request.user_verification = UserVerificationRequirement::Required;
+        let mut ctap2 = Ctap2GetAssertionRequest::from(request);
+        assert!(ctap2.options.unwrap().require_user_verification);
+
+        let proto = PinUvAuthProtocolOne::new();
+        ctap2
+            .calculate_and_set_uv_auth(&proto, &[0xAA; 32])
+            .unwrap();
+
+        assert!(ctap2.pin_auth_param.is_some());
+        assert!(!ctap2.options.unwrap().require_user_verification);
+
+        // Wire check: the options map (0x05) must not contain "uv".
+        let bytes = crate::proto::ctap2::cbor::to_vec(&ctap2).unwrap();
+        let parsed: BTreeMap<u64, Value> = crate::proto::ctap2::cbor::from_slice(&bytes).unwrap();
+        let Some(Value::Map(options)) = parsed.get(&0x05) else {
+            panic!("options map missing from serialized request");
+        };
+        assert!(!options.contains_key(&Value::Text("uv".to_string())));
+        assert_eq!(
+            options.get(&Value::Text("up".to_string())),
+            Some(&Value::Bool(true))
+        );
     }
 
     #[test]

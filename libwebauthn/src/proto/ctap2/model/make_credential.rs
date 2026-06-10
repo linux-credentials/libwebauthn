@@ -389,6 +389,9 @@ impl Ctap2UserVerifiableRequest for Ctap2MakeCredentialRequest {
         let uv_auth_param = uv_proto.authenticate(uv_auth_token, hash)?;
         self.pin_auth_proto = Some(uv_proto.version() as u32);
         self.pin_auth_param = Some(ByteBuf::from(uv_auth_param));
+        if let Some(ref mut options) = self.options {
+            options.deprecated_require_user_verification = None;
+        }
         Ok(())
     }
 
@@ -696,6 +699,33 @@ mod tests {
         );
         // 16-byte IV || AES-256-CBC(64 bytes of salts).
         assert_eq!(mc_in.salt_enc.len(), 16 + 64);
+    }
+
+    #[test]
+    fn pin_uv_auth_param_clears_deprecated_uv_option() {
+        use crate::pin::PinUvAuthProtocolOne;
+
+        let info = Ctap2GetInfoResponse::default();
+        let req = mc_request_with_prf(None);
+        let mut ctap2 = Ctap2MakeCredentialRequest::from_webauthn_request(&req, &info).unwrap();
+
+        ctap2.ensure_uv_set();
+        assert_eq!(
+            ctap2.options.unwrap().deprecated_require_user_verification,
+            Some(true)
+        );
+
+        let proto = PinUvAuthProtocolOne::new();
+        ctap2
+            .calculate_and_set_uv_auth(&proto, &[0xAA; 32])
+            .unwrap();
+
+        assert!(ctap2.pin_auth_param.is_some());
+        assert!(ctap2
+            .options
+            .unwrap()
+            .deprecated_require_user_verification
+            .is_none());
     }
 
     #[test]
