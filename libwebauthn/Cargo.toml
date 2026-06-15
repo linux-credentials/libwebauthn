@@ -176,6 +176,10 @@ name = "webauthn_prf_hid"
 path = "examples/features/webauthn_prf_hid.rs"
 
 [[example]]
+name = "webauthn_prf_cable"
+path = "examples/features/webauthn_prf_cable.rs"
+
+[[example]]
 name = "webauthn_related_origins_hid"
 path = "examples/features/webauthn_related_origins_hid.rs"
 required-features = ["reqwest-related-origins-source"]

@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -25,10 +26,11 @@ use crate::{
     proto::{
         ctap1::{Ctap1RegisteredKey, Ctap1Version},
         ctap2::{
-            cbor, cose, Ctap2AttestationStatement, Ctap2COSEAlgorithmIdentifier,
-            Ctap2CredentialType, Ctap2GetInfoResponse, Ctap2MakeCredentialsResponseExtensions,
-            Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialRpEntity,
-            Ctap2PublicKeyCredentialUserEntity,
+            cbor, cbor::Value, cose, parse_unsigned_prf, Ctap2AttestationStatement,
+            Ctap2COSEAlgorithmIdentifier, Ctap2CredentialType, Ctap2GetInfoResponse,
+            Ctap2MakeCredentialsResponseExtensions, Ctap2PublicKeyCredentialDescriptor,
+            Ctap2PublicKeyCredentialRpEntity, Ctap2PublicKeyCredentialUserEntity,
+            UnsignedPrfOutput,
         },
     },
     transport::AuthTokenData,
@@ -203,35 +205,44 @@ impl MakeCredentialsResponseUnsignedExtensions {
 
     pub fn from_signed_extensions(
         signed_extensions: &Option<Ctap2MakeCredentialsResponseExtensions>,
+        unsigned_outputs: Option<&BTreeMap<Value, Value>>,
         request: &MakeCredentialRequest,
         info: Option<&Ctap2GetInfoResponse>,
         auth_data: Option<&AuthTokenData>,
     ) -> MakeCredentialsResponseUnsignedExtensions {
         let mut hmac_create_secret = None;
         let mut prf = None;
-        if let Some(signed_extensions) = signed_extensions {
-            if let Some(incoming_ext) = &request.extensions {
-                if incoming_ext.hmac_create_secret.is_some() {
-                    hmac_create_secret = signed_extensions.hmac_secret;
-                }
-                if incoming_ext.prf.is_some() {
-                    let results = signed_extensions
-                        .hmac_secret_mc
-                        .as_ref()
-                        .zip(auth_data)
-                        .and_then(|(out, auth)| {
-                            let uv_proto = auth.protocol_version.create_protocol_object();
-                            out.decrypt_output(&auth.shared_secret, uv_proto.as_ref())
-                        })
-                        .map(|decrypted| PrfOutputValue {
-                            first: decrypted.output1,
-                            second: decrypted.output2,
-                        });
-                    prf = Some(MakeCredentialPrfOutput {
-                        enabled: signed_extensions.hmac_secret,
-                        results,
+        // Native `prf` outputs arrive in unsignedExtensionOutputs, not authData.
+        let unsigned_prf = unsigned_outputs.and_then(parse_unsigned_prf);
+        if let Some(incoming_ext) = &request.extensions {
+            if incoming_ext.hmac_create_secret.is_some() {
+                hmac_create_secret = signed_extensions.as_ref().and_then(|s| s.hmac_secret);
+            }
+            if incoming_ext.prf.is_some() && (signed_extensions.is_some() || unsigned_prf.is_some())
+            {
+                let decrypted_results = signed_extensions
+                    .as_ref()
+                    .and_then(|s| s.hmac_secret_mc.as_ref())
+                    .zip(auth_data)
+                    .and_then(|(out, auth)| {
+                        let uv_proto = auth.protocol_version.create_protocol_object();
+                        out.decrypt_output(&auth.shared_secret, uv_proto.as_ref())
+                    })
+                    .map(|decrypted| PrfOutputValue {
+                        first: decrypted.output1,
+                        second: decrypted.output2,
                     });
-                }
+                let UnsignedPrfOutput {
+                    enabled: unsigned_enabled,
+                    results: unsigned_results,
+                } = unsigned_prf.unwrap_or_default();
+                prf = Some(MakeCredentialPrfOutput {
+                    enabled: signed_extensions
+                        .as_ref()
+                        .and_then(|s| s.hmac_secret)
+                        .or(unsigned_enabled),
+                    results: decrypted_results.or(unsigned_results),
+                });
             }
         }
 
@@ -1445,6 +1456,32 @@ mod tests {
         assert_eq!(
             response_obj.get("publicKeyAlgorithm").unwrap(),
             i64::from(Ctap2COSEAlgorithmIdentifier::ES256)
+        );
+    }
+
+    #[test]
+    fn prf_output_serialized_into_client_extension_results() {
+        let mut response = create_test_response();
+        response.unsigned_extensions_output = MakeCredentialsResponseUnsignedExtensions {
+            prf: Some(MakeCredentialPrfOutput {
+                enabled: Some(true),
+                results: Some(PrfOutputValue {
+                    first: [0xAB; 32],
+                    second: Some([0xCD; 32]),
+                }),
+            }),
+            ..Default::default()
+        };
+
+        let results = serde_json::to_value(response.build_client_extension_results()).unwrap();
+        assert_eq!(results["prf"]["enabled"], serde_json::json!(true));
+        assert_eq!(
+            results["prf"]["results"]["first"],
+            serde_json::json!(base64_url::encode(&[0xAB; 32]))
+        );
+        assert_eq!(
+            results["prf"]["results"]["second"],
+            serde_json::json!(base64_url::encode(&[0xCD; 32]))
         );
     }
 
