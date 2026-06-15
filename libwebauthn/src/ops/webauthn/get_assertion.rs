@@ -456,6 +456,13 @@ pub struct GetAssertionResponseUnsignedExtensions {
     /// if the extension wasn't requested.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub appid: Option<bool>,
+
+    /// Outputs of extensions the authenticator returns unsigned (getAssertion
+    /// response member 0x08), keyed by extension identifier and already
+    /// converted to JSON-safe values. Surfaced verbatim as top-level members of
+    /// the client extension results.
+    #[serde(flatten)]
+    pub unsigned_extension_outputs: serde_json::Map<String, serde_json::Value>,
 }
 
 /// Context required for serializing a GetAssertion response to JSON.
@@ -567,6 +574,25 @@ impl Assertion {
                             .map(|s| Base64UrlString::from(s.as_slice())),
                     }),
                 });
+            }
+
+            // Unsigned extension outputs (getAssertion 0x08): surface each entry
+            // as a top-level member, skipping ids that collide with a typed
+            // member to avoid emitting a duplicate JSON key.
+            const TYPED_MEMBERS: [&str; 6] = [
+                "appid",
+                "credProps",
+                "hmacCreateSecret",
+                "hmacGetSecret",
+                "largeBlob",
+                "prf",
+            ];
+            for (id, value) in &unsigned_ext.unsigned_extension_outputs {
+                if !TYPED_MEMBERS.contains(&id.as_str()) {
+                    results
+                        .unsigned_extension_outputs
+                        .insert(id.clone(), value.clone());
+                }
             }
         }
 
@@ -1351,6 +1377,7 @@ mod tests {
                 }),
             }),
             appid: None,
+            unsigned_extension_outputs: Default::default(),
         });
 
         let request = create_test_request();
@@ -1372,6 +1399,7 @@ mod tests {
             large_blob: None,
             prf: None,
             appid: Some(true),
+            unsigned_extension_outputs: Default::default(),
         });
 
         let request = create_test_request();
@@ -1395,6 +1423,7 @@ mod tests {
             large_blob: None,
             prf: None,
             appid: None,
+            unsigned_extension_outputs: Default::default(),
         });
 
         let request = create_test_request();

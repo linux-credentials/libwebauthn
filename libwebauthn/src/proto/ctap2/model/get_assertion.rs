@@ -7,7 +7,7 @@ use crate::{
         GetAssertionResponseUnsignedExtensions, HMACGetSecretInput, PrfInputValue, PrfOutputValue,
     },
     pin::PinUvAuthProtocol,
-    proto::ctap2::cbor::Value,
+    proto::ctap2::cbor::{map_to_json_object, Value},
     transport::AuthTokenData,
     webauthn::{Error, PlatformError},
 };
@@ -469,11 +469,24 @@ impl Ctap2GetAssertionResponse {
         request: &GetAssertionRequest,
         auth_data: Option<&AuthTokenData>,
     ) -> Assertion {
-        let unsigned_extensions_output = self
+        let mut unsigned_extensions_output = self
             .authenticator_data
             .extensions
             .as_ref()
-            .map(|x| x.to_unsigned_extensions(request, &self, auth_data));
+            .map(|x| x.to_unsigned_extensions(request, auth_data));
+
+        // unsignedExtensionOutputs (response 0x08) are independent of the signed
+        // authenticator-data extensions, so surface them even when no signed
+        // extensions are present. CTAP 2.2: an empty map equals an omitted field.
+        if let Some(map) = &self.unsigned_extension_outputs {
+            let object = map_to_json_object(map);
+            if !object.is_empty() {
+                unsigned_extensions_output
+                    .get_or_insert_with(Default::default)
+                    .unsigned_extension_outputs = object;
+            }
+        }
+
         // CTAP2 6.2.2: authenticators may omit credential ID when the allow list has one entry.
         // We always return it, for convenience.
         let credential_id = self.credential_id.or_else(|| {
@@ -515,7 +528,6 @@ impl Ctap2GetAssertionResponseExtensions {
     pub(crate) fn to_unsigned_extensions(
         &self,
         request: &GetAssertionRequest,
-        _response: &Ctap2GetAssertionResponse,
         auth_data: Option<&AuthTokenData>,
     ) -> GetAssertionResponseUnsignedExtensions {
         let decrypted_hmac = self.hmac_secret.as_ref().and_then(|x| {
@@ -569,6 +581,7 @@ impl Ctap2GetAssertionResponseExtensions {
             large_blob,
             prf,
             appid,
+            unsigned_extension_outputs: Default::default(),
         }
     }
 }
@@ -744,5 +757,50 @@ mod tests {
             crate::proto::ctap2::cbor::from_slice(&bytes).unwrap();
 
         assert_eq!(parsed.unsigned_extension_outputs, Some(ueo));
+    }
+
+    #[test]
+    fn surfaces_unsigned_extension_outputs_in_client_extension_results() {
+        use crate::ops::webauthn::idl::response::{JsonFormat, WebAuthnIDLResponse};
+
+        // End-to-end: a getAssertion response carrying unsignedExtensionOutputs
+        // (0x08) with a boolean (thirdPartyPayment) and a byte string is decoded
+        // and surfaced into the client extension results JSON, with bytes encoded
+        // as base64url.
+        let mut auth_data = vec![0u8; 37];
+        auth_data[32] = AuthenticatorDataFlags::USER_PRESENT.bits();
+
+        let mut ueo = BTreeMap::new();
+        ueo.insert(
+            Value::Text("thirdPartyPayment".to_string()),
+            Value::Bool(true),
+        );
+        ueo.insert(
+            Value::Text("blobby".to_string()),
+            Value::Bytes(vec![0xDE, 0xAD, 0xBE, 0xEF]),
+        );
+
+        let mut response: BTreeMap<u64, Value> = BTreeMap::new();
+        response.insert(0x02, Value::Bytes(auth_data));
+        response.insert(0x03, Value::Bytes(vec![0xAAu8; 64]));
+        response.insert(0x08, Value::Map(ueo));
+
+        let bytes = crate::proto::ctap2::cbor::to_vec(&response).unwrap();
+        let parsed: Ctap2GetAssertionResponse =
+            crate::proto::ctap2::cbor::from_slice(&bytes).unwrap();
+
+        let request = make_request(vec![make_credential(b"cred-1")]);
+        let assertion = parsed.into_assertion_output(&request, None);
+        let json_str = assertion
+            .to_json_string(&request, JsonFormat::default())
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+
+        let results = &json["clientExtensionResults"];
+        assert_eq!(results["thirdPartyPayment"], serde_json::json!(true));
+        assert_eq!(
+            results["blobby"],
+            serde_json::json!(base64_url::encode(&[0xDE, 0xAD, 0xBE, 0xEF]))
+        );
     }
 }

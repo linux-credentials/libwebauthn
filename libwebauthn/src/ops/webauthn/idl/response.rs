@@ -225,6 +225,12 @@ pub struct AuthenticationExtensionsClientOutputsJSON {
     /// PRF extension output.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prf: Option<PRFOutputJSON>,
+
+    /// Outputs of extensions the authenticator returned unsigned (e.g.
+    /// `thirdPartyPayment`), each surfaced as a top-level member keyed by its
+    /// extension identifier. An empty map emits nothing.
+    #[serde(flatten)]
+    pub unsigned_extension_outputs: serde_json::Map<String, serde_json::Value>,
 }
 
 /// Credential properties extension output.
