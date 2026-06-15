@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use icu_normalizer::ComposingNormalizerBorrowed;
 use tracing::{debug, error, info, instrument, warn};
-use unicode_normalization::UnicodeNormalization;
 
 use cosey::PublicKey;
 
@@ -579,7 +579,10 @@ where
         }
     };
     // CTAP 2.1 sends the PIN as UTF-8 in Unicode Normalization Form C.
-    Ok(pin.nfc().collect::<String>().as_bytes().to_owned())
+    Ok(ComposingNormalizerBorrowed::new_nfc()
+        .normalize(&pin)
+        .as_bytes()
+        .to_owned())
 }
 
 pub(crate) async fn try_to_set_pin<C>(

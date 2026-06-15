@@ -21,6 +21,7 @@ use cbc::cipher::{BlockEncryptMut, KeyIvInit};
 use cosey as cose;
 use hkdf::Hkdf;
 use hmac::Mac;
+use icu_normalizer::ComposingNormalizerBorrowed;
 use p256::{
     ecdh::EphemeralSecret, elliptic_curve::sec1::FromEncodedPoint, EncodedPoint,
     PublicKey as P256PublicKey,
@@ -28,7 +29,6 @@ use p256::{
 use rand::{rngs::OsRng, thread_rng, Rng, SeedableRng};
 use sha2::{Digest, Sha256};
 use tracing::{error, instrument, warn};
-use unicode_normalization::UnicodeNormalization;
 use x509_parser::nom::AsBytes;
 
 pub mod persistent_token;
@@ -519,7 +519,9 @@ pub(crate) mod internal {
             timeout: Duration,
         ) -> Result<(), Error> {
             // CTAP 2.1 sends the PIN as UTF-8 in Unicode Normalization Form C.
-            let new_pin = new_pin.nfc().collect::<String>();
+            let new_pin = ComposingNormalizerBorrowed::new_nfc()
+                .normalize(&new_pin)
+                .into_owned();
 
             // If the minPINLength member of the authenticatorGetInfo response is absent, then let platformMinPINLengthInCodePoints be 4.
             if new_pin.chars().count() < get_info_response.min_pin_length.unwrap_or(4) as usize {
