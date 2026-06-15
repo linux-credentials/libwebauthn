@@ -120,6 +120,7 @@ impl TryFrom<&Ctap2LargeBlobsRequest> for CborRequest {
 
 #[cfg(test)]
 mod tests {
+    // To refresh after an intentional wire change, run the test and copy the actual (left) hex from the assert_eq! panic.
     use super::*;
     use crate::proto::ctap2::model::{
         Ctap2CredentialType, Ctap2GetAssertionOptions, Ctap2MakeCredentialOptions,

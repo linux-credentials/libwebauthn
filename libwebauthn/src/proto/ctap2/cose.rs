@@ -551,6 +551,7 @@ mod tests {
         assert!(to_spki(&bytes).is_err());
     }
 
+    // To refresh after an intentional wire change, run the test and copy the actual (left) hex from the assert_eq! panic.
     /// Pin the exact COSE_Key bytes cosey emits for a fixed P-256 key.
     #[test]
     fn p256_public_key_golden_cose() {
