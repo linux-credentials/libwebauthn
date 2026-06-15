@@ -68,7 +68,7 @@ impl CableKnownDeviceInfoStore for EphemeralDeviceInfoStore {
         device: &CableKnownDeviceInfo,
     ) {
         debug!(?device_id, "Inserting or updating known device");
-        trace!(?device);
+        trace!(?device, "Known device info");
         let mut known_devices = self.known_devices.lock().await;
         known_devices.insert(device_id.clone(), device.clone());
     }
@@ -193,7 +193,7 @@ impl CableKnownDevice {
 #[async_trait]
 impl<'d> Device<'d, Cable, CableChannel> for CableKnownDevice {
     async fn channel(&'d mut self, settings: ChannelSettings) -> Result<CableChannel, Error> {
-        debug!(?self.device_info.tunnel_domain, "Creating channel to tunnel server");
+        debug!(tunnel_domain = %self.device_info.tunnel_domain, "Creating channel to tunnel server");
 
         let (ux_update_sender, _) = broadcast::channel(16);
         let (cbor_tx_send, cbor_tx_recv) = mpsc::channel(16);

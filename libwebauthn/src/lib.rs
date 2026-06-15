@@ -109,9 +109,9 @@ macro_rules! unwrap_field {
         if let Some(f) = $field {
             f
         } else {
-            tracing::error!(
-                "Device response did not contain expected field: {}",
-                stringify!($field)
+            tracing::warn!(
+                field = stringify!($field),
+                "Device response did not contain expected field"
             );
             return Err(Error::Platform(PlatformError::InvalidDeviceResponse));
         }

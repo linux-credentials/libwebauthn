@@ -84,7 +84,7 @@ where
         match resp.modality {
             Some(modality) => Ok(modality),
             None => {
-                warn!("Channel did not return modality.");
+                warn!("Channel did not return modality");
                 Err(Error::Ctap(CtapError::Other))
             }
         }
@@ -98,7 +98,7 @@ where
         // No UV needed
         let resp = self.ctap2_bio_enrollment(&req, timeout).await?;
         let Some(fingerprint_kind) = resp.fingerprint_kind else {
-            warn!("Channel did not return fingerprint_kind in sensor info.");
+            warn!("Channel did not return fingerprint_kind in sensor info");
             return Err(Error::Ctap(CtapError::Other));
         };
         Ok(Ctap2BioEnrollmentFingerprintSensorInfo {

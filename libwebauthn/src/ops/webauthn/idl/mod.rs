@@ -84,7 +84,7 @@ pub(crate) async fn rp_id_authorised(
         RelatedOrigins::Enabled { source, max_labels } => {
             match source.allowed_origins(rp_id).await {
                 Err(err) => {
-                    debug!(rp_id = %rp_id.0, %err, "Related-origins resolution failed");
+                    debug!({ rp_id = %rp_id.0, %err }, "Related-origins resolution failed");
                     false
                 }
                 Ok(origins) => match validate_related_origins(
@@ -95,7 +95,7 @@ pub(crate) async fn rp_id_authorised(
                 ) {
                     Ok(()) => true,
                     Err(err) => {
-                        debug!(rp_id = %rp_id.0, %err, "Related-origins match failed");
+                        debug!({ rp_id = %rp_id.0, %err }, "Related-origins match failed");
                         false
                     }
                 },

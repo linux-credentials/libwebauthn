@@ -2,7 +2,7 @@ use aes::cipher::{generic_array::GenericArray, BlockDecrypt, KeyInit};
 use aes::{Aes256, Block};
 use hkdf::Hkdf;
 use sha2::Sha256;
-use tracing::{instrument, warn};
+use tracing::{debug, error, instrument, trace, warn, Level};
 
 use crate::pin::hmac_sha256;
 use crate::transport::error::TransportError;
@@ -28,17 +28,17 @@ fn reserved_bits_are_zero(plaintext: &[u8]) -> bool {
     plaintext.first().copied() == Some(0)
 }
 
-#[instrument]
+#[instrument(level = Level::DEBUG, skip_all)]
 pub fn trial_decrypt_advert(eid_key: &[u8], candidate_advert: &[u8]) -> Option<[u8; 16]> {
     // Only the first 20 bytes are the encrypted advert; any remainder is the
     // advertisement suffix and is parsed separately by the caller.
     let Some(advert) = candidate_advert.get(..20) else {
-        warn!("candidate advert is shorter than 20 bytes");
+        debug!("Candidate advert is shorter than 20 bytes");
         return None;
     };
 
     if eid_key.len() != 64 {
-        warn!("EID key is not 64 bytes");
+        error!("EID key is not 64 bytes");
         return None;
     }
 
@@ -48,8 +48,8 @@ pub fn trial_decrypt_advert(eid_key: &[u8], candidate_advert: &[u8]) -> Option<[
     let expected_tag = hmac_sha256(mac_key, advert_body).ok()?;
     let expected_tag_truncated = expected_tag.get(..4)?;
     if expected_tag_truncated != advert_tag {
-        warn!({ expected = ?expected_tag_truncated, actual = ?advert_tag },
-              "candidate advert HMAC tag does not match");
+        trace!({ expected = ?expected_tag_truncated, actual = ?advert_tag },
+              "Candidate advert HMAC tag does not match");
         return None;
     }
 
@@ -59,7 +59,7 @@ pub fn trial_decrypt_advert(eid_key: &[u8], candidate_advert: &[u8]) -> Option<[
     cipher.decrypt_block(&mut block);
 
     if !reserved_bits_are_zero(&block) {
-        warn!("reserved bits are not zero");
+        warn!("Reserved bits are not zero");
         return None;
     }
 

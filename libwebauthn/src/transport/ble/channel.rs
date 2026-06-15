@@ -96,8 +96,8 @@ impl<'a> Channel for BleChannel<'a> {
 
     #[instrument(level = Level::DEBUG, skip_all)]
     async fn apdu_send(&mut self, request: &ApduRequest, _timeout: Duration) -> Result<(), Error> {
-        debug!({rev = ?self.revision}, "Sending APDU request");
-        trace!(?request);
+        debug!(rev = ?self.revision, "Sending APDU request");
+        trace!(?request, "Sending APDU request");
 
         let request_apdu_packet = request.raw_long().or(Err(TransportError::InvalidFraming))?;
         let request_frame = BleFrame::new(BleCommand::Msg, &request_apdu_packet);
@@ -131,7 +131,7 @@ impl<'a> Channel for BleChannel<'a> {
             .or(Err(TransportError::InvalidFraming))?;
 
         debug!("Received APDU response");
-        trace!(?response_apdu);
+        trace!(?response_apdu, "Received APDU response");
         Ok(response_apdu)
     }
 
@@ -142,7 +142,7 @@ impl<'a> Channel for BleChannel<'a> {
         _timeout: std::time::Duration,
     ) -> Result<(), Error> {
         debug!("Sending CBOR request");
-        trace!(?request);
+        trace!(?request, "Sending CBOR request");
 
         let cbor_request = request
             .raw_long()
@@ -177,7 +177,7 @@ impl<'a> Channel for BleChannel<'a> {
             .or(Err(TransportError::InvalidFraming))?;
 
         debug!("Received CBOR response");
-        trace!(?cbor_response);
+        trace!(?cbor_response, "Received CBOR response");
         Ok(cbor_response)
     }
 

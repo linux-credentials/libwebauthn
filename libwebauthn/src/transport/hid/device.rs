@@ -68,7 +68,7 @@ pub async fn list_devices() -> Result<Vec<HidDevice>, Error> {
         .filter(|device| device.usage() == 0x0001)
         .map(|device| device.into())
         .collect();
-    info!({ count = devices.len() }, "Listing available HID devices");
+    info!(count = devices.len(), "Listing available HID devices");
     debug!(?devices);
     Ok(devices)
 }

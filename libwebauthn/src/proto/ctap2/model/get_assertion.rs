@@ -334,7 +334,7 @@ impl Ctap2GetAssertionRequestExtensions {
         let salt_enc = if let Ok(res) = uv_proto.encrypt(&auth_data.shared_secret, &salts) {
             ByteBuf::from(res)
         } else {
-            error!("Failed to encrypt HMAC salts with shared secret! Skipping HMAC");
+            error!("Failed to encrypt HMAC salts");
             // TODO: This is a bit of a weird one. Normally, we would just skip HMACs that
             //       fail for whatever reason, so a Result<> was not necessary.
             //       But with the PRF-extension, the spec tells us explicitly to return

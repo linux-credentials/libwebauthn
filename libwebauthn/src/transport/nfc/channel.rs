@@ -52,7 +52,7 @@ pub enum NfcError {
 
 impl From<NfcError> for Error {
     fn from(input: NfcError) -> Self {
-        trace!("{:?}", input);
+        trace!(?input, "NFC error");
         let output = match input {
             NfcError::Apdu(_apdu_error) => TransportError::InvalidFraming,
             NfcError::Device(_) => TransportError::ConnectionLost,
@@ -238,7 +238,7 @@ where
         Result::from(Response::from(rapdu.as_slice()))
             .map(|p| p.to_vec())
             .map_err(|e| {
-                trace!("map_err {:?}", e);
+                trace!(?e, "APDU error response");
                 apdu::Error::from(e).into()
             })
     }
@@ -272,7 +272,7 @@ where
     #[instrument(level = Level::DEBUG, skip_all)]
     async fn apdu_send(&mut self, request: &ApduRequest, _timeout: Duration) -> Result<(), Error> {
         let resp = self.handle_raw(self.ctx, request)?;
-        trace!("apdu_send {:?}", resp);
+        trace!(?resp, "Raw APDU response");
 
         let apdu_response = ApduResponse::try_from(&resp)
             .or(Err(Error::Transport(TransportError::InvalidFraming)))?;
@@ -301,12 +301,12 @@ where
             rest = remaining;
             let ctap_msg = command_ctap_msg(true, to_send);
             let resp = self.handle(self.ctx, ctap_msg)?;
-            trace!("cbor_send has_more {:?} {:?}", to_send, resp);
+            trace!({ ?to_send, ?resp }, "CBOR request chunk sent");
         }
 
         let ctap_msg = command_ctap_msg(false, rest);
         let resp = self.handle(self.ctx, ctap_msg)?;
-        trace!("cbor_send {:?} {:?}", rest, resp);
+        trace!({ ?rest, ?resp }, "CBOR request sent");
 
         // FIXME check for SW_UPDATE?
 

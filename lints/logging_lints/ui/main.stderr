@@ -1,0 +1,109 @@
+warning: tracing message interpolates dynamic data
+  --> $DIR/main.rs:34:11
+   |
+LL |     info!("found {} credentials", count);
+   |           ^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: use a static message and structured fields, e.g. info!(field = value, "message"); see docs/logging.md
+   = note: `#[warn(dylint::tracing_message_interpolation)]` on by default
+
+warning: tracing message interpolates dynamic data
+  --> $DIR/main.rs:35:12
+   |
+LL |     debug!("found {count} credentials");
+   |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: use a static message and structured fields, e.g. info!(field = value, "message"); see docs/logging.md
+
+warning: tracing message interpolates dynamic data
+  --> $DIR/main.rs:36:12
+   |
+LL |     error!("failed: {err:?}");
+   |            ^^^^^^^^^^^^^^^^^
+   |
+   = help: use a static message and structured fields, e.g. info!(field = value, "message"); see docs/logging.md
+
+warning: tracing message interpolates dynamic data
+  --> $DIR/main.rs:37:17
+   |
+LL |     warn!(?err, "failed after {} tries", count);
+   |                 ^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: use a static message and structured fields, e.g. info!(field = value, "message"); see docs/logging.md
+
+warning: `println!` in library code
+  --> $DIR/main.rs:40:5
+   |
+LL |     println!("hello {}", count);
+   |     ^^^^^^^
+   |
+   = help: use a tracing macro instead; see docs/logging.md
+   = note: `#[warn(dylint::print_macro_in_library)]` on by default
+
+warning: `eprintln!` in library code
+  --> $DIR/main.rs:41:5
+   |
+LL |     eprintln!("oops");
+   |     ^^^^^^^^
+   |
+   = help: use a tracing macro instead; see docs/logging.md
+
+warning: `print!` in library code
+  --> $DIR/main.rs:42:5
+   |
+LL |     print!("no newline");
+   |     ^^^^^
+   |
+   = help: use a tracing macro instead; see docs/logging.md
+
+warning: possibly sensitive field `pin` logged at `warn!`
+  --> $DIR/main.rs:45:12
+   |
+LL |     warn!(?pin, "logging a pin at warn");
+   |            ^^^
+   |
+   = help: log sensitive data only at debug! (length or presence) or trace! (full); see docs/logging.md
+   = note: `#[warn(dylint::sensitive_field_above_debug)]` on by default
+
+warning: possibly sensitive field `shared_secret` logged at `error!`
+  --> $DIR/main.rs:46:13
+   |
+LL |     error!(?shared_secret, "logging a secret at error");
+   |             ^^^^^^^^^^^^^
+   |
+   = help: log sensitive data only at debug! (length or presence) or trace! (full); see docs/logging.md
+
+warning: possibly sensitive field `pin` logged at `warn!`
+  --> $DIR/main.rs:54:13
+   |
+LL |     warn!({ pin = ?pin, attempt = count }, "pin in a brace block");
+   |             ^^^
+   |
+   = help: log sensitive data only at debug! (length or presence) or trace! (full); see docs/logging.md
+
+warning: possibly sensitive field `shared_secret` logged at `error!`
+  --> $DIR/main.rs:55:15
+   |
+LL |     error!({ ?shared_secret, attempt = count }, "secret in a brace block");
+   |               ^^^^^^^^^^^^^
+   |
+   = help: log sensitive data only at debug! (length or presence) or trace! (full); see docs/logging.md
+
+warning: `println!` in library code
+  --> $DIR/main.rs:61:5
+   |
+LL |     std::println!("qualified {}", count);
+   |     ^^^^^^^^^^^^
+   |
+   = help: use a tracing macro instead; see docs/logging.md
+
+warning: tracing `message` field is not a static string literal
+  --> $DIR/main.rs:64:11
+   |
+LL |     info!(message = %count, attempt = count);
+   |           ^^^^^^^
+   |
+   = help: set the message to a static string literal; see docs/logging.md
+
+warning: 13 warnings emitted
+

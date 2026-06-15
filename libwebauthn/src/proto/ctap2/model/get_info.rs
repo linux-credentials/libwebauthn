@@ -229,7 +229,7 @@ impl Ctap2GetInfoResponse {
     pub fn uv_operation(&self, uv_blocked: bool) -> Option<Ctap2UserVerificationOperation> {
         if self.option_enabled("uv") && !uv_blocked {
             if self.option_enabled("pinUvAuthToken") {
-                debug!("getPinUvAuthTokenUsingUvWithPermissions");
+                debug!("Selected getPinUvAuthTokenUsingUvWithPermissions");
                 Some(Ctap2UserVerificationOperation::GetPinUvAuthTokenUsingUvWithPermissions)
             } else {
                 debug!("Deprecated FIDO 2.0 behaviour: populating 'uv' flag");
@@ -267,11 +267,11 @@ impl Ctap2GetInfoResponse {
                     );
                     return Some(Ctap2UserVerificationOperation::OnlyForSharedSecret);
                 }
-                debug!("getPinUvAuthTokenUsingPinWithPermissions");
+                debug!("Selected getPinUvAuthTokenUsingPinWithPermissions");
                 Some(Ctap2UserVerificationOperation::GetPinUvAuthTokenUsingPinWithPermissions)
             } else if self.option_enabled("clientPin") {
                 // !pinUvAuthToken
-                debug!("getPinToken");
+                debug!("Selected getPinToken");
                 Some(Ctap2UserVerificationOperation::GetPinToken)
             } else {
                 debug!("No UV and no PIN (e.g. maybe UV was blocked and no PIN available)");

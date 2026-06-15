@@ -110,9 +110,7 @@ async fn fetch_serialized_array<C: Ctap2 + ?Sized>(
         let chunk_len = chunk.len();
         out.extend_from_slice(&chunk);
         trace!(
-            offset,
-            chunk_len,
-            total = out.len(),
+            { offset, chunk_len, total = out.len() },
             "authenticatorLargeBlobs(get) chunk"
         );
         if chunk_len < max_fragment as usize {
@@ -121,8 +119,8 @@ async fn fetch_serialized_array<C: Ctap2 + ?Sized>(
         }
         if out.len() > LARGE_BLOB_MAX_ARRAY_BYTES {
             warn!(
-                total = out.len(),
-                "largeBlobArray exceeded {LARGE_BLOB_MAX_ARRAY_BYTES}, aborting"
+                { total = out.len(), cap = LARGE_BLOB_MAX_ARRAY_BYTES },
+                "largeBlobArray exceeded platform cap, aborting"
             );
             return Err(LargeBlobError::Corrupted(
                 "serialized array exceeds platform cap".into(),
@@ -154,8 +152,7 @@ impl LargeBlobMapEntry {
         }
         if self.orig_size > LARGE_BLOB_MAX_ORIG_SIZE {
             warn!(
-                orig_size = self.orig_size,
-                cap = LARGE_BLOB_MAX_ORIG_SIZE,
+                { orig_size = self.orig_size, cap = LARGE_BLOB_MAX_ORIG_SIZE },
                 "largeBlob entry origSize exceeds platform cap; skipping"
             );
             return Ok(None);
@@ -627,9 +624,7 @@ async fn upload_serialized_array<C: Ctap2 + ?Sized>(
             Ctap2LargeBlobsRequest::new_set_continuation(chunk.to_vec(), offset, chunk_auth)
         };
         trace!(
-            offset,
-            chunk_len = chunk.len(),
-            total,
+            { offset, chunk_len = chunk.len(), total },
             "authenticatorLargeBlobs(set) chunk"
         );
         channel
