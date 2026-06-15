@@ -47,6 +47,8 @@ pub struct MakeCredentialResponse {
     pub enterprise_attestation: Option<bool>,
     pub large_blob_key: Option<Vec<u8>>,
     pub unsigned_extensions_output: MakeCredentialsResponseUnsignedExtensions,
+    /// Transport the credential was created over, stamped by the channel.
+    pub transport: Option<crate::Transport>,
 }
 
 /// Serializable attestation object for CBOR encoding.
@@ -82,7 +84,6 @@ impl WebAuthnIDLResponse for MakeCredentialResponse {
     fn to_idl_model(
         &self,
         request: &Self::Context,
-        transport: Option<crate::Transport>,
     ) -> Result<Self::IdlModel, ResponseSerializationError> {
         // The AT flag MUST be set on makeCredential responses per CTAP 2.2 §6.1.
         let attested = self
@@ -118,7 +119,7 @@ impl WebAuthnIDLResponse for MakeCredentialResponse {
         // Build attestation object (CBOR map with authData, fmt, attStmt)
         let attestation_object_bytes = self.build_attestation_object(&authenticator_data_bytes)?;
 
-        let transports = registration_transports(transport);
+        let transports = registration_transports(self.transport);
 
         // Build client extension results
         let client_extension_results = self.build_client_extension_results();
@@ -1424,6 +1425,7 @@ mod tests {
             enterprise_attestation: None,
             large_blob_key: None,
             unsigned_extensions_output: MakeCredentialsResponseUnsignedExtensions::default(),
+            transport: None,
         }
     }
 
@@ -1449,7 +1451,7 @@ mod tests {
 
         let response = create_test_response();
         let request = create_test_request();
-        let json = response.to_json_string(&request, None, JsonFormat::default());
+        let json = response.to_json_string(&request, JsonFormat::default());
         assert!(json.is_ok());
 
         let json_str = json.unwrap();
@@ -1504,7 +1506,7 @@ mod tests {
     fn test_response_to_idl_model() {
         let response = create_test_response();
         let request = create_test_request();
-        let model = response.to_idl_model(&request, None).unwrap();
+        let model = response.to_idl_model(&request).unwrap();
 
         // Verify the credential ID
         assert_eq!(model.raw_id.0, vec![0x01, 0x02, 0x03, 0x04]);
@@ -1523,7 +1525,7 @@ mod tests {
         // WebAuthn L3 §5.2.1.1: the registration `transports` member reports the
         // transport the credential was created over, as AuthenticatorTransport tokens.
         // Both the FIDO2 and U2F-downgrade paths converge on this serialization.
-        let response = create_test_response();
+        let mut response = create_test_response();
         let request = create_test_request();
 
         for (transport, token) in [
@@ -1532,15 +1534,16 @@ mod tests {
             (crate::Transport::Nfc, "nfc"),
             (crate::Transport::Hybrid, "hybrid"),
         ] {
-            let model = response.to_idl_model(&request, Some(transport)).unwrap();
+            response.transport = Some(transport);
+            let model = response.to_idl_model(&request).unwrap();
             assert_eq!(model.response.transports, vec![token.to_string()]);
         }
 
         // The token reaches the JSON wire format too.
+        response.transport = Some(crate::Transport::Nfc);
         let json = response
             .to_json_string(
                 &request,
-                Some(crate::Transport::Nfc),
                 crate::ops::webauthn::idl::response::JsonFormat::default(),
             )
             .unwrap();
@@ -1549,7 +1552,8 @@ mod tests {
         assert_eq!(transports, &vec![serde_json::Value::from("nfc")]);
 
         // An unknown transport leaves the list empty.
-        let model = response.to_idl_model(&request, None).unwrap();
+        response.transport = None;
+        let model = response.to_idl_model(&request).unwrap();
         assert!(model.response.transports.is_empty());
     }
 
@@ -1562,7 +1566,7 @@ mod tests {
         // by the secp256r1 OID and the uncompressed point.
         let response = create_test_response();
         let request = create_test_request();
-        let model = response.to_idl_model(&request, None).unwrap();
+        let model = response.to_idl_model(&request).unwrap();
 
         let public_key_bytes = model
             .response
@@ -1586,7 +1590,7 @@ mod tests {
     fn test_response_attestation_object_format() {
         let response = create_test_response();
         let request = create_test_request();
-        let model = response.to_idl_model(&request, None).unwrap();
+        let model = response.to_idl_model(&request).unwrap();
 
         // Decode the attestation object
         let attestation_bytes = model.response.attestation_object.0;
@@ -1631,7 +1635,7 @@ mod tests {
         };
 
         let request = create_test_request();
-        let model = response.to_idl_model(&request, None).unwrap();
+        let model = response.to_idl_model(&request).unwrap();
 
         // Verify cred_props extension
         let cred_props = model.client_extension_results.cred_props.as_ref().unwrap();

@@ -137,10 +137,12 @@ where
         };
         trace!(?op, "WebAuthn MakeCredential request");
         let protocol = negotiate_protocol(self, op.is_downgradable()).await?;
-        match protocol {
+        let mut response = match protocol {
             FidoProtocol::FIDO2 => make_credential_fido2(self, op).await,
             FidoProtocol::U2F => make_credential_u2f(self, op).await,
-        }
+        }?;
+        response.transport = self.transport();
+        Ok(response)
     }
 
     #[instrument(skip_all, fields(dev = % self))]

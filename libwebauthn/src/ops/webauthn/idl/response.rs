@@ -55,22 +55,18 @@ pub trait WebAuthnIDLResponse: Sized {
     /// Context required for serialization (e.g., client data JSON).
     type Context;
 
-    /// Converts this response to a JSON-serializable IDL model. `transport` is the
-    /// transport the ceremony ran over, used to populate the registration
-    /// `transports` member. Pass `None` when it is unknown.
+    /// Converts this response to a JSON-serializable IDL model.
     fn to_idl_model(
         &self,
         ctx: &Self::Context,
-        transport: Option<crate::Transport>,
     ) -> Result<Self::IdlModel, ResponseSerializationError>;
 
     /// Serializes this response to a `serde_json::Value`.
     fn to_json_value(
         &self,
         ctx: &Self::Context,
-        transport: Option<crate::Transport>,
     ) -> Result<serde_json::Value, ResponseSerializationError> {
-        let model = self.to_idl_model(ctx, transport)?;
+        let model = self.to_idl_model(ctx)?;
         Ok(serde_json::to_value(&model)?)
     }
 
@@ -78,10 +74,9 @@ pub trait WebAuthnIDLResponse: Sized {
     fn to_json_string(
         &self,
         ctx: &Self::Context,
-        transport: Option<crate::Transport>,
         format: JsonFormat,
     ) -> Result<String, ResponseSerializationError> {
-        let value = self.to_json_value(ctx, transport)?;
+        let value = self.to_json_value(ctx)?;
         match format {
             JsonFormat::Minified => Ok(serde_json::to_string(&value)?),
             JsonFormat::Prettified => Ok(serde_json::to_string_pretty(&value)?),
