@@ -9,6 +9,7 @@ use tracing::{debug, error, trace};
 use tungstenite::client::IntoClientRequest;
 use url::Url;
 
+use super::error::CableTunnelError;
 use super::known_devices::CableKnownDeviceId;
 use super::protocol::CableTunnelConnectionType;
 use crate::proto::ctap2::cbor;
@@ -102,9 +103,9 @@ fn resolve_redirect_target(base: &str, location: &str) -> Result<String, Transpo
 /// Maps a non-101 tunnel handshake status to a transport error, distinguishing 410 Gone.
 fn tunnel_status_error(status: StatusCode) -> TransportError {
     if status == StatusCode::GONE {
-        TransportError::TunnelServerGone
+        CableTunnelError::Gone.into()
     } else {
-        TransportError::ConnectionFailed
+        CableTunnelError::UnexpectedStatus(status.as_u16()).into()
     }
 }
 
@@ -115,7 +116,7 @@ pub(crate) fn known_device_id_to_forget(
 ) -> Option<CableKnownDeviceId> {
     match (error, connection_type) {
         (
-            TransportError::TunnelServerGone,
+            TransportError::CableTunnel(CableTunnelError::Gone),
             CableTunnelConnectionType::KnownDevice {
                 authenticator_public_key,
                 ..
@@ -188,7 +189,7 @@ pub(crate) async fn connect(
     }
 
     error!("Exceeded the maximum number of tunnel redirects");
-    Err(TransportError::ConnectionFailed)
+    Err(CableTunnelError::TooManyRedirects.into())
 }
 
 #[cfg(test)]
@@ -289,7 +290,10 @@ mod tests {
         let public_key = vec![7u8; 65];
         let connection_type = known_device_connection_type(public_key.clone());
         assert_eq!(
-            known_device_id_to_forget(&TransportError::TunnelServerGone, &connection_type),
+            known_device_id_to_forget(
+                &TransportError::CableTunnel(CableTunnelError::Gone),
+                &connection_type
+            ),
             Some(hex::encode(&public_key))
         );
     }
@@ -298,7 +302,10 @@ mod tests {
     fn gone_does_not_forget_qr_code() {
         let connection_type = qr_connection_type();
         assert_eq!(
-            known_device_id_to_forget(&TransportError::TunnelServerGone, &connection_type),
+            known_device_id_to_forget(
+                &TransportError::CableTunnel(CableTunnelError::Gone),
+                &connection_type
+            ),
             None
         );
     }
@@ -316,11 +323,11 @@ mod tests {
     fn gone_status_maps_to_distinct_error() {
         assert_eq!(
             tunnel_status_error(StatusCode::GONE),
-            TransportError::TunnelServerGone
+            TransportError::CableTunnel(CableTunnelError::Gone)
         );
         assert_eq!(
             tunnel_status_error(StatusCode::BAD_GATEWAY),
-            TransportError::ConnectionFailed
+            TransportError::CableTunnel(CableTunnelError::UnexpectedStatus(502))
         );
     }
 }

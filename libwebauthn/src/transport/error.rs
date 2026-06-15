@@ -1,12 +1,14 @@
+use crate::transport::cable::error::CableTunnelError;
+
 #[derive(thiserror::Error, Debug, PartialEq, Clone)]
 pub enum TransportError {
     #[error("connection failed")]
     ConnectionFailed,
     #[error("connection lost")]
     ConnectionLost,
-    /// The tunnel server returned HTTP 410 Gone for the contacted resource.
-    #[error("tunnel server reported the resource is gone")]
-    TunnelServerGone,
+    /// An error from the caBLE tunnel-server transport.
+    #[error(transparent)]
+    CableTunnel(#[from] CableTunnelError),
     #[error("invalid endpoint")]
     InvalidEndpoint,
     #[error("invalid framing")]
