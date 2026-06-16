@@ -11,6 +11,7 @@ use crate::proto::{
     ctap2::cbor::{CborRequest, CborResponse},
 };
 use crate::webauthn::error::Error;
+use crate::Transport;
 use crate::UvUpdate;
 
 use async_trait::async_trait;
@@ -65,9 +66,9 @@ pub trait Channel: Send + Sync + Display + Ctap2AuthTokenStore {
     async fn close(&mut self);
 
     /// The transport this channel speaks over, used to populate the registration
-    /// response `transports` member. `None` means unknown.
-    fn transport(&self) -> Option<crate::Transport> {
-        None
+    /// response `transports` member.
+    fn transport(&self) -> Transport {
+        Transport::Usb
     }
 
     async fn apdu_send(&mut self, request: &ApduRequest, timeout: Duration) -> Result<(), Error>;

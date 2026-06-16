@@ -23,6 +23,13 @@ pub mod hid;
 pub mod mock;
 #[cfg(any(feature = "nfc-backend-pcsc", feature = "nfc-backend-libnfc"))]
 pub mod nfc;
+// No NFC backend compiled: a stub so callers need not gate on the feature.
+#[cfg(not(any(feature = "nfc-backend-pcsc", feature = "nfc-backend-libnfc")))]
+pub mod nfc {
+    pub fn is_nfc_available() -> bool {
+        false
+    }
+}
 
 mod channel;
 #[allow(clippy::module_inception)]

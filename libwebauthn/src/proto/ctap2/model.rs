@@ -1,4 +1,5 @@
 use crate::proto::ctap1::Ctap1Transport;
+use crate::Transport;
 use crate::{
     ops::webauthn::idl::create::PublicKeyCredentialUserEntity, pin::PinUvAuthProtocol,
     webauthn::Error,
@@ -167,13 +168,13 @@ impl From<&Ctap1Transport> for Ctap2Transport {
     }
 }
 
-impl From<crate::Transport> for Ctap2Transport {
-    fn from(transport: crate::Transport) -> Ctap2Transport {
+impl From<Transport> for Ctap2Transport {
+    fn from(transport: Transport) -> Ctap2Transport {
         match transport {
-            crate::Transport::Usb => Ctap2Transport::Usb,
-            crate::Transport::Ble => Ctap2Transport::Ble,
-            crate::Transport::Nfc => Ctap2Transport::Nfc,
-            crate::Transport::Hybrid => Ctap2Transport::Hybrid,
+            Transport::Usb => Ctap2Transport::Usb,
+            Transport::Ble => Ctap2Transport::Ble,
+            Transport::Nfc => Ctap2Transport::Nfc,
+            Transport::Hybrid => Ctap2Transport::Hybrid,
         }
     }
 }

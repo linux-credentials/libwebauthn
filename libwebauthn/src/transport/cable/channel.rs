@@ -18,6 +18,7 @@ use crate::transport::{
     channel::ChannelStatus, device::SupportedProtocols, Channel, Ctap2AuthTokenStore,
 };
 use crate::webauthn::error::Error;
+use crate::Transport;
 use crate::UvUpdate;
 
 use super::known_devices::CableKnownDevice;
@@ -125,8 +126,8 @@ impl From<UvUpdate> for CableUxUpdate {
 impl Channel for CableChannel {
     type UxUpdate = CableUxUpdate;
 
-    fn transport(&self) -> Option<crate::Transport> {
-        Some(crate::Transport::Hybrid)
+    fn transport(&self) -> Transport {
+        Transport::Hybrid
     }
 
     async fn supported_protocols(&self) -> Result<SupportedProtocols, Error> {

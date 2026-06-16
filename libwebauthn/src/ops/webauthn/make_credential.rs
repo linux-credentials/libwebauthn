@@ -34,6 +34,7 @@ use crate::{
         },
     },
     transport::AuthTokenData,
+    Transport,
 };
 
 use super::timeout::DEFAULT_TIMEOUT;
@@ -48,7 +49,7 @@ pub struct MakeCredentialResponse {
     pub large_blob_key: Option<Vec<u8>>,
     pub unsigned_extensions_output: MakeCredentialsResponseUnsignedExtensions,
     /// Transport the credential was created over, stamped by the channel.
-    pub transport: Option<crate::Transport>,
+    pub transport: Option<Transport>,
     /// Transports the authenticator advertised in getInfo (0x09), if any.
     pub authenticator_transports: Option<Vec<String>>,
 }
@@ -67,7 +68,7 @@ struct AttestationObject<'a> {
 /// Maps the active transport to AuthenticatorTransport tokens for the registration
 /// `transports` member. The list is deduplicated and lexicographically sorted per
 /// WebAuthn L3 §5.2.1.1, and is empty when the transport is unknown.
-fn registration_transports(transport: Option<crate::Transport>) -> Vec<String> {
+fn registration_transports(transport: Option<Transport>) -> Vec<String> {
     let mut tokens: Vec<String> = transport
         .into_iter()
         .map(Ctap2Transport::from)
@@ -1537,10 +1538,10 @@ mod tests {
         let request = create_test_request();
 
         for (transport, token) in [
-            (crate::Transport::Usb, "usb"),
-            (crate::Transport::Ble, "ble"),
-            (crate::Transport::Nfc, "nfc"),
-            (crate::Transport::Hybrid, "hybrid"),
+            (Transport::Usb, "usb"),
+            (Transport::Ble, "ble"),
+            (Transport::Nfc, "nfc"),
+            (Transport::Hybrid, "hybrid"),
         ] {
             response.transport = Some(transport);
             let model = response.to_idl_model(&request).unwrap();
@@ -1548,7 +1549,7 @@ mod tests {
         }
 
         // The token reaches the JSON wire format too.
-        response.transport = Some(crate::Transport::Nfc);
+        response.transport = Some(Transport::Nfc);
         let json = response
             .to_json_string(
                 &request,
@@ -1573,7 +1574,7 @@ mod tests {
         let request = create_test_request();
 
         // Reported out of order with a duplicate; the ceremony transport (ble) folds in.
-        response.transport = Some(crate::Transport::Ble);
+        response.transport = Some(Transport::Ble);
         response.authenticator_transports = Some(vec![
             "usb".to_string(),
             "nfc".to_string(),
@@ -1586,7 +1587,7 @@ mod tests {
         );
 
         // A ceremony transport already in the reported list is not duplicated.
-        response.transport = Some(crate::Transport::Usb);
+        response.transport = Some(Transport::Usb);
         response.authenticator_transports = Some(vec!["usb".to_string(), "nfc".to_string()]);
         let model = response.to_idl_model(&request).unwrap();
         assert_eq!(
@@ -1600,7 +1601,7 @@ mod tests {
         assert_eq!(model.response.transports, vec!["usb".to_string()]);
 
         // Unknown tokens pass through, folded with the ceremony transport.
-        response.transport = Some(crate::Transport::Ble);
+        response.transport = Some(Transport::Ble);
         response.authenticator_transports =
             Some(vec!["smart-card".to_string(), "custom".to_string()]);
         let model = response.to_idl_model(&request).unwrap();

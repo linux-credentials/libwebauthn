@@ -34,6 +34,7 @@ use crate::transport::hid::framing::{
     HidCommand, HidMessage, HidMessageParser, HidMessageParserState,
 };
 use crate::webauthn::error::{Error, PlatformError};
+use crate::Transport;
 use crate::UvUpdate;
 
 use super::device::get_hidapi;
@@ -505,8 +506,8 @@ impl Display for HidChannel<'_> {
 impl Channel for HidChannel<'_> {
     type UxUpdate = UvUpdate;
 
-    fn transport(&self) -> Option<crate::Transport> {
-        Some(crate::Transport::Usb)
+    fn transport(&self) -> Transport {
+        Transport::Usb
     }
 
     async fn supported_protocols(&self) -> Result<SupportedProtocols, Error> {

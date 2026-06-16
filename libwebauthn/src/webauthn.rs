@@ -141,7 +141,7 @@ where
             FidoProtocol::FIDO2 => make_credential_fido2(self, op).await,
             FidoProtocol::U2F => make_credential_u2f(self, op).await,
         }?;
-        response.transport = self.transport();
+        response.transport = Some(self.transport());
         Ok(response)
     }
 
