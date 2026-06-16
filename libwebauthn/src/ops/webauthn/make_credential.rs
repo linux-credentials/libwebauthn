@@ -121,17 +121,12 @@ impl WebAuthnIDLResponse for MakeCredentialResponse {
         // Build attestation object (CBOR map with authData, fmt, attStmt)
         let attestation_object_bytes = self.build_attestation_object(&authenticator_data_bytes)?;
 
-        // Prefer the authenticator's getInfo 0x09 transports; else the ceremony
-        // transport. WebAuthn L3 §5.2.1.1: unique tokens, lexicographically sorted.
-        let transports = match self.authenticator_transports.as_ref() {
-            Some(reported) if !reported.is_empty() => {
-                let mut tokens = reported.clone();
-                tokens.sort();
-                tokens.dedup();
-                tokens
-            }
-            _ => registration_transports(self.transport),
-        };
+        // WebAuthn getTransports(): the authenticator's getInfo 0x09 transports
+        // folded with the ceremony transport, unique tokens lexicographically sorted.
+        let mut transports = self.authenticator_transports.clone().unwrap_or_default();
+        transports.extend(registration_transports(self.transport));
+        transports.sort();
+        transports.dedup();
 
         // Build client extension results
         let client_extension_results = self.build_client_extension_results();
@@ -1572,13 +1567,12 @@ mod tests {
 
     #[test]
     fn test_response_to_idl_model_transports_from_get_info() {
-        // The authenticator's getInfo (0x09) transports source the registration
-        // `transports` member as unique tokens in lexicographical order, taking
-        // precedence over the single ceremony transport (no union).
+        // The authenticator's getInfo (0x09) transports are folded with the
+        // ceremony transport, as unique tokens in lexicographical order.
         let mut response = create_test_response();
         let request = create_test_request();
 
-        // Reported out of order with a duplicate; ceremony transport differs.
+        // Reported out of order with a duplicate; the ceremony transport (ble) folds in.
         response.transport = Some(crate::Transport::Ble);
         response.authenticator_transports = Some(vec![
             "usb".to_string(),
@@ -1588,21 +1582,35 @@ mod tests {
         let model = response.to_idl_model(&request).unwrap();
         assert_eq!(
             model.response.transports,
+            vec!["ble".to_string(), "nfc".to_string(), "usb".to_string()]
+        );
+
+        // A ceremony transport already in the reported list is not duplicated.
+        response.transport = Some(crate::Transport::Usb);
+        response.authenticator_transports = Some(vec!["usb".to_string(), "nfc".to_string()]);
+        let model = response.to_idl_model(&request).unwrap();
+        assert_eq!(
+            model.response.transports,
             vec!["nfc".to_string(), "usb".to_string()]
         );
 
-        // An empty reported list falls back to the ceremony transport.
-        response.authenticator_transports = Some(Vec::new());
+        // No reported transports leaves just the ceremony transport.
+        response.authenticator_transports = None;
         let model = response.to_idl_model(&request).unwrap();
-        assert_eq!(model.response.transports, vec!["ble".to_string()]);
+        assert_eq!(model.response.transports, vec!["usb".to_string()]);
 
-        // Unknown tokens pass through unchanged.
+        // Unknown tokens pass through, folded with the ceremony transport.
+        response.transport = Some(crate::Transport::Ble);
         response.authenticator_transports =
             Some(vec!["smart-card".to_string(), "custom".to_string()]);
         let model = response.to_idl_model(&request).unwrap();
         assert_eq!(
             model.response.transports,
-            vec!["custom".to_string(), "smart-card".to_string()]
+            vec![
+                "ble".to_string(),
+                "custom".to_string(),
+                "smart-card".to_string()
+            ]
         );
     }
 
