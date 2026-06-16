@@ -49,6 +49,8 @@ pub struct MakeCredentialResponse {
     pub unsigned_extensions_output: MakeCredentialsResponseUnsignedExtensions,
     /// Transport the credential was created over, stamped by the channel.
     pub transport: Option<crate::Transport>,
+    /// Transports the authenticator advertised in getInfo (0x09), if any.
+    pub authenticator_transports: Option<Vec<String>>,
 }
 
 /// Serializable attestation object for CBOR encoding.
@@ -119,7 +121,17 @@ impl WebAuthnIDLResponse for MakeCredentialResponse {
         // Build attestation object (CBOR map with authData, fmt, attStmt)
         let attestation_object_bytes = self.build_attestation_object(&authenticator_data_bytes)?;
 
-        let transports = registration_transports(self.transport);
+        // Prefer the authenticator's getInfo 0x09 transports; else the ceremony
+        // transport. WebAuthn L3 §5.2.1.1: unique tokens, lexicographically sorted.
+        let transports = match self.authenticator_transports.as_ref() {
+            Some(reported) if !reported.is_empty() => {
+                let mut tokens = reported.clone();
+                tokens.sort();
+                tokens.dedup();
+                tokens
+            }
+            _ => registration_transports(self.transport),
+        };
 
         // Build client extension results
         let client_extension_results = self.build_client_extension_results();
@@ -1426,6 +1438,7 @@ mod tests {
             large_blob_key: None,
             unsigned_extensions_output: MakeCredentialsResponseUnsignedExtensions::default(),
             transport: None,
+            authenticator_transports: None,
         }
     }
 
@@ -1555,6 +1568,42 @@ mod tests {
         response.transport = None;
         let model = response.to_idl_model(&request).unwrap();
         assert!(model.response.transports.is_empty());
+    }
+
+    #[test]
+    fn test_response_to_idl_model_transports_from_get_info() {
+        // The authenticator's getInfo (0x09) transports source the registration
+        // `transports` member as unique tokens in lexicographical order, taking
+        // precedence over the single ceremony transport (no union).
+        let mut response = create_test_response();
+        let request = create_test_request();
+
+        // Reported out of order with a duplicate; ceremony transport differs.
+        response.transport = Some(crate::Transport::Ble);
+        response.authenticator_transports = Some(vec![
+            "usb".to_string(),
+            "nfc".to_string(),
+            "usb".to_string(),
+        ]);
+        let model = response.to_idl_model(&request).unwrap();
+        assert_eq!(
+            model.response.transports,
+            vec!["nfc".to_string(), "usb".to_string()]
+        );
+
+        // An empty reported list falls back to the ceremony transport.
+        response.authenticator_transports = Some(Vec::new());
+        let model = response.to_idl_model(&request).unwrap();
+        assert_eq!(model.response.transports, vec!["ble".to_string()]);
+
+        // Unknown tokens pass through unchanged.
+        response.authenticator_transports =
+            Some(vec!["smart-card".to_string(), "custom".to_string()]);
+        let model = response.to_idl_model(&request).unwrap();
+        assert_eq!(
+            model.response.transports,
+            vec!["custom".to_string(), "smart-card".to_string()]
+        );
     }
 
     #[test]

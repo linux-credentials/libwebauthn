@@ -405,6 +405,7 @@ impl Ctap2MakeCredentialResponse {
             large_blob_key: self.large_blob_key.map(|x| x.into_vec()),
             unsigned_extensions_output,
             transport: None,
+            authenticator_transports: info.and_then(|i| i.transports.clone()),
         }
     }
 }
