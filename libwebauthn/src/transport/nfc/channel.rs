@@ -21,6 +21,7 @@ use crate::transport::channel::{
 use crate::transport::device::SupportedProtocols;
 use crate::transport::error::TransportError;
 use crate::webauthn::Error;
+use crate::Transport;
 use crate::UvUpdate;
 
 use super::commands::{command_ctap_msg, command_get_response};
@@ -258,6 +259,10 @@ where
     Ctx: Copy + Send + Sync + fmt::Debug + Display,
 {
     type UxUpdate = UvUpdate;
+
+    fn transport(&self) -> Transport {
+        Transport::Nfc
+    }
 
     async fn supported_protocols(&self) -> Result<SupportedProtocols, Error> {
         Ok(self.supported)

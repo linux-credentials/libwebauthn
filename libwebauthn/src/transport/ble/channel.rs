@@ -15,6 +15,7 @@ use crate::transport::channel::{
 use crate::transport::device::SupportedProtocols;
 use crate::transport::error::TransportError;
 use crate::webauthn::error::Error;
+use crate::Transport;
 use crate::UvUpdate;
 
 use super::btleplug::manager::SupportedRevisions;
@@ -80,6 +81,10 @@ impl Display for BleChannel<'_> {
 #[async_trait]
 impl<'a> Channel for BleChannel<'a> {
     type UxUpdate = UvUpdate;
+
+    fn transport(&self) -> Transport {
+        Transport::Ble
+    }
 
     async fn supported_protocols(&self) -> Result<SupportedProtocols, Error> {
         Ok(self.revision.into())

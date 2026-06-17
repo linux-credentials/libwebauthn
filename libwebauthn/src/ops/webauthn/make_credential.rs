@@ -29,11 +29,12 @@ use crate::{
             cbor, cbor::Value, cose, parse_unsigned_prf, Ctap2AttestationStatement,
             Ctap2COSEAlgorithmIdentifier, Ctap2CredentialType, Ctap2GetInfoResponse,
             Ctap2MakeCredentialsResponseExtensions, Ctap2PublicKeyCredentialDescriptor,
-            Ctap2PublicKeyCredentialRpEntity, Ctap2PublicKeyCredentialUserEntity,
+            Ctap2PublicKeyCredentialRpEntity, Ctap2PublicKeyCredentialUserEntity, Ctap2Transport,
             UnsignedPrfOutput,
         },
     },
     transport::AuthTokenData,
+    Transport,
 };
 
 use super::timeout::DEFAULT_TIMEOUT;
@@ -47,6 +48,10 @@ pub struct MakeCredentialResponse {
     pub enterprise_attestation: Option<bool>,
     pub large_blob_key: Option<Vec<u8>>,
     pub unsigned_extensions_output: MakeCredentialsResponseUnsignedExtensions,
+    /// Transport the credential was created over, stamped by the channel.
+    pub transport: Option<Transport>,
+    /// Transports the authenticator advertised in getInfo (0x09), if any.
+    pub authenticator_transports: Option<Vec<String>>,
 }
 
 /// Serializable attestation object for CBOR encoding.
@@ -58,6 +63,21 @@ struct AttestationObject<'a> {
     auth_data: &'a [u8],
     #[serde(rename = "attStmt")]
     attestation_statement: &'a Ctap2AttestationStatement,
+}
+
+/// Maps the active transport to AuthenticatorTransport tokens for the registration
+/// `transports` member. The list is deduplicated and lexicographically sorted per
+/// WebAuthn L3 §5.2.1.1, and is empty when the transport is unknown.
+fn registration_transports(transport: Option<Transport>) -> Vec<String> {
+    let mut tokens: Vec<String> = transport
+        .into_iter()
+        .map(Ctap2Transport::from)
+        .filter_map(|t| serde_json::to_value(t).ok())
+        .filter_map(|v| v.as_str().map(str::to_owned))
+        .collect();
+    tokens.sort();
+    tokens.dedup();
+    tokens
 }
 
 impl WebAuthnIDLResponse for MakeCredentialResponse {
@@ -102,8 +122,12 @@ impl WebAuthnIDLResponse for MakeCredentialResponse {
         // Build attestation object (CBOR map with authData, fmt, attStmt)
         let attestation_object_bytes = self.build_attestation_object(&authenticator_data_bytes)?;
 
-        // Get transports (we don't have direct access, so return empty for now)
-        let transports = Vec::new();
+        // WebAuthn getTransports(): the authenticator's getInfo 0x09 transports
+        // folded with the ceremony transport, unique tokens lexicographically sorted.
+        let mut transports = self.authenticator_transports.clone().unwrap_or_default();
+        transports.extend(registration_transports(self.transport));
+        transports.sort();
+        transports.dedup();
 
         // Build client extension results
         let client_extension_results = self.build_client_extension_results();
@@ -1409,6 +1433,8 @@ mod tests {
             enterprise_attestation: None,
             large_blob_key: None,
             unsigned_extensions_output: MakeCredentialsResponseUnsignedExtensions::default(),
+            transport: None,
+            authenticator_transports: None,
         }
     }
 
@@ -1501,6 +1527,92 @@ mod tests {
             i64::from(Ctap2COSEAlgorithmIdentifier::ES256)
         );
         assert!(model.response.transports.is_empty());
+    }
+
+    #[test]
+    fn test_response_to_idl_model_populates_transports() {
+        // WebAuthn L3 §5.2.1.1: the registration `transports` member reports the
+        // transport the credential was created over, as AuthenticatorTransport tokens.
+        // Both the FIDO2 and U2F-downgrade paths converge on this serialization.
+        let mut response = create_test_response();
+        let request = create_test_request();
+
+        for (transport, token) in [
+            (Transport::Usb, "usb"),
+            (Transport::Ble, "ble"),
+            (Transport::Nfc, "nfc"),
+            (Transport::Hybrid, "hybrid"),
+        ] {
+            response.transport = Some(transport);
+            let model = response.to_idl_model(&request).unwrap();
+            assert_eq!(model.response.transports, vec![token.to_string()]);
+        }
+
+        // The token reaches the JSON wire format too.
+        response.transport = Some(Transport::Nfc);
+        let json = response
+            .to_json_string(
+                &request,
+                crate::ops::webauthn::idl::response::JsonFormat::default(),
+            )
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let transports = parsed["response"]["transports"].as_array().unwrap();
+        assert_eq!(transports, &vec![serde_json::Value::from("nfc")]);
+
+        // An unknown transport leaves the list empty.
+        response.transport = None;
+        let model = response.to_idl_model(&request).unwrap();
+        assert!(model.response.transports.is_empty());
+    }
+
+    #[test]
+    fn test_response_to_idl_model_transports_from_get_info() {
+        // The authenticator's getInfo (0x09) transports are folded with the
+        // ceremony transport, as unique tokens in lexicographical order.
+        let mut response = create_test_response();
+        let request = create_test_request();
+
+        // Reported out of order with a duplicate; the ceremony transport (ble) folds in.
+        response.transport = Some(Transport::Ble);
+        response.authenticator_transports = Some(vec![
+            "usb".to_string(),
+            "nfc".to_string(),
+            "usb".to_string(),
+        ]);
+        let model = response.to_idl_model(&request).unwrap();
+        assert_eq!(
+            model.response.transports,
+            vec!["ble".to_string(), "nfc".to_string(), "usb".to_string()]
+        );
+
+        // A ceremony transport already in the reported list is not duplicated.
+        response.transport = Some(Transport::Usb);
+        response.authenticator_transports = Some(vec!["usb".to_string(), "nfc".to_string()]);
+        let model = response.to_idl_model(&request).unwrap();
+        assert_eq!(
+            model.response.transports,
+            vec!["nfc".to_string(), "usb".to_string()]
+        );
+
+        // No reported transports leaves just the ceremony transport.
+        response.authenticator_transports = None;
+        let model = response.to_idl_model(&request).unwrap();
+        assert_eq!(model.response.transports, vec!["usb".to_string()]);
+
+        // Unknown tokens pass through, folded with the ceremony transport.
+        response.transport = Some(Transport::Ble);
+        response.authenticator_transports =
+            Some(vec!["smart-card".to_string(), "custom".to_string()]);
+        let model = response.to_idl_model(&request).unwrap();
+        assert_eq!(
+            model.response.transports,
+            vec![
+                "ble".to_string(),
+                "custom".to_string(),
+                "smart-card".to_string()
+            ]
+        );
     }
 
     #[test]

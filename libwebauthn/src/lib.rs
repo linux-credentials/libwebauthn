@@ -120,10 +120,12 @@ macro_rules! unwrap_field {
 use pin::{PinNotSetReason, PinRequestReason};
 pub(crate) use unwrap_field;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Transport {
     Usb,
     Ble,
+    Nfc,
+    Hybrid,
 }
 
 #[derive(Debug, Clone)]
@@ -213,6 +215,27 @@ impl PartialEq for PinNotSetUpdate {
     }
 }
 
-pub fn available_transports() -> Vec<Transport> {
-    vec![Transport::Usb, Transport::Ble]
+/// The transports usable right now. USB is always available. BLE and Hybrid
+/// (caBLE) need a Bluetooth adapter. NFC needs a reader and a compiled backend.
+pub async fn available_transports() -> Vec<Transport> {
+    let mut transports = vec![Transport::Usb];
+    // BLE and Hybrid (caBLE) both need a Bluetooth adapter.
+    if transport::ble::is_available().await {
+        transports.push(Transport::Ble);
+        transports.push(Transport::Hybrid);
+    }
+    if transport::nfc::is_nfc_available() {
+        transports.push(Transport::Nfc);
+    }
+    transports
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn available_transports_always_includes_usb() {
+        assert!(available_transports().await.contains(&Transport::Usb));
+    }
 }

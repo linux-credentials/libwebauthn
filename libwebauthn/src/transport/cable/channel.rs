@@ -18,6 +18,7 @@ use crate::transport::{
     channel::ChannelStatus, device::SupportedProtocols, Channel, Ctap2AuthTokenStore,
 };
 use crate::webauthn::error::Error;
+use crate::Transport;
 use crate::UvUpdate;
 
 use super::known_devices::CableKnownDevice;
@@ -124,6 +125,10 @@ impl From<UvUpdate> for CableUxUpdate {
 #[async_trait]
 impl Channel for CableChannel {
     type UxUpdate = CableUxUpdate;
+
+    fn transport(&self) -> Transport {
+        Transport::Hybrid
+    }
 
     async fn supported_protocols(&self) -> Result<SupportedProtocols, Error> {
         Ok(SupportedProtocols::fido2_only())
