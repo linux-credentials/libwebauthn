@@ -1,9 +1,14 @@
+use crate::transport::cable::error::CableTunnelError;
+
 #[derive(thiserror::Error, Debug, PartialEq, Clone)]
 pub enum TransportError {
     #[error("connection failed")]
     ConnectionFailed,
     #[error("connection lost")]
     ConnectionLost,
+    /// An error from the caBLE tunnel-server transport.
+    #[error(transparent)]
+    CableTunnel(#[from] CableTunnelError),
     #[error("invalid endpoint")]
     InvalidEndpoint,
     #[error("invalid framing")]

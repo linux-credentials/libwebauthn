@@ -66,6 +66,8 @@ pub(crate) struct ConnectionInput {
     pub connection_type: CableTunnelConnectionType,
     /// Some if the CMHD offered a BLE L2CAP channel; None selects WebSocket.
     pub ble: Option<BleConnectionParams>,
+    /// Present for known-device connections, so a 410 Gone can forget the record.
+    pub known_device_store: Option<Arc<dyn CableKnownDeviceInfoStore>>,
 }
 
 impl ConnectionInput {
@@ -107,6 +109,7 @@ impl ConnectionInput {
             tunnel_domain,
             connection_type,
             ble,
+            known_device_store: None,
         })
     }
 
@@ -133,6 +136,7 @@ impl ConnectionInput {
             tunnel_domain: known_device.device_info.tunnel_domain.clone(),
             connection_type,
             ble: None,
+            known_device_store: Some(known_device.store.clone()),
         }
     }
 }
@@ -323,7 +327,23 @@ async fn connect_data_channel(
         }
     }
 
-    let ws_stream = tunnel::connect(&input.tunnel_domain, &input.connection_type).await?;
+    let ws_stream = match tunnel::connect(&input.tunnel_domain, &input.connection_type).await {
+        Ok(ws_stream) => ws_stream,
+        Err(error) => {
+            if let Some(device_id) =
+                tunnel::known_device_id_to_forget(&error, &input.connection_type)
+            {
+                if let Some(store) = &input.known_device_store {
+                    warn!(
+                        ?device_id,
+                        "Tunnel server returned 410 Gone; forgetting known device"
+                    );
+                    store.delete_known_device(&device_id).await;
+                }
+            }
+            return Err(error);
+        }
+    };
     info!(tunnel_domain = %input.tunnel_domain, "Connected over WebSocket tunnel");
     Ok(Box::new(WebSocketDataChannel::new(ws_stream)))
 }
