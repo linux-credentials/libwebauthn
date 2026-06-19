@@ -550,4 +550,18 @@ mod tests {
         .unwrap();
         assert!(to_spki(&bytes).is_err());
     }
+
+    // To refresh after an intentional wire change, run the test and copy the actual (left) hex from the assert_eq! panic.
+    /// Pin the exact COSE_Key bytes cosey emits for a fixed P-256 key.
+    #[test]
+    fn p256_public_key_golden_cose() {
+        use cosey::{Bytes, P256PublicKey, PublicKey};
+        let key = PublicKey::P256Key(P256PublicKey {
+            x: Bytes::from_slice(&[0x06u8; 32]).unwrap(),
+            y: Bytes::from_slice(&[0x07u8; 32]).unwrap(),
+        });
+        let bytes = cbor::to_vec(&key).unwrap();
+        // {1: 2(EC2), 3: -7(ES256), -1: 1(P256), -2: x[32], -3: y[32]}.
+        assert_eq!(hex::encode(&bytes), "a501020326200121582006060606060606060606060606060606060606060606060606060606060606062258200707070707070707070707070707070707070707070707070707070707070707");
+    }
 }
