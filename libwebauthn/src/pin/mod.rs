@@ -21,6 +21,7 @@ use cbc::cipher::{BlockEncryptMut, KeyIvInit};
 use cosey as cose;
 use hkdf::Hkdf;
 use hmac::Mac;
+use icu_normalizer::ComposingNormalizerBorrowed;
 use p256::{
     ecdh::EphemeralSecret, elliptic_curve::sec1::FromEncodedPoint, EncodedPoint,
     PublicKey as P256PublicKey,
@@ -77,6 +78,8 @@ pub enum PinNotSetReason {
     PinTooLong,
     /// PIN violates PinPolicy
     PinPolicyViolation,
+    /// Authenticator policy forces a PIN change before the operation can proceed
+    PinChangeRequired,
 }
 
 pub trait PinUvAuthProtocol: Send + Sync {
@@ -515,8 +518,13 @@ pub(crate) mod internal {
             new_pin: String,
             timeout: Duration,
         ) -> Result<(), Error> {
+            // CTAP 2.1 sends the PIN as UTF-8 in Unicode Normalization Form C.
+            let new_pin = ComposingNormalizerBorrowed::new_nfc()
+                .normalize(&new_pin)
+                .into_owned();
+
             // If the minPINLength member of the authenticatorGetInfo response is absent, then let platformMinPINLengthInCodePoints be 4.
-            if new_pin.len() < get_info_response.min_pin_length.unwrap_or(4) as usize {
+            if new_pin.chars().count() < get_info_response.min_pin_length.unwrap_or(4) as usize {
                 // If platformCollectedPinLengthInCodePoints is less than platformMinPINLengthInCodePoints then the platform SHOULD display a "PIN too short" error message to the user.
                 return Err(Error::Platform(PlatformError::PinTooShort));
             }

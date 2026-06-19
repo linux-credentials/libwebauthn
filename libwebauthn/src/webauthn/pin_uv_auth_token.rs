@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use icu_normalizer::ComposingNormalizerBorrowed;
 use tracing::{debug, error, info, instrument, warn};
 
 use cosey::PublicKey;
@@ -14,8 +15,8 @@ use crate::pin::{
     PinUvAuthProtocol, PinUvAuthProtocolOne, PinUvAuthProtocolTwo,
 };
 use crate::proto::ctap2::{
-    Ctap2, Ctap2ClientPinRequest, Ctap2GetInfoResponse, Ctap2PinUvAuthProtocol,
-    Ctap2UserVerifiableRequest, Ctap2UserVerificationOperation,
+    Ctap2, Ctap2AuthTokenPermissionRole, Ctap2ClientPinRequest, Ctap2GetInfoResponse,
+    Ctap2PinUvAuthProtocol, Ctap2UserVerifiableRequest, Ctap2UserVerificationOperation,
 };
 pub use crate::transport::error::TransportError;
 use crate::transport::{AuthTokenData, Channel, Ctap2AuthTokenPermission};
@@ -59,6 +60,37 @@ fn pin_uv_auth_token_len_valid(version: Ctap2PinUvAuthProtocol, len: usize) -> b
     match version {
         Ctap2PinUvAuthProtocol::One => len == 16 || len == 32,
         Ctap2PinUvAuthProtocol::Two => len == 32,
+    }
+}
+
+/// CTAP 2.1 `noMcGaPermissionsWithClientPin`: a clientPin-derived pinUvAuthToken must not carry
+/// the mc or ga permission. Route such a request to built-in UV, or fail clearly when built-in UV
+/// is unavailable. Other operations and non-mc/ga permissions are returned unchanged.
+fn enforce_no_mc_ga_with_client_pin(
+    get_info_response: &Ctap2GetInfoResponse,
+    uv_operation: Ctap2UserVerificationOperation,
+    permissions: Ctap2AuthTokenPermissionRole,
+    uv_unavailable: bool,
+) -> Result<Ctap2UserVerificationOperation, Error> {
+    let is_client_pin = matches!(
+        uv_operation,
+        Ctap2UserVerificationOperation::GetPinToken
+            | Ctap2UserVerificationOperation::GetPinUvAuthTokenUsingPinWithPermissions
+    );
+    let wants_mc_or_ga = permissions.intersects(
+        Ctap2AuthTokenPermissionRole::MAKE_CREDENTIAL | Ctap2AuthTokenPermissionRole::GET_ASSERTION,
+    );
+    if !is_client_pin
+        || !wants_mc_or_ga
+        || !get_info_response.option_enabled("noMcGaPermissionsWithClientPin")
+    {
+        return Ok(uv_operation);
+    }
+    if get_info_response.option_enabled("uv") && !uv_unavailable {
+        Ok(Ctap2UserVerificationOperation::GetPinUvAuthTokenUsingUvWithPermissions)
+    } else {
+        error!("noMcGaPermissionsWithClientPin is set but built-in UV is unavailable for mc/ga");
+        Err(Error::Platform(PlatformError::NoUvAvailable))
     }
 }
 
@@ -221,6 +253,34 @@ where
             if !ctap2_request.needs_pin_uv_auth_token(get_info_response) {
                 uv_operation = Ctap2UserVerificationOperation::OnlyForSharedSecret;
             }
+        }
+
+        // noMcGaPermissionsWithClientPin: never mint a clientPin token carrying mc/ga.
+        uv_operation = enforce_no_mc_ga_with_client_pin(
+            get_info_response,
+            uv_operation,
+            ctap2_request.permissions(),
+            uv_blocked || skip_uv,
+        )?;
+
+        // forcePINChange: the device rejects PIN-based tokens until the PIN is changed, so drive
+        // a change-PIN flow first and re-evaluate against the refreshed getInfo.
+        if get_info_response.force_pin_change == Some(true)
+            && matches!(
+                uv_operation,
+                Ctap2UserVerificationOperation::GetPinToken
+                    | Ctap2UserVerificationOperation::GetPinUvAuthTokenUsingPinWithPermissions
+            )
+        {
+            try_to_set_pin(
+                channel,
+                get_info_response,
+                PinNotSetReason::PinChangeRequired,
+                timeout,
+            )
+            .await?;
+            *get_info_response = channel.ctap2_get_info().await?;
+            continue;
         }
 
         let Some(uv_proto) = select_uv_proto(
@@ -518,7 +578,11 @@ where
             return Err(Error::Ctap(CtapError::PINRequired));
         }
     };
-    Ok(pin.as_bytes().to_owned())
+    // CTAP 2.1 sends the PIN as UTF-8 in Unicode Normalization Form C.
+    Ok(ComposingNormalizerBorrowed::new_nfc()
+        .normalize(&pin)
+        .as_bytes()
+        .to_owned())
 }
 
 pub(crate) async fn try_to_set_pin<C>(
@@ -603,11 +667,14 @@ mod test {
             GetAssertionLargeBlobExtension, GetAssertionRequest, GetAssertionRequestExtensions,
             PrfInput, PrfInputValue, UserVerificationRequirement,
         },
+        pin::internal::PinManagementInternal,
         pin::persistent_token::{
             build_enc_identifier, MemoryPersistentTokenStore, PersistentTokenRecord,
             PersistentTokenStore,
         },
-        pin::{pin_hash, PinNotSetReason, PinUvAuthProtocol, PinUvAuthProtocolOne},
+        pin::{
+            pin_hash, PinNotSetReason, PinRequestReason, PinUvAuthProtocol, PinUvAuthProtocolOne,
+        },
         proto::ctap2::{
             cbor::{to_vec, CborRequest, CborResponse},
             Ctap2AuthTokenPermissionRole, Ctap2ClientPinRequest, Ctap2ClientPinResponse,
@@ -616,11 +683,14 @@ mod test {
             Ctap2UserVerificationOperation,
         },
         transport::{mock::channel::MockChannel, Channel, Ctap2AuthTokenStore},
-        webauthn::UsedPinUvAuthToken,
+        webauthn::{PlatformError, UsedPinUvAuthToken},
         UvUpdate,
     };
 
-    use super::{pin_uv_auth_token_len_valid, user_verification, CtapError, Error};
+    use super::{
+        enforce_no_mc_ga_with_client_pin, obtain_pin, pin_uv_auth_token_len_valid,
+        user_verification, CtapError, Error,
+    };
     const TIMEOUT: Duration = Duration::from_secs(1);
 
     #[test]
@@ -2205,5 +2275,276 @@ mod test {
 
         let recv = recv_handle.await.expect("Failed to join update thread");
         assert!(recv.is_empty());
+    }
+
+    #[test]
+    fn no_mc_ga_with_client_pin_decision_matrix() {
+        use Ctap2UserVerificationOperation::{
+            GetPinToken, GetPinUvAuthTokenUsingPinWithPermissions,
+            GetPinUvAuthTokenUsingUvWithPermissions,
+        };
+        let mc_ga = Ctap2AuthTokenPermissionRole::MAKE_CREDENTIAL
+            | Ctap2AuthTokenPermissionRole::GET_ASSERTION;
+        let cm = Ctap2AuthTokenPermissionRole::CREDENTIAL_MANAGEMENT;
+
+        // Policy set, clientPin token wanted for mc/ga, built-in UV available: route to UV.
+        let info = create_info(
+            &[
+                ("clientPin", true),
+                ("uv", true),
+                ("pinUvAuthToken", true),
+                ("noMcGaPermissionsWithClientPin", true),
+            ],
+            None,
+        );
+        assert_eq!(
+            enforce_no_mc_ga_with_client_pin(
+                &info,
+                GetPinUvAuthTokenUsingPinWithPermissions,
+                mc_ga,
+                false
+            ),
+            Ok(GetPinUvAuthTokenUsingUvWithPermissions)
+        );
+        // Same, but built-in UV is blocked/unavailable: clear error, never a clientPin mc/ga token.
+        assert_eq!(
+            enforce_no_mc_ga_with_client_pin(
+                &info,
+                GetPinUvAuthTokenUsingPinWithPermissions,
+                mc_ga,
+                true
+            ),
+            Err(Error::Platform(PlatformError::NoUvAvailable))
+        );
+
+        // Policy set but no built-in UV at all: error on the clientPin mc/ga path.
+        let info_no_uv = create_info(
+            &[
+                ("clientPin", true),
+                ("pinUvAuthToken", true),
+                ("noMcGaPermissionsWithClientPin", true),
+            ],
+            None,
+        );
+        assert_eq!(
+            enforce_no_mc_ga_with_client_pin(&info_no_uv, GetPinToken, mc_ga, false),
+            Err(Error::Platform(PlatformError::NoUvAvailable))
+        );
+        // A non-mc/ga permission (e.g. credential management) is unaffected by the policy.
+        assert_eq!(
+            enforce_no_mc_ga_with_client_pin(&info_no_uv, GetPinToken, cm, false),
+            Ok(GetPinToken)
+        );
+
+        // Policy not advertised: clientPin mc/ga token is left as-is.
+        let info_off = create_info(&[("clientPin", true), ("pinUvAuthToken", true)], None);
+        assert_eq!(
+            enforce_no_mc_ga_with_client_pin(
+                &info_off,
+                GetPinUvAuthTokenUsingPinWithPermissions,
+                mc_ga,
+                false
+            ),
+            Ok(GetPinUvAuthTokenUsingPinWithPermissions)
+        );
+        // Already on the UV path: nothing to suppress.
+        assert_eq!(
+            enforce_no_mc_ga_with_client_pin(
+                &info,
+                GetPinUvAuthTokenUsingUvWithPermissions,
+                mc_ga,
+                false
+            ),
+            Ok(GetPinUvAuthTokenUsingUvWithPermissions)
+        );
+    }
+
+    #[tokio::test]
+    async fn no_mc_ga_with_client_pin_errors_when_uv_unavailable() {
+        // Device has a clientPin and pinUvAuthToken, advertises the no-mc/ga policy, but
+        // exposes no built-in UV. A get-assertion needs the ga permission, which must not be
+        // requested on the clientPin path, so the flow must refuse before touching the PIN.
+        let mut channel = MockChannel::new();
+        let status_recv = channel.get_ux_update_receiver();
+
+        let mut info = create_info(
+            &[
+                ("clientPin", true),
+                ("pinUvAuthToken", true),
+                ("noMcGaPermissionsWithClientPin", true),
+            ],
+            None,
+        );
+        info.pin_auth_protos = Some(vec![1]);
+        let info_req = CborRequest::new(Ctap2CommandCode::AuthenticatorGetInfo);
+        let info_resp = CborResponse::new_success_from_slice(to_vec(&info).unwrap().as_slice());
+        channel.push_command_pair(info_req, info_resp);
+
+        let mut getassertion = create_get_assertion(&info, None);
+        let resp = user_verification(
+            &mut channel,
+            UserVerificationRequirement::Preferred,
+            &mut getassertion,
+            TIMEOUT,
+        )
+        .await;
+
+        assert_eq!(resp, Err(Error::Platform(PlatformError::NoUvAvailable)));
+        assert!(channel.get_auth_data().is_none());
+        // No PIN prompt: we never start the forbidden clientPin token request.
+        assert!(status_recv.is_empty());
+    }
+
+    #[tokio::test]
+    async fn force_pin_change_drives_change_flow_before_pin_token() {
+        let mut channel = MockChannel::new();
+
+        let mut info = create_info(&[("clientPin", true), ("pinUvAuthToken", true)], None);
+        info.pin_auth_protos = Some(vec![1]);
+        info.force_pin_change = Some(true);
+        let info_req = CborRequest::new(Ctap2CommandCode::AuthenticatorGetInfo);
+        let info_resp = CborResponse::new_success_from_slice(to_vec(&info).unwrap().as_slice());
+        channel.push_command_pair(info_req, info_resp);
+
+        let mut recv = channel.get_ux_update_receiver();
+        let recv_handle = tokio::task::spawn(async move {
+            // The forced change must surface as a change-PIN prompt before any token PIN entry.
+            // Cancel by dropping the receiver after the first update.
+            match recv.recv().await.unwrap() {
+                UvUpdate::PinNotSet(update) => {
+                    assert_eq!(update.reason, PinNotSetReason::PinChangeRequired);
+                }
+                other => panic!("expected PinNotSet(PinChangeRequired), got {other:?}"),
+            }
+        });
+
+        let mut getassertion = create_get_assertion(&info, None);
+        let resp = user_verification(
+            &mut channel,
+            UserVerificationRequirement::Preferred,
+            &mut getassertion,
+            TIMEOUT,
+        )
+        .await;
+
+        recv_handle.await.expect("Failed to join update thread");
+        assert_eq!(resp, Err(Error::Platform(PlatformError::Cancelled)));
+        assert!(channel.get_auth_data().is_none());
+    }
+
+    #[tokio::test]
+    async fn change_pin_min_length_checked_in_code_points() {
+        let mut info = create_info(&[("clientPin", false)], None);
+        info.min_pin_length = Some(4);
+
+        // 3 code points but 6 UTF-8 bytes: rejected as too short by code points, not bytes.
+        let mut channel = MockChannel::new();
+        let result = channel
+            .change_pin_internal(&info, "\u{e9}\u{e9}\u{e9}".to_string(), TIMEOUT)
+            .await;
+        assert_eq!(result, Err(Error::Platform(PlatformError::PinTooShort)));
+
+        // 4 code points clears the length gate (it then fails later for an unrelated reason).
+        let mut channel = MockChannel::new();
+        let result = channel
+            .change_pin_internal(&info, "\u{e9}\u{e9}\u{e9}\u{e9}".to_string(), TIMEOUT)
+            .await;
+        assert_ne!(result, Err(Error::Platform(PlatformError::PinTooShort)));
+    }
+
+    #[tokio::test]
+    async fn change_pin_normalizes_new_pin_to_nfc() {
+        let mut info = create_info(&[("clientPin", false)], None);
+        info.pin_auth_protos = Some(vec![1]);
+
+        let mut channel = MockChannel::new();
+
+        let key_agreement_req = CborRequest::try_from(
+            &Ctap2ClientPinRequest::new_get_key_agreement(Ctap2PinUvAuthProtocol::One),
+        )
+        .unwrap();
+        let key_agreement_resp = CborResponse::new_success_from_slice(
+            to_vec(&Ctap2ClientPinResponse {
+                key_agreement: Some(get_key_agreement()),
+                ..Default::default()
+            })
+            .unwrap()
+            .as_slice(),
+        );
+        channel.push_command_pair(key_agreement_req, key_agreement_resp);
+
+        // The device must receive the NFC-composed form ("caf\u{e9}"), not the decomposed
+        // input ("cafe\u{301}") the caller supplies.
+        let pin_protocol = PinUvAuthProtocolOne::new();
+        let (public_key, shared_secret) = pin_protocol.encapsulate(&get_key_agreement()).unwrap();
+        let mut padded_new_pin = "caf\u{e9}".as_bytes().to_vec();
+        padded_new_pin.resize(64, 0x00);
+        let new_pin_enc = pin_protocol
+            .encrypt(&shared_secret, &padded_new_pin)
+            .unwrap();
+        let uv_auth_param = pin_protocol
+            .authenticate(&shared_secret, &new_pin_enc)
+            .unwrap();
+        let set_pin_req = CborRequest::try_from(&Ctap2ClientPinRequest::new_set_pin(
+            pin_protocol.version(),
+            &new_pin_enc,
+            public_key,
+            &uv_auth_param,
+        ))
+        .unwrap();
+        let set_pin_resp = CborResponse::new_success_from_slice(
+            to_vec(&Ctap2ClientPinResponse::default())
+                .unwrap()
+                .as_slice(),
+        );
+        channel.push_command_pair(set_pin_req, set_pin_resp);
+
+        channel
+            .change_pin_internal(&info, "cafe\u{301}".to_string(), TIMEOUT)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn obtain_pin_normalizes_collected_pin_to_nfc() {
+        let mut channel = MockChannel::new();
+        let mut info = create_info(&[("clientPin", true)], None);
+        info.versions = vec!["FIDO_2_1".to_string()];
+
+        let retries_req =
+            CborRequest::try_from(&Ctap2ClientPinRequest::new_get_pin_retries(None)).unwrap();
+        let retries_resp = CborResponse::new_success_from_slice(
+            to_vec(&Ctap2ClientPinResponse {
+                pin_retries: Some(5),
+                ..Default::default()
+            })
+            .unwrap()
+            .as_slice(),
+        );
+        channel.push_command_pair(retries_req, retries_resp);
+
+        let mut recv = channel.get_ux_update_receiver();
+        let recv_handle = tokio::task::spawn(async move {
+            if let UvUpdate::PinRequired(update) = recv.recv().await.unwrap() {
+                // Caller supplies a decomposed PIN.
+                update.send_pin("cafe\u{301}").unwrap();
+            } else {
+                panic!("Wrong UxUpdate received! Expected PinRequired");
+            }
+        });
+
+        let pin = obtain_pin(
+            &mut channel,
+            &info,
+            Ctap2PinUvAuthProtocol::One,
+            PinRequestReason::AuthenticatorPolicy,
+            TIMEOUT,
+        )
+        .await
+        .unwrap();
+
+        recv_handle.await.expect("Failed to join update thread");
+        // obtain_pin returns the NFC-composed bytes.
+        assert_eq!(pin, "caf\u{e9}".as_bytes());
     }
 }
