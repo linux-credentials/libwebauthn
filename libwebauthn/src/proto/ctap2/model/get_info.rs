@@ -155,7 +155,29 @@ pub struct Ctap2GetInfoResponse {
     pub max_pin_length: Option<u32>,
 }
 
+/// CTAP 2.1/2.2 6.4: platforms assume 1024 bytes when maxMsgSize is absent.
+pub const DEFAULT_MAX_MSG_SIZE: usize = 1024;
+
 impl Ctap2GetInfoResponse {
+    /// maxMsgSize (0x05), defaulting to 1024 bytes when the device omits it or advertises 0.
+    pub fn max_msg_size(&self) -> usize {
+        // A device may report 0, which cannot bound any real message; treat it as unset.
+        self.max_msg_size
+            .filter(|&size| size > 0)
+            .map(|size| size as usize)
+            .unwrap_or(DEFAULT_MAX_MSG_SIZE)
+    }
+
+    /// maxCredentialCountInList (0x07), or None when the device sets no limit.
+    pub fn max_credential_count_in_list(&self) -> Option<usize> {
+        self.max_credential_count.map(|count| count as usize)
+    }
+
+    /// maxCredentialIdLength (0x08), or None when the device sets no limit.
+    pub fn max_credential_id_length(&self) -> Option<usize> {
+        self.max_credential_id_length.map(|len| len as usize)
+    }
+
     /// Only checks if the option exists, i.e. is not None
     /// but does not check if the option is enabled (true)
     /// or disabled (false)
@@ -605,6 +627,49 @@ mod test {
             info.uv_operation(true),
             Some(Ctap2UserVerificationOperation::OnlyForSharedSecret)
         );
+    }
+
+    #[test]
+    fn max_msg_size_defaults_to_1024_when_absent() {
+        let info = Ctap2GetInfoResponse::default();
+        assert_eq!(info.max_msg_size(), super::DEFAULT_MAX_MSG_SIZE);
+        assert_eq!(info.max_msg_size(), 1024);
+    }
+
+    #[test]
+    fn max_msg_size_uses_advertised_value() {
+        let info = Ctap2GetInfoResponse {
+            max_msg_size: Some(2048),
+            ..Default::default()
+        };
+        assert_eq!(info.max_msg_size(), 2048);
+    }
+
+    #[test]
+    fn max_msg_size_treats_zero_as_default() {
+        let info = Ctap2GetInfoResponse {
+            max_msg_size: Some(0),
+            ..Default::default()
+        };
+        assert_eq!(info.max_msg_size(), super::DEFAULT_MAX_MSG_SIZE);
+    }
+
+    #[test]
+    fn credential_count_and_id_length_are_unbounded_when_absent() {
+        let info = Ctap2GetInfoResponse::default();
+        assert_eq!(info.max_credential_count_in_list(), None);
+        assert_eq!(info.max_credential_id_length(), None);
+    }
+
+    #[test]
+    fn credential_count_and_id_length_use_advertised_values() {
+        let info = Ctap2GetInfoResponse {
+            max_credential_count: Some(8),
+            max_credential_id_length: Some(64),
+            ..Default::default()
+        };
+        assert_eq!(info.max_credential_count_in_list(), Some(8));
+        assert_eq!(info.max_credential_id_length(), Some(64));
     }
 
     #[test]

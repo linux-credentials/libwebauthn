@@ -29,6 +29,8 @@ pub enum PlatformError {
     NoUvAvailable,
     #[error("invalid device response")]
     InvalidDeviceResponse,
+    #[error("request exceeds authenticator limits")]
+    RequestTooLarge,
     #[error("operation not supported")]
     NotSupported,
     #[error("syntax error")]
