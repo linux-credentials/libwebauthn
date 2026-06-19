@@ -1,10 +1,11 @@
 use async_trait::async_trait;
+use std::collections::HashSet;
 use std::fmt;
 #[allow(unused_imports)]
 use tracing::{debug, info, instrument, trace};
 
 use crate::{
-    transport::{device::Device, Channel, ChannelSettings},
+    transport::{device::Device, hid::HidDevice, Channel, ChannelSettings, UsbDeviceId},
     webauthn::Error,
 };
 
@@ -57,6 +58,17 @@ impl NfcDevice {
     pub fn new_pcsc(info: pcsc::Info) -> Self {
         NfcDevice {
             info: DeviceInfo::Pcsc(info),
+        }
+    }
+
+    /// The USB (bus, address) backing this device, when it can be resolved.
+    /// Performs blocking PC/SC I/O (a `Direct`-mode connect).
+    pub fn usb_device_id(&self) -> Option<UsbDeviceId> {
+        match &self.info {
+            #[cfg(feature = "nfc-backend-pcsc")]
+            DeviceInfo::Pcsc(info) => info.usb_device_id(),
+            #[cfg(feature = "nfc-backend-libnfc")]
+            DeviceInfo::LibNfc(_) => None,
         }
     }
 
@@ -134,4 +146,66 @@ pub fn is_nfc_available() -> bool {
     }
 
     available
+}
+
+/// Lists all NFC devices from the compiled backends, unfiltered. A failing
+/// backend is skipped. Cross-backend duplicates are not removed.
+#[instrument]
+pub async fn list_devices() -> Vec<NfcDevice> {
+    #[allow(unused_mut)]
+    let mut devices = Vec::new();
+    #[cfg(feature = "nfc-backend-libnfc")]
+    if let Ok(found) = libnfc::list_devices() {
+        devices.extend(found);
+    }
+    #[cfg(feature = "nfc-backend-pcsc")]
+    if let Ok(found) = pcsc::list_devices() {
+        devices.extend(found);
+    }
+    devices
+}
+
+/// Drops NFC devices that are the CCID face of a USB key already seen over HID,
+/// matched by USB (bus, address). Does blocking PC/SC I/O per reader.
+pub trait NfcDeviceSliceExt {
+    fn without_hid_duplicates(&self, hid: &[HidDevice]) -> Vec<NfcDevice>;
+}
+
+impl NfcDeviceSliceExt for [NfcDevice] {
+    fn without_hid_duplicates(&self, hid: &[HidDevice]) -> Vec<NfcDevice> {
+        let hid_ids: HashSet<UsbDeviceId> =
+            hid.iter().filter_map(HidDevice::usb_device_id).collect();
+        let nfc_ids: Vec<Option<UsbDeviceId>> = self.iter().map(NfcDevice::usb_device_id).collect();
+        self.iter()
+            .zip(dedup_keep_mask(&nfc_ids, &hid_ids))
+            .filter(|&(_, keep)| keep)
+            .map(|(device, _)| device.clone())
+            .collect()
+    }
+}
+
+/// Pure dedup core, unit-testable without hardware.
+fn dedup_keep_mask(nfc_ids: &[Option<UsbDeviceId>], hid_ids: &HashSet<UsbDeviceId>) -> Vec<bool> {
+    nfc_ids
+        .iter()
+        .map(|id| match id {
+            Some(id) => !hid_ids.contains(id),
+            None => true,
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dedup_keeps_non_duplicates_and_unknown() {
+        let a = UsbDeviceId { bus: 1, address: 8 };
+        let b = UsbDeviceId { bus: 1, address: 9 };
+        let nfc_ids = [Some(a), Some(b), None];
+        let hid_ids: HashSet<UsbDeviceId> = [a].into_iter().collect();
+
+        assert_eq!(dedup_keep_mask(&nfc_ids, &hid_ids), vec![false, true, true]);
+    }
 }

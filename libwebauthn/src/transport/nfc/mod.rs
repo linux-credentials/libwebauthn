@@ -8,7 +8,7 @@ pub mod libnfc;
 #[cfg(feature = "nfc-backend-pcsc")]
 pub mod pcsc;
 
-pub use device::{get_nfc_device, is_nfc_available};
+pub use device::{get_nfc_device, is_nfc_available, list_devices, NfcDevice, NfcDeviceSliceExt};
 
 use super::Transport;
 

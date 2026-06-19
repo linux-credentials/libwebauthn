@@ -12,6 +12,7 @@ use tracing::{debug, info, instrument};
 #[cfg(feature = "virt")]
 use super::framing::HidMessage;
 use crate::transport::error::TransportError;
+use crate::transport::usb::{usb_id_from_hidraw, UsbDeviceId};
 use crate::transport::{ChannelSettings, Device};
 use crate::webauthn::error::Error;
 
@@ -37,6 +38,17 @@ impl From<&DeviceInfo> for HidDevice {
     fn from(hidapi_device: &DeviceInfo) -> Self {
         Self {
             backend: HidBackendDevice::HidApiDevice(hidapi_device.clone()),
+        }
+    }
+}
+
+impl HidDevice {
+    /// The USB (bus, address) backing this key, when it can be resolved.
+    pub fn usb_device_id(&self) -> Option<UsbDeviceId> {
+        match &self.backend {
+            HidBackendDevice::HidApiDevice(info) => usb_id_from_hidraw(info.path()),
+            #[cfg(feature = "virt")]
+            HidBackendDevice::VirtualDevice(_) => None,
         }
     }
 }

@@ -2,6 +2,7 @@ use super::channel::{HandlerInCtx, NfcBackend, NfcChannel};
 use super::device::NfcDevice;
 use super::Context;
 use crate::transport::error::TransportError;
+use crate::transport::usb::UsbDeviceId;
 use crate::transport::ChannelSettings;
 use crate::webauthn::Error;
 use apdu::core::HandleError;
@@ -93,6 +94,33 @@ impl Info {
         let channel = NfcChannel::new(Box::new(chan), ctx, settings);
         Ok(channel)
     }
+
+    pub(crate) fn usb_device_id(&self) -> Option<UsbDeviceId> {
+        usb_id_from_reader(&self.name)
+    }
+}
+
+/// Reads the reader's `SCARD_ATTR_CHANNEL_ID` to get its USB (bus, address).
+/// Connects in `Direct` mode so no card is required and none is reset.
+pub(crate) fn usb_id_from_reader(name: &CStr) -> Option<UsbDeviceId> {
+    let context = pcsc::Context::establish(pcsc::Scope::User).ok()?;
+    let card = context
+        .connect(name, pcsc::ShareMode::Direct, pcsc::Protocols::UNDEFINED)
+        .ok()?;
+
+    let mut buf = [0u8; 8];
+    let id = card
+        .get_attribute(pcsc::Attribute::ChannelId, &mut buf)
+        .ok()
+        .and_then(|attr| attr.get(..4)?.try_into().ok())
+        .and_then(UsbDeviceId::from_channel_id_bytes);
+
+    // If disconnect fails, forget the returned Card so its Drop cannot reset an
+    // inserted card. The context release below frees the handle.
+    if let Err((card, _)) = card.disconnect(pcsc::Disposition::LeaveCard) {
+        std::mem::forget(card);
+    }
+    id
 }
 
 impl Channel {
