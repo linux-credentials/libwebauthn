@@ -1246,13 +1246,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_prf_eval_by_credential_variable_length() {
-        // NOTE: the IDL field is currently deserialized as `eval_by_credential`
-        // rather than the spec name `evalByCredential` — separate concern from
-        // #209. Use the field name the deserializer accepts.
-        let prf = parse_prf(
-            r#"{"prf":{"eval_by_credential":{"Y3JlZDE":{"first":"AQ","second":"AgIC"}}}}"#,
-        )
-        .await;
+        let prf =
+            parse_prf(r#"{"prf":{"evalByCredential":{"Y3JlZDE":{"first":"AQ","second":"AgIC"}}}}"#)
+                .await;
         let v = prf.eval_by_credential.get("Y3JlZDE").expect("entry");
         assert_eq!(v.first, vec![0x01]);
         assert_eq!(v.second.as_deref(), Some(&[0x02u8, 0x02, 0x02][..]));

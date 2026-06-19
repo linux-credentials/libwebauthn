@@ -67,6 +67,7 @@ pub struct LargeBlobInputJson {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PrfInputJson {
     pub eval: Option<PrfValuesJson>,
     pub eval_by_credential: Option<HashMap<String, PrfValuesJson>>,
