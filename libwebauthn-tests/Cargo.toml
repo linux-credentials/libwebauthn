@@ -2,6 +2,7 @@
 name = "libwebauthn-tests"
 version = "0.0.0"
 edition = "2021"
+rust-version = "1.88"
 publish = false
 license-file = "../COPYING"
 
