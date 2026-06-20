@@ -129,7 +129,7 @@ macro_rules! unwrap_field {
                 "Device response did not contain expected field: {}",
                 stringify!($field)
             );
-            return Err(Error::Platform(PlatformError::InvalidDeviceResponse));
+            return Err($crate::webauthn::error::PlatformError::InvalidDeviceResponse.into());
         }
     }};
 }

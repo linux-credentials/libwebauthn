@@ -11,8 +11,9 @@ use libwebauthn::proto::ctap2::{
 };
 use libwebauthn::proto::CtapError;
 use libwebauthn::transport::hid::channel::HidChannel;
+use libwebauthn::transport::hid::HidError;
 use libwebauthn::transport::{Channel, ChannelSettings, Device};
-use libwebauthn::webauthn::{Error, WebAuthn};
+use libwebauthn::webauthn::{WebAuthn, WebAuthnError};
 use libwebauthn::UvUpdate;
 use libwebauthn_tests::virt::get_virtual_device;
 use rand::{thread_rng, Rng};
@@ -36,7 +37,7 @@ async fn make_credential_call(
     channel: &mut HidChannel<'_>,
     user_id: &[u8],
     exclude_list: Option<Vec<Ctap2PublicKeyCredentialDescriptor>>,
-) -> Result<(Ctap2PublicKeyCredentialDescriptor, [u8; 32]), Error> {
+) -> Result<(Ctap2PublicKeyCredentialDescriptor, [u8; 32]), WebAuthnError<HidError>> {
     make_credential_call_with_rp(channel, user_id, exclude_list, "example.org").await
 }
 
@@ -45,7 +46,7 @@ async fn make_credential_call_with_rp(
     user_id: &[u8],
     exclude_list: Option<Vec<Ctap2PublicKeyCredentialDescriptor>>,
     rp_id: &str,
-) -> Result<(Ctap2PublicKeyCredentialDescriptor, [u8; 32]), Error> {
+) -> Result<(Ctap2PublicKeyCredentialDescriptor, [u8; 32]), WebAuthnError<HidError>> {
     let challenge: [u8; 32] = thread_rng().gen();
     let make_credentials_request = MakeCredentialRequest {
         origin: rp_id.to_owned(),
@@ -71,7 +72,7 @@ async fn make_credential_call_with_rp(
 async fn get_assertion_call(
     channel: &mut HidChannel<'_>,
     allow_list: Vec<Ctap2PublicKeyCredentialDescriptor>,
-) -> Result<GetAssertionResponse, Error> {
+) -> Result<GetAssertionResponse, WebAuthnError<HidError>> {
     let challenge: [u8; 32] = thread_rng().gen();
     let get_assertion = GetAssertionRequest {
         origin: "example.org".to_owned(),
@@ -182,7 +183,7 @@ async fn preflight_mixed_exclude_list() {
     let res = make_credential_call(&mut channel, &user_id, Some(exclude_list)).await;
     assert!(matches!(
         res,
-        Err(Error::Ctap(CtapError::CredentialExcluded))
+        Err(WebAuthnError::Ctap(CtapError::CredentialExcluded))
     ));
 
     expected_uv_updates(
@@ -216,7 +217,10 @@ async fn preflight_no_allow_list() {
 
     let allow_list = Vec::new();
     let res = get_assertion_call(&mut channel, allow_list).await;
-    assert!(matches!(res, Err(Error::Ctap(CtapError::NoCredentials))));
+    assert!(matches!(
+        res,
+        Err(WebAuthnError::Ctap(CtapError::NoCredentials))
+    ));
 
     expected_uv_updates(
         state_recv,
@@ -250,7 +254,10 @@ async fn preflight_nonsense_allow_list() {
     assert!(filtered_list.is_empty());
 
     let res = get_assertion_call(&mut channel, allow_list).await;
-    assert!(matches!(res, Err(Error::Ctap(CtapError::NoCredentials))));
+    assert!(matches!(
+        res,
+        Err(WebAuthnError::Ctap(CtapError::NoCredentials))
+    ));
 
     expected_uv_updates(
         state_recv,

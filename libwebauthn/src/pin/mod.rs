@@ -41,7 +41,7 @@ use crate::{
     },
     transport::Channel,
     webauthn::{
-        error::{Error, PlatformError},
+        error::{PlatformError, WebAuthnError},
         pin_uv_auth_token::{obtain_pin, obtain_shared_secret, select_uv_proto},
     },
 };
@@ -91,36 +91,36 @@ pub trait PinUvAuthProtocol: Send + Sync {
     fn encapsulate(
         &self,
         peer_public_key: &cose::PublicKey,
-    ) -> Result<(cose::PublicKey, Vec<u8>), Error>;
+    ) -> Result<(cose::PublicKey, Vec<u8>), PlatformError>;
 
     // encrypt(key, demPlaintext) → ciphertext
     //   Encrypts a plaintext to produce a ciphertext, which may be longer than the plaintext.
     //   The plaintext is restricted to being a multiple of the AES block size (16 bytes) in length.
-    fn encrypt(&self, key: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, Error>;
+    fn encrypt(&self, key: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, PlatformError>;
 
     // decrypt(key, ciphertext) → plaintext | error
     //   Decrypts a ciphertext and returns the plaintext.
-    fn decrypt(&self, key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, Error>;
+    fn decrypt(&self, key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, PlatformError>;
 
     // authenticate(key, message) → signature
     //   Computes a MAC of the given message.
-    fn authenticate(&self, key: &[u8], message: &[u8]) -> Result<Vec<u8>, Error>;
+    fn authenticate(&self, key: &[u8], message: &[u8]) -> Result<Vec<u8>, PlatformError>;
 }
 
 trait ECPrivateKeyPinUvAuthProtocol {
     fn private_key(&self) -> &EphemeralSecret;
     fn public_key(&self) -> &P256PublicKey;
-    fn kdf(&self, bytes: &[u8]) -> Result<Vec<u8>, Error>;
+    fn kdf(&self, bytes: &[u8]) -> Result<Vec<u8>, PlatformError>;
 }
 
 /// Common functionality between ECDH-based PIN/UV auth protocols (1 & 2)
 trait ECDHPinUvAuthProtocol {
-    fn ecdh(&self, peer_public_key: &cose::PublicKey) -> Result<Vec<u8>, Error>;
+    fn ecdh(&self, peer_public_key: &cose::PublicKey) -> Result<Vec<u8>, PlatformError>;
     fn encapsulate(
         &self,
         peer_public_key: &cose::PublicKey,
-    ) -> Result<(cose::PublicKey, Vec<u8>), Error>;
-    fn get_public_key(&self) -> Result<cose::PublicKey, Error>;
+    ) -> Result<(cose::PublicKey, Vec<u8>), PlatformError>;
+    fn get_public_key(&self) -> Result<cose::PublicKey, PlatformError>;
 }
 
 pub struct PinUvAuthProtocolOne {
@@ -162,7 +162,7 @@ impl ECPrivateKeyPinUvAuthProtocol for PinUvAuthProtocolOne {
     }
 
     /// kdf(Z) → sharedSecret
-    fn kdf(&self, bytes: &[u8]) -> Result<Vec<u8>, Error> {
+    fn kdf(&self, bytes: &[u8]) -> Result<Vec<u8>, PlatformError> {
         let mut hasher = Sha256::default();
         hasher.update(bytes);
         Ok(hasher.finalize().to_vec())
@@ -177,7 +177,7 @@ where
     fn encapsulate(
         &self,
         peer_public_key: &cose::PublicKey,
-    ) -> Result<(cose::PublicKey, Vec<u8>), Error> {
+    ) -> Result<(cose::PublicKey, Vec<u8>), PlatformError> {
         // Let sharedSecret be the result of calling ecdh(peerCoseKey). Return any resulting error.
         let shared_secret = self.ecdh(peer_public_key)?;
 
@@ -186,7 +186,7 @@ where
     }
 
     /// ecdh(peerCoseKey) → sharedSecret | error
-    fn ecdh(&self, peer_public_key: &cose::PublicKey) -> Result<Vec<u8>, Error> {
+    fn ecdh(&self, peer_public_key: &cose::PublicKey) -> Result<Vec<u8>, PlatformError> {
         // Parse peerCoseKey as specified for getPublicKey, below, and produce a P-256 point, Y.
         // If unsuccessful, or if the resulting point is not on the curve, return error.
         let cose::PublicKey::EcdhEsHkdf256Key(peer_public_key) = peer_public_key else {
@@ -194,7 +194,9 @@ where
                 ?peer_public_key,
                 "Unsupported peerCoseKey format. Only EcdhEsHkdf256Key is supported."
             );
-            return Err(Error::Ctap(CtapError::Other));
+            return Err(PlatformError::CryptoError(String::from(
+                "pin/uv crypto operation failed",
+            )));
         };
         // x and y must be exactly 32 bytes (P-256 field size). `cosey` accepts
         // any length up to 32; validate before converting to `&FieldBytes`.
@@ -203,19 +205,21 @@ where
                 x_len = peer_public_key.x.as_bytes().len(),
                 "Peer public key x coordinate is not 32 bytes"
             );
-            Error::Ctap(CtapError::Other)
+            PlatformError::CryptoError(String::from("pin/uv crypto operation failed"))
         })?;
         let y: &[u8; 32] = peer_public_key.y.as_bytes().try_into().map_err(|_| {
             error!(
                 y_len = peer_public_key.y.as_bytes().len(),
                 "Peer public key y coordinate is not 32 bytes"
             );
-            Error::Ctap(CtapError::Other)
+            PlatformError::CryptoError(String::from("pin/uv crypto operation failed"))
         })?;
         let encoded_point = EncodedPoint::from_affine_coordinates(x.into(), y.into(), false);
         let Some(peer_public_key) = P256PublicKey::from_encoded_point(&encoded_point).into() else {
             error!("Failed to parse public key.");
-            return Err(Error::Ctap(CtapError::Other));
+            return Err(PlatformError::CryptoError(String::from(
+                "pin/uv crypto operation failed",
+            )));
         };
 
         // Calculate xY, the shared point. (I.e. the scalar-multiplication of the peer’s point, Y, with the
@@ -227,32 +231,20 @@ where
     }
 
     /// getPublicKey()
-    fn get_public_key(&self) -> Result<cose::PublicKey, Error> {
+    fn get_public_key(&self) -> Result<cose::PublicKey, PlatformError> {
         let point = EncodedPoint::from(self.public_key());
         let x_bytes = point.x().ok_or_else(|| {
             error!("Public key is the identity point");
-            Error::Platform(PlatformError::CryptoError(
-                "public key is the identity point".into(),
-            ))
+            PlatformError::CryptoError("public key is the identity point".into())
         })?;
         let y_bytes = point.y().ok_or_else(|| {
             error!("Public key is identity or compressed");
-            Error::Platform(PlatformError::CryptoError(
-                "public key is identity or compressed".into(),
-            ))
+            PlatformError::CryptoError("public key is identity or compressed".into())
         })?;
-        let x: heapless::Vec<u8, 32> =
-            heapless::Vec::from_slice(x_bytes.as_bytes()).map_err(|_| {
-                Error::Platform(PlatformError::CryptoError(
-                    "x coordinate exceeds 32 bytes".into(),
-                ))
-            })?;
-        let y: heapless::Vec<u8, 32> =
-            heapless::Vec::from_slice(y_bytes.as_bytes()).map_err(|_| {
-                Error::Platform(PlatformError::CryptoError(
-                    "y coordinate exceeds 32 bytes".into(),
-                ))
-            })?;
+        let x: heapless::Vec<u8, 32> = heapless::Vec::from_slice(x_bytes.as_bytes())
+            .map_err(|_| PlatformError::CryptoError("x coordinate exceeds 32 bytes".into()))?;
+        let y: heapless::Vec<u8, 32> = heapless::Vec::from_slice(y_bytes.as_bytes())
+            .map_err(|_| PlatformError::CryptoError("y coordinate exceeds 32 bytes".into()))?;
         Ok(cose::PublicKey::EcdhEsHkdf256Key(
             cose::EcdhEsHkdf256PublicKey {
                 x: x.into(),
@@ -268,33 +260,33 @@ impl PinUvAuthProtocol for PinUvAuthProtocolOne {
     }
 
     #[instrument(skip_all)]
-    fn encrypt(&self, key: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, Error> {
+    fn encrypt(&self, key: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, PlatformError> {
         // Return the AES-256-CBC encryption of demPlaintext using an all-zero IV.
         // (No padding is performed as the size of demPlaintext is required to be a multiple of the AES block length.)
         let iv: &[u8] = &[0; 16];
         let Ok(enc) = Aes256CbcEncryptor::new_from_slices(key, iv) else {
             error!(?key, "Invalid key for AES-256 encryption");
-            return Err(Error::Ctap(CtapError::Other));
+            return Err(PlatformError::CryptoError(String::from(
+                "pin/uv crypto operation failed",
+            )));
         };
         Ok(enc.encrypt_padded_vec_mut::<NoPadding>(plaintext))
     }
 
     #[instrument(skip_all)]
-    fn authenticate(&self, key: &[u8], message: &[u8]) -> Result<Vec<u8>, Error> {
+    fn authenticate(&self, key: &[u8], message: &[u8]) -> Result<Vec<u8>, PlatformError> {
         // Return the first 16 bytes of the result of computing HMAC-SHA-256 with the given key and message.
         let hmac = hmac_sha256(key, message)?;
         // HMAC-SHA-256 produces 32 bytes, so this slice is always valid.
         let truncated = hmac.get(..16).ok_or_else(|| {
             error!(len = hmac.len(), "HMAC output shorter than 16 bytes");
-            Error::Platform(PlatformError::CryptoError(
-                "HMAC output shorter than 16 bytes".into(),
-            ))
+            PlatformError::CryptoError("HMAC output shorter than 16 bytes".into())
         })?;
         Ok(Vec::from(truncated))
     }
 
     #[instrument(skip_all)]
-    fn decrypt(&self, key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, Error> {
+    fn decrypt(&self, key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, PlatformError> {
         // If the size of demCiphertext is not a multiple of the AES block length, return error.
         // Otherwise return the AES-256-CBC decryption of demCiphertext using an all-zero IV.
         if !ciphertext.len().is_multiple_of(16) {
@@ -302,17 +294,23 @@ impl PinUvAuthProtocol for PinUvAuthProtocolOne {
                 ?ciphertext,
                 "Ciphertext length is not a multiple of AES block length"
             );
-            return Err(Error::Ctap(CtapError::Other));
+            return Err(PlatformError::CryptoError(String::from(
+                "pin/uv crypto operation failed",
+            )));
         }
 
         let iv: &[u8] = &[0; 16];
         let Ok(dec) = Aes256CbcDecryptor::new_from_slices(key, iv) else {
             error!(?key, "Invalid key for AES-256 decryption");
-            return Err(Error::Ctap(CtapError::Other));
+            return Err(PlatformError::CryptoError(String::from(
+                "pin/uv crypto operation failed",
+            )));
         };
         let Ok(plaintext) = dec.decrypt_padded_vec_mut::<NoPadding>(ciphertext) else {
             error!("Unpad error while decrypting");
-            return Err(Error::Ctap(CtapError::Other));
+            return Err(PlatformError::CryptoError(String::from(
+                "pin/uv crypto operation failed",
+            )));
         };
         Ok(plaintext)
     }
@@ -320,7 +318,7 @@ impl PinUvAuthProtocol for PinUvAuthProtocolOne {
     fn encapsulate(
         &self,
         peer_public_key: &cose::PublicKey,
-    ) -> Result<(cose::PublicKey, Vec<u8>), Error> {
+    ) -> Result<(cose::PublicKey, Vec<u8>), PlatformError> {
         <Self as ECDHPinUvAuthProtocol>::encapsulate(self, peer_public_key)
     }
 }
@@ -364,7 +362,7 @@ impl ECPrivateKeyPinUvAuthProtocol for PinUvAuthProtocolTwo {
     }
 
     /// kdf(Z) → sharedSecret
-    fn kdf(&self, ikm: &[u8]) -> Result<Vec<u8>, Error> {
+    fn kdf(&self, ikm: &[u8]) -> Result<Vec<u8>, PlatformError> {
         // Returns:
         //   HKDF-SHA-256(salt = 32 zero bytes, IKM = Z, L = 32, info = "CTAP2 HMAC key") ||
         //   HKDF-SHA-256(salt = 32 zero bytes, IKM = Z, L = 32, info = "CTAP2 AES key")
@@ -384,18 +382,18 @@ impl PinUvAuthProtocol for PinUvAuthProtocolTwo {
     fn encapsulate(
         &self,
         peer_public_key: &cose::PublicKey,
-    ) -> Result<(cose::PublicKey, Vec<u8>), Error> {
+    ) -> Result<(cose::PublicKey, Vec<u8>), PlatformError> {
         <Self as ECDHPinUvAuthProtocol>::encapsulate(self, peer_public_key)
     }
 
-    fn encrypt(&self, key: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, Error> {
+    fn encrypt(&self, key: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, PlatformError> {
         // Discard the first 32 bytes of key. (This selects the AES-key portion of the shared secret.)
         let key = key.get(32..).ok_or_else(|| {
             error!(
                 key_len = key.len(),
                 "key shorter than 32 bytes; cannot select AES-key portion"
             );
-            Error::Ctap(CtapError::Other)
+            PlatformError::CryptoError(String::from("pin/uv crypto operation failed"))
         })?;
 
         // Let iv be a 16-byte, random bytestring.
@@ -405,7 +403,9 @@ impl PinUvAuthProtocol for PinUvAuthProtocolTwo {
         // (No padding is performed as the size of demPlaintext is required to be a multiple of the AES block length.)
         let Ok(enc) = Aes256CbcEncryptor::new_from_slices(key, &iv) else {
             error!(?key, "Invalid key for AES-256 encryption");
-            return Err(Error::Ctap(CtapError::Other));
+            return Err(PlatformError::CryptoError(String::from(
+                "pin/uv crypto operation failed",
+            )));
         };
         let ct = enc.encrypt_padded_vec_mut::<NoPadding>(plaintext);
 
@@ -415,20 +415,22 @@ impl PinUvAuthProtocol for PinUvAuthProtocolTwo {
         Ok(out)
     }
 
-    fn decrypt(&self, key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, Error> {
+    fn decrypt(&self, key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, PlatformError> {
         // Discard the first 32 bytes of key. (This selects the AES-key portion of the shared secret.)
         let key = key.get(32..).ok_or_else(|| {
             error!(
                 key_len = key.len(),
                 "key shorter than 32 bytes; cannot select AES-key portion"
             );
-            Error::Ctap(CtapError::Other)
+            PlatformError::CryptoError(String::from("pin/uv crypto operation failed"))
         })?;
 
         // If demPlaintext is less than 16 bytes in length, return an error
         if ciphertext.len() < 16 {
             error!({ len = ciphertext.len() }, "Invalid length for ciphertext");
-            return Err(Error::Ctap(CtapError::Other));
+            return Err(PlatformError::CryptoError(String::from(
+                "pin/uv crypto operation failed",
+            )));
         };
 
         // Split demPlaintext after the 16th byte to produce two subspans, iv and ct.
@@ -437,16 +439,20 @@ impl PinUvAuthProtocol for PinUvAuthProtocolTwo {
         // Return the AES-256-CBC decryption of ct using key and iv.
         let Ok(dec) = Aes256CbcDecryptor::new_from_slices(key, iv) else {
             error!(?key, "Invalid key for AES-256 decryption");
-            return Err(Error::Ctap(CtapError::Other));
+            return Err(PlatformError::CryptoError(String::from(
+                "pin/uv crypto operation failed",
+            )));
         };
         let Ok(plaintext) = dec.decrypt_padded_vec_mut::<NoPadding>(ciphertext) else {
             error!("Unpad error while decrypting");
-            return Err(Error::Ctap(CtapError::Other));
+            return Err(PlatformError::CryptoError(String::from(
+                "pin/uv crypto operation failed",
+            )));
         };
         Ok(plaintext)
     }
 
-    fn authenticate(&self, key: &[u8], message: &[u8]) -> Result<Vec<u8>, Error> {
+    fn authenticate(&self, key: &[u8], message: &[u8]) -> Result<Vec<u8>, PlatformError> {
         // If key is longer than 32 bytes, discard the excess. (This selects the HMAC-key portion of the shared secret.
         // When key is the pinUvAuthToken, it is exactly 32 bytes long and thus this step has no effect.)
         let key = key.get(..32).ok_or_else(|| {
@@ -454,7 +460,7 @@ impl PinUvAuthProtocol for PinUvAuthProtocolTwo {
                 key_len = key.len(),
                 "key shorter than 32 bytes; cannot select HMAC-key portion"
             );
-            Error::Ctap(CtapError::Other)
+            PlatformError::CryptoError(String::from("pin/uv crypto operation failed"))
         })?;
 
         // Return the result of computing HMAC-SHA-256 on key and message.
@@ -471,23 +477,21 @@ pub fn pin_hash(pin: &[u8]) -> Vec<u8> {
     hashed.into_iter().take(16).collect()
 }
 
-pub fn hmac_sha256(key: &[u8], message: &[u8]) -> Result<Vec<u8>, Error> {
+pub fn hmac_sha256(key: &[u8], message: &[u8]) -> Result<Vec<u8>, PlatformError> {
     let mut hmac = HmacSha256::new_from_slice(key).map_err(|e| {
         error!("HMAC key error: {e}");
-        Error::Platform(PlatformError::CryptoError(format!("HMAC key error: {e}")))
+        PlatformError::CryptoError(format!("HMAC key error: {e}"))
     })?;
     hmac.update(message);
     Ok(hmac.finalize().into_bytes().to_vec())
 }
 
-pub fn hkdf_sha256(salt: Option<&[u8]>, ikm: &[u8], info: &[u8]) -> Result<Vec<u8>, Error> {
+pub fn hkdf_sha256(salt: Option<&[u8]>, ikm: &[u8], info: &[u8]) -> Result<Vec<u8>, PlatformError> {
     let hk = Hkdf::<Sha256>::new(salt, ikm);
     let mut okm = [0u8; 32]; // fixed L = 32
     hk.expand(info, &mut okm).map_err(|e| {
         error!("HKDF expand error: {e}");
-        Error::Platform(PlatformError::CryptoError(format!(
-            "HKDF expand error: {e}"
-        )))
+        PlatformError::CryptoError(format!("HKDF expand error: {e}"))
     })?;
     Ok(Vec::from(okm))
 }
@@ -498,13 +502,13 @@ pub(crate) mod internal {
     use super::*;
 
     #[async_trait]
-    pub trait PinManagementInternal {
+    pub trait PinManagementInternal: Channel {
         async fn change_pin_internal(
             &mut self,
             get_info_response: &Ctap2GetInfoResponse,
             new_pin: String,
             timeout: Duration,
-        ) -> Result<(), Error>;
+        ) -> Result<(), WebAuthnError<Self::TransportError>>;
     }
 
     #[async_trait]
@@ -517,7 +521,7 @@ pub(crate) mod internal {
             get_info_response: &Ctap2GetInfoResponse,
             new_pin: String,
             timeout: Duration,
-        ) -> Result<(), Error> {
+        ) -> Result<(), WebAuthnError<Self::TransportError>> {
             // CTAP 2.1 sends the PIN as UTF-8 in Unicode Normalization Form C.
             let new_pin = ComposingNormalizerBorrowed::new_nfc()
                 .normalize(&new_pin)
@@ -526,12 +530,12 @@ pub(crate) mod internal {
             // If the minPINLength member of the authenticatorGetInfo response is absent, then let platformMinPINLengthInCodePoints be 4.
             if new_pin.chars().count() < get_info_response.min_pin_length.unwrap_or(4) as usize {
                 // If platformCollectedPinLengthInCodePoints is less than platformMinPINLengthInCodePoints then the platform SHOULD display a "PIN too short" error message to the user.
-                return Err(Error::Platform(PlatformError::PinTooShort));
+                return Err(WebAuthnError::Platform(PlatformError::PinTooShort));
             }
 
             // If the byte length of "newPin" is greater than the max UTF-8 representation limit of 63 bytes, then the platform SHOULD display a "PIN too long" error message to the user.
             if new_pin.len() >= 64 {
-                return Err(Error::Platform(PlatformError::PinTooLong));
+                return Err(WebAuthnError::Platform(PlatformError::PinTooLong));
             }
 
             // A successful PIN set/change invalidates this authenticator's persistent token
@@ -552,13 +556,15 @@ pub(crate) mod internal {
             .await
             else {
                 error!("No supported PIN/UV auth protocols found");
-                return Err(Error::Ctap(CtapError::Other));
+                return Err(WebAuthnError::Ctap(CtapError::Other));
             };
 
             let current_pin = match get_info_response
                 .options
                 .as_ref()
-                .ok_or(Error::Platform(PlatformError::InvalidDeviceResponse))?
+                .ok_or(WebAuthnError::Platform(
+                    PlatformError::InvalidDeviceResponse,
+                ))?
                 .get("clientPin")
             {
                 // Obtaining the current PIN, if one is set
@@ -578,7 +584,7 @@ pub(crate) mod internal {
 
                 // Device does not support PIN
                 None => {
-                    return Err(Error::Platform(PlatformError::PinNotSupported));
+                    return Err(WebAuthnError::Platform(PlatformError::PinNotSupported));
                 }
             };
 
@@ -645,7 +651,11 @@ use internal::PinManagementInternal;
 
 #[async_trait]
 pub trait PinManagement: PinManagementInternal {
-    async fn change_pin(&mut self, new_pin: String, timeout: Duration) -> Result<(), Error>;
+    async fn change_pin(
+        &mut self,
+        new_pin: String,
+        timeout: Duration,
+    ) -> Result<(), WebAuthnError<Self::TransportError>>;
 }
 
 #[async_trait]
@@ -653,7 +663,11 @@ impl<C> PinManagement for C
 where
     C: Channel,
 {
-    async fn change_pin(&mut self, new_pin: String, timeout: Duration) -> Result<(), Error> {
+    async fn change_pin(
+        &mut self,
+        new_pin: String,
+        timeout: Duration,
+    ) -> Result<(), WebAuthnError<Self::TransportError>> {
         let get_info_response = self.ctap2_get_info().await?;
         self.change_pin_internal(&get_info_response, new_pin, timeout)
             .await
@@ -680,7 +694,7 @@ mod tests {
         let key = make_peer_key(&x, &y);
 
         let result = PinUvAuthProtocol::encapsulate(&proto, &key);
-        assert!(matches!(result, Err(Error::Ctap(CtapError::Other))));
+        assert!(matches!(result, Err(PlatformError::CryptoError(_))));
     }
 
     #[test]
@@ -691,7 +705,7 @@ mod tests {
         let key = make_peer_key(&x, &y);
 
         let result = PinUvAuthProtocol::encapsulate(&proto, &key);
-        assert!(matches!(result, Err(Error::Ctap(CtapError::Other))));
+        assert!(matches!(result, Err(PlatformError::CryptoError(_))));
     }
 
     #[test]
@@ -702,14 +716,14 @@ mod tests {
         let key = make_peer_key(&x, &y);
 
         let result = PinUvAuthProtocol::encapsulate(&proto, &key);
-        assert!(matches!(result, Err(Error::Ctap(CtapError::Other))));
+        assert!(matches!(result, Err(PlatformError::CryptoError(_))));
     }
 
     #[test]
     fn proto_two_authenticate_rejects_empty_key() {
         let proto = PinUvAuthProtocolTwo::new();
         let result = proto.authenticate(&[], b"clientDataHash");
-        assert!(matches!(result, Err(Error::Ctap(CtapError::Other))));
+        assert!(matches!(result, Err(PlatformError::CryptoError(_))));
     }
 
     #[test]
@@ -717,7 +731,7 @@ mod tests {
         let proto = PinUvAuthProtocolTwo::new();
         let short_key = [0u8; 16];
         let result = proto.authenticate(&short_key, b"hello");
-        assert!(matches!(result, Err(Error::Ctap(CtapError::Other))));
+        assert!(matches!(result, Err(PlatformError::CryptoError(_))));
     }
 
     #[test]
@@ -726,7 +740,7 @@ mod tests {
         let short_key = [0u8; 16];
         let plaintext = [0u8; 16];
         let result = proto.encrypt(&short_key, &plaintext);
-        assert!(matches!(result, Err(Error::Ctap(CtapError::Other))));
+        assert!(matches!(result, Err(PlatformError::CryptoError(_))));
     }
 
     #[test]
@@ -735,6 +749,6 @@ mod tests {
         let short_key = [0u8; 16];
         let ct = [0u8; 32];
         let result = proto.decrypt(&short_key, &ct);
-        assert!(matches!(result, Err(Error::Ctap(CtapError::Other))));
+        assert!(matches!(result, Err(PlatformError::CryptoError(_))));
     }
 }

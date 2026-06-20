@@ -27,13 +27,13 @@ use crate::transport::channel::{
     AuthTokenData, Channel, ChannelSettings, ChannelStatus, Ctap2AuthTokenStore,
 };
 use crate::transport::device::SupportedProtocols;
-use crate::transport::error::TransportError;
 #[cfg(feature = "virt")]
 use crate::transport::hid::device::HidPipeBackend;
+use crate::transport::hid::error::HidError;
 use crate::transport::hid::framing::{
     HidCommand, HidMessage, HidMessageParser, HidMessageParserState,
 };
-use crate::webauthn::error::{Error, PlatformError};
+use crate::webauthn::error::WebAuthnError;
 use crate::Transport;
 use crate::UvUpdate;
 
@@ -95,7 +95,7 @@ impl<'d> HidChannel<'d> {
     pub async fn new(
         device: &'d HidDevice,
         settings: ChannelSettings,
-    ) -> Result<HidChannel<'d>, Error> {
+    ) -> Result<HidChannel<'d>, WebAuthnError<HidError>> {
         let (ux_update_sender, _) = broadcast::channel(16);
         let (handle_tx, handle_rx) = mpsc::channel(1);
         let handle = HidChannelHandle { tx: handle_tx };
@@ -105,7 +105,7 @@ impl<'d> HidChannel<'d> {
             device,
             open_device: match &device.backend {
                 HidBackendDevice::HidApiDevice(_) => {
-                    let hidapi_device = Self::hid_open(device)?;
+                    let hidapi_device = Self::hid_open(device).map_err(WebAuthnError::Transport)?;
                     OpenHidDevice::HidApiDevice(Arc::new(Mutex::new((hidapi_device, handle_rx))))
                 }
                 #[cfg(feature = "virt")]
@@ -122,7 +122,10 @@ impl<'d> HidChannel<'d> {
             #[cfg(feature = "virt")]
             pin_protocol_override: None,
         };
-        channel.init = channel.init(INIT_TIMEOUT).await?;
+        channel.init = channel
+            .init(INIT_TIMEOUT)
+            .await
+            .map_err(WebAuthnError::Transport)?;
         Ok(channel)
     }
 
@@ -131,7 +134,7 @@ impl<'d> HidChannel<'d> {
     }
 
     #[instrument(skip_all)]
-    pub async fn wink(&mut self, timeout: Duration) -> Result<bool, Error> {
+    pub async fn wink(&mut self, timeout: Duration) -> Result<bool, HidError> {
         if !self.init.caps.contains(Caps::WINK) {
             warn!(?self.init.caps, "WINK capability is not supported");
             return Ok(false);
@@ -150,7 +153,7 @@ impl<'d> HidChannel<'d> {
     pub async fn blink_and_wait_for_user_presence(
         &mut self,
         timeout: Duration,
-    ) -> Result<bool, Error> {
+    ) -> Result<bool, WebAuthnError<HidError>> {
         let supported = self.supported_protocols().await?;
         if supported.fido2 {
             let get_info_response = self.ctap2_get_info().await?;
@@ -164,9 +167,9 @@ impl<'d> HidChannel<'d> {
                 let ctap2_request = Ctap2MakeCredentialRequest::dummy();
                 match self.ctap2_make_credential(&ctap2_request, timeout).await {
                     Ok(_)
-                    | Err(Error::Ctap(CtapError::PINInvalid))
-                    | Err(Error::Ctap(CtapError::PINAuthInvalid))
-                    | Err(Error::Ctap(CtapError::PINNotSet)) => Ok(true),
+                    | Err(WebAuthnError::Ctap(CtapError::PINInvalid))
+                    | Err(WebAuthnError::Ctap(CtapError::PINAuthInvalid))
+                    | Err(WebAuthnError::Ctap(CtapError::PINNotSet)) => Ok(true),
                     Err(_) => Ok(false),
                 }
             }
@@ -175,9 +178,9 @@ impl<'d> HidChannel<'d> {
             let register_request = Ctap1RegisterRequest::dummy(timeout);
             match self.ctap1_register(&register_request).await {
                 Ok(_)
-                | Err(Error::Ctap(CtapError::PINInvalid))
-                | Err(Error::Ctap(CtapError::PINAuthInvalid))
-                | Err(Error::Ctap(CtapError::PINNotSet)) => Ok(true),
+                | Err(WebAuthnError::Ctap(CtapError::PINInvalid))
+                | Err(WebAuthnError::Ctap(CtapError::PINAuthInvalid))
+                | Err(WebAuthnError::Ctap(CtapError::PINNotSet)) => Ok(true),
                 Err(_) => Ok(false),
             }
         } else {
@@ -187,7 +190,7 @@ impl<'d> HidChannel<'d> {
     }
 
     #[instrument(level = Level::DEBUG, skip_all)]
-    async fn init(&mut self, timeout: Duration) -> Result<InitResponse, Error> {
+    async fn init(&mut self, timeout: Duration) -> Result<InitResponse, HidError> {
         let nonce: [u8; 8] = thread_rng().gen();
         let request = HidMessage::broadcast(HidCommand::Init, &nonce);
 
@@ -196,7 +199,7 @@ impl<'d> HidChannel<'d> {
 
         if response.cmd != HidCommand::Init {
             warn!(?response.cmd, "Invalid response to INIT request");
-            return Err(Error::Transport(TransportError::InvalidEndpoint));
+            return Err(HidError::InvalidInit);
         }
 
         if response.payload.len() < INIT_PAYLOAD_LEN {
@@ -204,56 +207,44 @@ impl<'d> HidChannel<'d> {
                 { len = response.payload.len() },
                 "INIT payload is too small"
             );
-            return Err(Error::Transport(TransportError::InvalidEndpoint));
+            return Err(HidError::InvalidInit);
         }
 
         let payload_nonce = response
             .payload
             .get(..INIT_NONCE_LEN)
-            .ok_or(Error::Transport(TransportError::InvalidEndpoint))?;
+            .ok_or(HidError::InvalidInit)?;
         if payload_nonce != nonce.as_slice() {
             warn!("INIT nonce mismatch. Terminating.");
-            return Err(Error::Transport(TransportError::InvalidEndpoint));
+            return Err(HidError::InvalidInit);
         }
 
         let mut cursor = IOCursor::new(response.payload);
         cursor
             .seek(SeekFrom::Start(8))
-            .map_err(|e| Error::Transport(TransportError::IoError(e.kind())))?;
+            .map_err(HidError::InitResponseParse)?;
 
         let init = InitResponse {
             cid: cursor
                 .read_u32::<BigEndian>()
-                .map_err(|e| Error::Transport(TransportError::IoError(e.kind())))?,
-            protocol_version: cursor
-                .read_u8()
-                .map_err(|e| Error::Transport(TransportError::IoError(e.kind())))?,
-            version_major: cursor
-                .read_u8()
-                .map_err(|e| Error::Transport(TransportError::IoError(e.kind())))?,
-            version_minor: cursor
-                .read_u8()
-                .map_err(|e| Error::Transport(TransportError::IoError(e.kind())))?,
-            version_build: cursor
-                .read_u8()
-                .map_err(|e| Error::Transport(TransportError::IoError(e.kind())))?,
-            caps: Caps::from_bits_truncate(
-                cursor
-                    .read_u8()
-                    .map_err(|e| Error::Transport(TransportError::IoError(e.kind())))?,
-            ),
+                .map_err(HidError::InitResponseParse)?,
+            protocol_version: cursor.read_u8().map_err(HidError::InitResponseParse)?,
+            version_major: cursor.read_u8().map_err(HidError::InitResponseParse)?,
+            version_minor: cursor.read_u8().map_err(HidError::InitResponseParse)?,
+            version_build: cursor.read_u8().map_err(HidError::InitResponseParse)?,
+            caps: Caps::from_bits_truncate(cursor.read_u8().map_err(HidError::InitResponseParse)?),
         };
 
         debug!(?init, "Device init complete");
         Ok(init)
     }
 
-    fn hid_open(device: &HidDevice) -> Result<HidApiDevice, Error> {
+    fn hid_open(device: &HidDevice) -> Result<HidApiDevice, HidError> {
         let hidapi = get_hidapi()?;
         match &device.backend {
-            HidBackendDevice::HidApiDevice(device) => Ok(device
-                .open_device(&hidapi)
-                .or(Err(Error::Transport(TransportError::ConnectionFailed)))?),
+            HidBackendDevice::HidApiDevice(device) => {
+                Ok(device.open_device(&hidapi).map_err(HidError::Open)?)
+            }
             #[cfg(feature = "virt")]
             #[allow(clippy::unreachable)]
             // virtual devices never go through hid_open
@@ -262,7 +253,7 @@ impl<'d> HidChannel<'d> {
     }
 
     #[instrument(level = Level::DEBUG, skip_all)]
-    pub async fn hid_cancel(&self) -> Result<(), Error> {
+    pub async fn hid_cancel(&self) -> Result<(), HidError> {
         self.hid_send(&HidMessage::new(self.init.cid, HidCommand::Cancel, &[]))
             .await
     }
@@ -310,16 +301,16 @@ impl<'d> HidChannel<'d> {
     */
 
     #[instrument(skip_all, fields(cmd = ?msg.cmd, payload_len = msg.payload.len()))]
-    pub async fn hid_send(&self, msg: &HidMessage) -> Result<(), Error> {
+    pub async fn hid_send(&self, msg: &HidMessage) -> Result<(), HidError> {
         match &self.open_device {
             OpenHidDevice::HidApiDevice(hidapi_device) => {
                 let Ok(mut guard) = hidapi_device.lock() else {
                     warn!("Poisoned lock on HID API device");
-                    return Err(Error::Transport(TransportError::ConnectionLost));
+                    return Err(HidError::DeviceLockPoisoned);
                 };
                 let (device, cancel_rx) = guard.deref_mut();
                 let response = Self::hid_send_hidapi(device, cancel_rx, msg);
-                if matches!(response, Err(Error::Platform(PlatformError::Cancelled))) {
+                if matches!(response, Err(HidError::Cancelled)) {
                     // Using hid_send_hidapi directly, instead of hid_cancel, to avoid recursion
                     let _ = Self::hid_send_hidapi(
                         device,
@@ -346,13 +337,11 @@ impl<'d> HidChannel<'d> {
         device: &hidapi::HidDevice,
         cancel_rx: &mut Receiver<CancelHidOperation>,
         msg: &HidMessage,
-    ) -> Result<(), Error> {
-        let packets = msg
-            .packets(PACKET_SIZE)
-            .or(Err(Error::Transport(TransportError::InvalidFraming)))?;
+    ) -> Result<(), HidError> {
+        let packets = msg.packets(PACKET_SIZE).map_err(HidError::PacketEncode)?;
         for (i, packet) in packets.iter().enumerate() {
             if !matches!(cancel_rx.try_recv(), Err(TryRecvError::Empty)) {
-                return Err(Error::Platform(PlatformError::Cancelled));
+                return Err(HidError::Cancelled);
             }
 
             let mut report: Vec<u8> = vec![REPORT_ID];
@@ -360,15 +349,13 @@ impl<'d> HidChannel<'d> {
             report.extend(vec![0; PACKET_SIZE - packet.len()]);
             debug!({ packet = i, len = report.len() }, "Sending packet as HID report",);
             trace!(?report);
-            device
-                .write(&report)
-                .or(Err(Error::Transport(TransportError::ConnectionLost)))?;
+            device.write(&report).map_err(HidError::Write)?;
         }
         Ok(())
     }
 
     #[instrument(skip_all)]
-    pub async fn hid_recv(&self, timeout: Duration) -> Result<HidMessage, Error> {
+    pub async fn hid_recv(&self, timeout: Duration) -> Result<HidMessage, HidError> {
         loop {
             let response = match &self.open_device {
                 OpenHidDevice::HidApiDevice(hidapi_device) => {
@@ -381,16 +368,13 @@ impl<'d> HidChannel<'d> {
                     tokio::task::spawn_blocking(move || {
                         let Ok(mut guard) = device.lock() else {
                             warn!("Poisoned lock on HID API device");
-                            return Err(Error::Transport(TransportError::ConnectionLost));
+                            return Err(HidError::DeviceLockPoisoned);
                         };
                         let (device, cancel_rx) = guard.deref_mut();
                         Self::hid_recv_hidapi(device, cancel_rx, timeout)
                     })
                     .await
-                    .map_err(|e| {
-                        warn!(?e, "HID read task failed");
-                        Error::Transport(TransportError::ConnectionLost)
-                    })?
+                    .map_err(HidError::TaskJoin)?
                 }
                 #[cfg(feature = "virt")]
                 #[allow(clippy::panic)]
@@ -411,8 +395,7 @@ impl<'d> HidChannel<'d> {
                     debug!("Ignoring HID keep-alive");
                     continue;
                 }
-                Err(Error::Platform(PlatformError::Cancelled))
-                | Err(Error::Transport(TransportError::Timeout)) => {
+                Err(HidError::Cancelled) | Err(HidError::Timeout) => {
                     // CTAP 2.2 §11.2.9.1.5: send CTAPHID_CANCEL when the
                     // platform gives up (caller cancelled or wall-clock
                     // budget exhausted).
@@ -428,12 +411,12 @@ impl<'d> HidChannel<'d> {
         device: &hidapi::HidDevice,
         cancel_rx: &mut Receiver<CancelHidOperation>,
         timeout: Duration,
-    ) -> Result<HidMessage, Error> {
+    ) -> Result<HidMessage, HidError> {
         let mut parser = HidMessageParser::new();
         let deadline = Instant::now().checked_add(timeout);
         loop {
             if !matches!(cancel_rx.try_recv(), Err(TryRecvError::Empty)) {
-                return Err(Error::Platform(PlatformError::Cancelled));
+                return Err(HidError::Cancelled);
             }
 
             // Cap each read at HID_READ_POLL_INTERVAL so we re-check the
@@ -445,14 +428,14 @@ impl<'d> HidChannel<'d> {
             };
             if remaining.is_zero() {
                 warn!("HID receive timed out before any data was read");
-                return Err(Error::Transport(TransportError::Timeout));
+                return Err(HidError::Timeout);
             }
             let read_for = remaining.min(HID_READ_POLL_INTERVAL);
 
             let mut report = [0; PACKET_SIZE];
             let bytes_read = device
                 .read_timeout(&mut report, read_for.as_millis() as i32)
-                .or(Err(Error::Transport(TransportError::ConnectionLost)))?;
+                .map_err(HidError::Read)?;
             if bytes_read == 0 {
                 // hidapi signals per-iteration timeout as Ok(0); retry
                 // against the remaining budget rather than passing the
@@ -462,17 +445,14 @@ impl<'d> HidChannel<'d> {
             }
             debug!({ len = bytes_read }, "Received HID report");
             trace!(?report);
-            if let HidMessageParserState::Done = parser
-                .update(&report)
-                .or(Err(Error::Transport(TransportError::InvalidFraming)))?
+            if let HidMessageParserState::Done =
+                parser.update(&report).map_err(HidError::FrameParse)?
             {
                 break;
             }
         }
 
-        let response = parser
-            .message()
-            .or(Err(Error::Transport(TransportError::InvalidFraming)))?;
+        let response = parser.message().map_err(HidError::FrameParse)?;
         debug!({ cmd = ?response.cmd, payload_len = response.payload.len() }, "Received U2F HID response");
         trace!(?response);
         Ok(response)
@@ -505,12 +485,13 @@ impl Display for HidChannel<'_> {
 #[async_trait]
 impl Channel for HidChannel<'_> {
     type UxUpdate = UvUpdate;
+    type TransportError = HidError;
 
     fn transport(&self) -> Transport {
         Transport::Usb
     }
 
-    async fn supported_protocols(&self) -> Result<SupportedProtocols, Error> {
+    async fn supported_protocols(&self) -> Result<SupportedProtocols, WebAuthnError<HidError>> {
         let cbor_supported = self.init.caps.contains(Caps::CBOR);
         let apdu_supported = !self.init.caps.contains(Caps::NO_MSG);
         Ok(SupportedProtocols {
@@ -529,28 +510,30 @@ impl Channel for HidChannel<'_> {
         &mut self,
         request: &ApduRequest,
         _timeout: std::time::Duration,
-    ) -> Result<(), Error> {
+    ) -> Result<(), HidError> {
         let cid = self.init.cid;
         debug!({ cid }, "Sending APDU request");
         trace!(?request);
-        let apdu_raw = request
-            .raw_long()
-            .map_err(|e| TransportError::IoError(e.kind()))?;
+        let apdu_raw = request.raw_long().map_err(HidError::PacketEncode)?;
         self.hid_send(&HidMessage::new(cid, HidCommand::Msg, &apdu_raw))
             .await?;
         Ok(())
     }
 
-    async fn apdu_recv(&mut self, timeout: std::time::Duration) -> Result<ApduResponse, Error> {
+    async fn apdu_recv(&mut self, timeout: std::time::Duration) -> Result<ApduResponse, HidError> {
         let hid_response = self.hid_recv(timeout).await?;
-        let apdu_response = ApduResponse::try_from(&hid_response.payload)
-            .or(Err(Error::Transport(TransportError::InvalidFraming)))?;
+        let apdu_response =
+            ApduResponse::try_from(&hid_response.payload).map_err(HidError::ResponseDecode)?;
         debug!("Received APDU response");
         trace!(?apdu_response);
         Ok(apdu_response)
     }
 
-    async fn cbor_send(&mut self, request: &CborRequest, _timeout: Duration) -> Result<(), Error> {
+    async fn cbor_send(
+        &mut self,
+        request: &CborRequest,
+        _timeout: Duration,
+    ) -> Result<(), HidError> {
         let cid = self.init.cid;
         debug!({ cid }, "Sending CBOR request");
         trace!(?request);
@@ -563,10 +546,10 @@ impl Channel for HidChannel<'_> {
         Ok(())
     }
 
-    async fn cbor_recv(&mut self, timeout: Duration) -> Result<CborResponse, Error> {
+    async fn cbor_recv(&mut self, timeout: Duration) -> Result<CborResponse, HidError> {
         let hid_response = self.hid_recv(timeout).await?;
-        let cbor_response = CborResponse::try_from(&hid_response.payload)
-            .or(Err(Error::Transport(TransportError::InvalidFraming)))?;
+        let cbor_response =
+            CborResponse::try_from(&hid_response.payload).map_err(HidError::ResponseDecode)?;
         debug!(
             { status = ?cbor_response.status_code },
             "Received CBOR response"

@@ -13,7 +13,7 @@ use libwebauthn::proto::ctap2::{
     Ctap2PublicKeyCredentialUserEntity,
 };
 use libwebauthn::transport::{Channel, ChannelSettings, Device};
-use libwebauthn::webauthn::{Error, PlatformError, WebAuthn};
+use libwebauthn::webauthn::{PlatformError, WebAuthn, WebAuthnError};
 use libwebauthn::UvUpdate;
 use libwebauthn_tests::virt::get_virtual_device;
 use rand::{thread_rng, Rng};
@@ -637,7 +637,10 @@ async fn test_webauthn_large_blob_write_requires_single_allow_credential() {
         .webauthn_get_assertion(&two)
         .await
         .expect_err("write with two allowCredentials must be rejected");
-    assert_eq!(err, Error::Platform(PlatformError::NotSupported));
+    assert!(matches!(
+        err,
+        WebAuthnError::Platform(PlatformError::NotSupported)
+    ));
 
     let mut none = ga_request(
         &cred_a,
@@ -649,7 +652,10 @@ async fn test_webauthn_large_blob_write_requires_single_allow_credential() {
         .webauthn_get_assertion(&none)
         .await
         .expect_err("write with empty allowCredentials must be rejected");
-    assert_eq!(err, Error::Platform(PlatformError::NotSupported));
+    assert!(matches!(
+        err,
+        WebAuthnError::Platform(PlatformError::NotSupported)
+    ));
 
     update_handle.await.unwrap();
 }

@@ -7,14 +7,13 @@ use crate::fido::FidoRevision;
 use crate::pin::persistent_token::PersistentTokenStore;
 use crate::proto::ctap1::apdu::{ApduRequest, ApduResponse};
 use crate::proto::ctap2::cbor::{CborRequest, CborResponse};
-use crate::proto::CtapError;
 use crate::transport::ble::btleplug;
+use crate::transport::ble::error::BleError;
 use crate::transport::channel::{
     AuthTokenData, Channel, ChannelSettings, ChannelStatus, Ctap2AuthTokenStore,
 };
 use crate::transport::device::SupportedProtocols;
-use crate::transport::error::TransportError;
-use crate::webauthn::error::Error;
+use crate::webauthn::error::WebAuthnError;
 use crate::Transport;
 use crate::UvUpdate;
 
@@ -44,15 +43,15 @@ impl<'a> BleChannel<'a> {
         device: &'a BleDevice,
         revisions: &SupportedRevisions,
         settings: ChannelSettings,
-    ) -> Result<BleChannel<'a>, Error> {
+    ) -> Result<BleChannel<'a>, WebAuthnError<BleError>> {
         let (ux_update_sender, _) = broadcast::channel(16);
 
         let revision = revisions
             .select_best()
-            .ok_or(Error::Transport(TransportError::NegotiationFailed))?;
+            .ok_or(WebAuthnError::Transport(BleError::NegotiationFailed))?;
         let connection = btleplug::connect(&device.btleplug_device.peripheral, &revision)
             .await
-            .or(Err(Error::Transport(TransportError::ConnectionFailed)))?;
+            .map_err(|e| WebAuthnError::Transport(BleError::Gatt(e)))?;
         let channel = BleChannel {
             status: ChannelStatus::Ready,
             device,
@@ -67,7 +66,7 @@ impl<'a> BleChannel<'a> {
             .connection
             .subscribe()
             .await
-            .or(Err(Error::Transport(TransportError::TransportUnavailable)))?;
+            .map_err(|e| WebAuthnError::Transport(BleError::Gatt(e)))?;
         Ok(channel)
     }
 }
@@ -81,12 +80,13 @@ impl Display for BleChannel<'_> {
 #[async_trait]
 impl<'a> Channel for BleChannel<'a> {
     type UxUpdate = UvUpdate;
+    type TransportError = BleError;
 
     fn transport(&self) -> Transport {
         Transport::Ble
     }
 
-    async fn supported_protocols(&self) -> Result<SupportedProtocols, Error> {
+    async fn supported_protocols(&self) -> Result<SupportedProtocols, WebAuthnError<BleError>> {
         Ok(self.revision.into())
     }
 
@@ -100,40 +100,32 @@ impl<'a> Channel for BleChannel<'a> {
     }
 
     #[instrument(level = Level::DEBUG, skip_all)]
-    async fn apdu_send(&mut self, request: &ApduRequest, _timeout: Duration) -> Result<(), Error> {
+    async fn apdu_send(
+        &mut self,
+        request: &ApduRequest,
+        _timeout: Duration,
+    ) -> Result<(), BleError> {
         debug!({rev = ?self.revision}, "Sending APDU request");
         trace!(?request);
 
-        let request_apdu_packet = request.raw_long().or(Err(TransportError::InvalidFraming))?;
+        let request_apdu_packet = request.raw_long()?;
         let request_frame = BleFrame::new(BleCommand::Msg, &request_apdu_packet);
-        self.connection
-            .frame_send(&request_frame)
-            .await
-            .or(Err(Error::Transport(TransportError::ConnectionFailed)))?;
+        self.connection.frame_send(&request_frame).await?;
         Ok(())
     }
 
     #[instrument(level = Level::DEBUG, skip_all)]
-    async fn apdu_recv(&mut self, timeout: Duration) -> Result<ApduResponse, Error> {
-        let response_frame = self
-            .connection
-            .frame_recv(timeout)
-            .await
-            .map_err(|e| match e {
-                btleplug::Error::Timeout => Error::Transport(TransportError::Timeout),
-                _ => Error::Transport(TransportError::ConnectionFailed),
-            })?;
+    async fn apdu_recv(&mut self, timeout: Duration) -> Result<ApduResponse, BleError> {
+        let response_frame = self.connection.frame_recv(timeout).await?;
 
         match response_frame.cmd {
-            BleCommand::Error => return Err(Error::Transport(TransportError::InvalidFraming)), // Encapsulation layer error
-            BleCommand::Cancel => return Err(Error::Ctap(CtapError::KeepAliveCancel)),
-            BleCommand::Keepalive | BleCommand::Ping => return Err(Error::Ctap(CtapError::Other)), // Unexpected
+            BleCommand::Error => return Err(BleError::UnexpectedFrame), // Encapsulation layer error
+            BleCommand::Cancel => return Err(BleError::Cancelled),
+            BleCommand::Keepalive | BleCommand::Ping => return Err(BleError::UnexpectedFrame),
             BleCommand::Msg => {}
         }
         let response_apdu_packet = &response_frame.data;
-        let response_apdu: ApduResponse = response_apdu_packet
-            .try_into()
-            .or(Err(TransportError::InvalidFraming))?;
+        let response_apdu: ApduResponse = response_apdu_packet.try_into()?;
 
         debug!("Received APDU response");
         trace!(?response_apdu);
@@ -145,41 +137,27 @@ impl<'a> Channel for BleChannel<'a> {
         &mut self,
         request: &CborRequest,
         _timeout: std::time::Duration,
-    ) -> Result<(), Error> {
+    ) -> Result<(), BleError> {
         debug!("Sending CBOR request");
         trace!(?request);
 
-        let cbor_request = request
-            .raw_long()
-            .map_err(|e| TransportError::IoError(e.kind()))?;
+        let cbor_request = request.raw_long()?;
         let request_frame = BleFrame::new(BleCommand::Msg, &cbor_request);
-        self.connection
-            .frame_send(&request_frame)
-            .await
-            .or(Err(Error::Transport(TransportError::ConnectionFailed)))?;
+        self.connection.frame_send(&request_frame).await?;
         Ok(())
     }
 
     #[instrument(level = Level::DEBUG, skip_all)]
-    async fn cbor_recv(&mut self, timeout: std::time::Duration) -> Result<CborResponse, Error> {
-        let response_frame = self
-            .connection
-            .frame_recv(timeout)
-            .await
-            .map_err(|e| match e {
-                btleplug::Error::Timeout => Error::Transport(TransportError::Timeout),
-                _ => Error::Transport(TransportError::ConnectionFailed),
-            })?;
+    async fn cbor_recv(&mut self, timeout: std::time::Duration) -> Result<CborResponse, BleError> {
+        let response_frame = self.connection.frame_recv(timeout).await?;
         match response_frame.cmd {
-            BleCommand::Error => return Err(Error::Transport(TransportError::InvalidFraming)), // Encapsulation layer error
-            BleCommand::Cancel => return Err(Error::Ctap(CtapError::KeepAliveCancel)),
-            BleCommand::Keepalive | BleCommand::Ping => return Err(Error::Ctap(CtapError::Other)), // Unexpected
+            BleCommand::Error => return Err(BleError::UnexpectedFrame), // Encapsulation layer error
+            BleCommand::Cancel => return Err(BleError::Cancelled),
+            BleCommand::Keepalive | BleCommand::Ping => return Err(BleError::UnexpectedFrame),
             BleCommand::Msg => {}
         }
         let cbor_response_packet = &response_frame.data;
-        let cbor_response: CborResponse = cbor_response_packet
-            .try_into()
-            .or(Err(TransportError::InvalidFraming))?;
+        let cbor_response: CborResponse = cbor_response_packet.try_into()?;
 
         debug!("Received CBOR response");
         trace!(?cbor_response);

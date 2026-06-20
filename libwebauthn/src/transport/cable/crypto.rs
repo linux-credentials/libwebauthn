@@ -5,8 +5,7 @@ use sha2::Sha256;
 use tracing::{instrument, warn};
 
 use crate::pin::hmac_sha256;
-use crate::transport::error::TransportError;
-use crate::webauthn::error::Error;
+use crate::transport::cable::error::CableError;
 
 pub enum KeyPurpose {
     EIDKey = 1,
@@ -14,13 +13,17 @@ pub enum KeyPurpose {
     Psk = 3,
 }
 
-pub fn derive(secret: &[u8], salt: Option<&[u8]>, purpose: KeyPurpose) -> Result<[u8; 64], Error> {
+pub fn derive(
+    secret: &[u8],
+    salt: Option<&[u8]>,
+    purpose: KeyPurpose,
+) -> Result<[u8; 64], CableError> {
     let purpose32 = [purpose as u8, 0, 0, 0];
 
     let hkdf = Hkdf::<Sha256>::new(salt, secret);
     let mut output = [0u8; 64];
     hkdf.expand(&purpose32, &mut output)
-        .map_err(|_| Error::Transport(TransportError::InvalidKey))?;
+        .map_err(|_| CableError::InvalidKey)?;
     Ok(output)
 }
 

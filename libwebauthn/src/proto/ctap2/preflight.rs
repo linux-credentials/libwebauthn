@@ -6,7 +6,7 @@ use super::{Ctap2GetAssertionRequest, Ctap2PublicKeyCredentialDescriptor};
 use crate::{
     proto::ctap2::{model::Ctap2GetAssertionOptions, Ctap2},
     transport::Channel,
-    webauthn::error::{CtapError, Error},
+    webauthn::error::{CtapError, WebAuthnError},
 };
 
 /// https://fidoalliance.org/specs/fido-v2.1-ps-20210615/fido-client-to-authenticator-protocol-v2.1-ps-20210615.html#pre-flight
@@ -24,7 +24,7 @@ pub async fn ctap2_preflight<C: Channel>(
     credentials: &[Ctap2PublicKeyCredentialDescriptor],
     client_data_hash: &[u8],
     rp: &str,
-) -> Result<Vec<Ctap2PublicKeyCredentialDescriptor>, Error> {
+) -> Result<Vec<Ctap2PublicKeyCredentialDescriptor>, WebAuthnError<C::TransportError>> {
     ctap2_preflight_with_appid(channel, credentials, client_data_hash, rp, None).await
 }
 
@@ -39,7 +39,7 @@ pub async fn ctap2_preflight_with_appid<C: Channel>(
     client_data_hash: &[u8],
     rp: &str,
     appid_exclude: Option<&str>,
-) -> Result<Vec<Ctap2PublicKeyCredentialDescriptor>, Error> {
+) -> Result<Vec<Ctap2PublicKeyCredentialDescriptor>, WebAuthnError<C::TransportError>> {
     info!("Credential list BEFORE preflight: {credentials:?}");
     let mut filtered_list = Vec::new();
     for credential in credentials {
@@ -76,7 +76,7 @@ async fn preflight_one<C: Channel>(
     credential: &Ctap2PublicKeyCredentialDescriptor,
     client_data_hash: &[u8],
     rp: &str,
-) -> Result<Option<Ctap2PublicKeyCredentialDescriptor>, Error> {
+) -> Result<Option<Ctap2PublicKeyCredentialDescriptor>, WebAuthnError<C::TransportError>> {
     let preflight_request = Ctap2GetAssertionRequest {
         relying_party_id: rp.to_string(),
         client_data_hash: ByteBuf::from(client_data_hash),
@@ -110,7 +110,7 @@ async fn preflight_one<C: Channel>(
             Ok(Some(id))
         }
         // Only CTAP2_ERR_NO_CREDENTIALS proves the credential is absent.
-        Err(Error::Ctap(CtapError::NoCredentials)) => {
+        Err(WebAuthnError::Ctap(CtapError::NoCredentials)) => {
             debug!("Pre-flight: Not found under {rp:?}");
             Ok(None)
         }
@@ -133,7 +133,7 @@ mod tests {
         Ctap2GetAssertionRequest, Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialType,
     };
     use crate::transport::mock::channel::MockChannel;
-    use crate::webauthn::error::{CtapError, Error};
+    use crate::webauthn::error::{CtapError, WebAuthnError};
 
     fn credential(id: &[u8]) -> Ctap2PublicKeyCredentialDescriptor {
         Ctap2PublicKeyCredentialDescriptor {
@@ -177,7 +177,10 @@ mod tests {
         );
 
         let result = ctap2_preflight(&mut channel, &[cred], &hash, "example.org").await;
-        assert_eq!(result.err(), Some(Error::Ctap(CtapError::OperationDenied)));
+        assert!(matches!(
+            result.err(),
+            Some(WebAuthnError::Ctap(CtapError::OperationDenied))
+        ));
     }
 
     #[tokio::test]

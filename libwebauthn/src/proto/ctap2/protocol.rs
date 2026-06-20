@@ -7,7 +7,7 @@ use crate::proto::ctap2::cbor::{self, CborRequest};
 use crate::proto::ctap2::{Ctap2BioEnrollmentResponse, Ctap2CommandCode};
 use crate::transport::Channel;
 use crate::unwrap_field;
-use crate::webauthn::error::{CtapError, Error, PlatformError};
+use crate::webauthn::error::{CtapError, PlatformError, WebAuthnError};
 
 use super::model::Ctap2ClientPinResponse;
 use super::{
@@ -29,55 +29,62 @@ macro_rules! parse_cbor {
                     stringify!($type),
                     e
                 );
-                return Err(Error::Platform(PlatformError::InvalidDeviceResponse));
+                return Err(WebAuthnError::Platform(
+                    PlatformError::InvalidDeviceResponse,
+                ));
             }
         }
     }};
 }
 
 #[async_trait]
-pub trait Ctap2 {
-    async fn ctap2_get_info(&mut self) -> Result<Ctap2GetInfoResponse, Error>;
+pub trait Ctap2: Channel {
+    async fn ctap2_get_info(
+        &mut self,
+    ) -> Result<Ctap2GetInfoResponse, WebAuthnError<Self::TransportError>>;
     async fn ctap2_make_credential(
         &mut self,
         request: &Ctap2MakeCredentialRequest,
         timeout: Duration,
-    ) -> Result<Ctap2MakeCredentialResponse, Error>;
+    ) -> Result<Ctap2MakeCredentialResponse, WebAuthnError<Self::TransportError>>;
     async fn ctap2_client_pin(
         &mut self,
         request: &Ctap2ClientPinRequest,
         timeout: Duration,
-    ) -> Result<Ctap2ClientPinResponse, Error>;
+    ) -> Result<Ctap2ClientPinResponse, WebAuthnError<Self::TransportError>>;
     async fn ctap2_get_assertion(
         &mut self,
         request: &Ctap2GetAssertionRequest,
         timeout: Duration,
-    ) -> Result<Ctap2GetAssertionResponse, Error>;
+    ) -> Result<Ctap2GetAssertionResponse, WebAuthnError<Self::TransportError>>;
     async fn ctap2_get_next_assertion(
         &mut self,
         timeout: Duration,
-    ) -> Result<Ctap2GetAssertionResponse, Error>;
-    async fn ctap2_selection(&mut self, timeout: Duration) -> Result<(), Error>;
+    ) -> Result<Ctap2GetAssertionResponse, WebAuthnError<Self::TransportError>>;
+    async fn ctap2_selection(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<(), WebAuthnError<Self::TransportError>>;
     async fn ctap2_authenticator_config(
         &mut self,
         request: &Ctap2AuthenticatorConfigRequest,
         timeout: Duration,
-    ) -> Result<(), Error>;
+    ) -> Result<(), WebAuthnError<Self::TransportError>>;
     async fn ctap2_bio_enrollment(
         &mut self,
         request: &Ctap2BioEnrollmentRequest,
         timeout: Duration,
-    ) -> Result<Ctap2BioEnrollmentResponse, Error>;
+    ) -> Result<Ctap2BioEnrollmentResponse, WebAuthnError<Self::TransportError>>;
     async fn ctap2_credential_management(
         &mut self,
         request: &Ctap2CredentialManagementRequest,
         timeout: Duration,
-    ) -> Result<Ctap2CredentialManagementResponse, Error>;
+    ) -> Result<Ctap2CredentialManagementResponse, WebAuthnError<Self::TransportError>>;
     async fn ctap2_large_blobs(
         &mut self,
         request: &Ctap2LargeBlobsRequest,
         timeout: Duration,
-    ) -> Result<Ctap2LargeBlobsResponse, Error>;
+    ) -> Result<Ctap2LargeBlobsResponse, WebAuthnError<Self::TransportError>>;
 }
 
 #[async_trait]
@@ -86,13 +93,20 @@ where
     C: Channel,
 {
     #[instrument(skip_all)]
-    async fn ctap2_get_info(&mut self) -> Result<Ctap2GetInfoResponse, Error> {
+    async fn ctap2_get_info(
+        &mut self,
+    ) -> Result<Ctap2GetInfoResponse, WebAuthnError<Self::TransportError>> {
         let cbor_request = CborRequest::new(Ctap2CommandCode::AuthenticatorGetInfo);
-        self.cbor_send(&cbor_request, TIMEOUT_GET_INFO).await?;
-        let cbor_response = self.cbor_recv(TIMEOUT_GET_INFO).await?;
+        self.cbor_send(&cbor_request, TIMEOUT_GET_INFO)
+            .await
+            .map_err(WebAuthnError::Transport)?;
+        let cbor_response = self
+            .cbor_recv(TIMEOUT_GET_INFO)
+            .await
+            .map_err(WebAuthnError::Transport)?;
         match cbor_response.status_code {
             CtapError::Ok => (),
-            error => return Err(Error::Ctap(error)),
+            error => return Err(WebAuthnError::Ctap(error)),
         };
         let data = unwrap_field!(cbor_response.data);
         let ctap_response = parse_cbor!(Ctap2GetInfoResponse, &data);
@@ -106,13 +120,18 @@ where
         &mut self,
         request: &Ctap2MakeCredentialRequest,
         timeout: Duration,
-    ) -> Result<Ctap2MakeCredentialResponse, Error> {
+    ) -> Result<Ctap2MakeCredentialResponse, WebAuthnError<Self::TransportError>> {
         trace!(?request);
-        self.cbor_send(&request.try_into()?, timeout).await?;
-        let cbor_response = self.cbor_recv(timeout).await?;
+        self.cbor_send(&request.try_into()?, timeout)
+            .await
+            .map_err(WebAuthnError::Transport)?;
+        let cbor_response = self
+            .cbor_recv(timeout)
+            .await
+            .map_err(WebAuthnError::Transport)?;
         match cbor_response.status_code {
             CtapError::Ok => (),
-            error => return Err(Error::Ctap(error)),
+            error => return Err(WebAuthnError::Ctap(error)),
         };
         let data = unwrap_field!(cbor_response.data);
         trace!("MakeCredential: {:?}", data);
@@ -127,13 +146,18 @@ where
         &mut self,
         request: &Ctap2GetAssertionRequest,
         timeout: Duration,
-    ) -> Result<Ctap2GetAssertionResponse, Error> {
+    ) -> Result<Ctap2GetAssertionResponse, WebAuthnError<Self::TransportError>> {
         trace!(?request);
-        self.cbor_send(&request.try_into()?, timeout).await?;
-        let cbor_response = self.cbor_recv(timeout).await?;
+        self.cbor_send(&request.try_into()?, timeout)
+            .await
+            .map_err(WebAuthnError::Transport)?;
+        let cbor_response = self
+            .cbor_recv(timeout)
+            .await
+            .map_err(WebAuthnError::Transport)?;
         match cbor_response.status_code {
             CtapError::Ok => (),
-            error => return Err(Error::Ctap(error)),
+            error => return Err(WebAuthnError::Ctap(error)),
         };
         let data = unwrap_field!(cbor_response.data);
         trace!("GetAssertion: {:?}", data);
@@ -147,14 +171,19 @@ where
     async fn ctap2_get_next_assertion(
         &mut self,
         timeout: Duration,
-    ) -> Result<Ctap2GetAssertionResponse, Error> {
+    ) -> Result<Ctap2GetAssertionResponse, WebAuthnError<Self::TransportError>> {
         debug!("CTAP2 GetNextAssertion request");
         let cbor_request = CborRequest::new(Ctap2CommandCode::AuthenticatorGetNextAssertion);
-        self.cbor_send(&cbor_request, timeout).await?;
-        let cbor_response = self.cbor_recv(timeout).await?;
+        self.cbor_send(&cbor_request, timeout)
+            .await
+            .map_err(WebAuthnError::Transport)?;
+        let cbor_response = self
+            .cbor_recv(timeout)
+            .await
+            .map_err(WebAuthnError::Transport)?;
         match cbor_response.status_code {
             CtapError::Ok => (),
-            error => return Err(Error::Ctap(error)),
+            error => return Err(WebAuthnError::Ctap(error)),
         };
         let data = unwrap_field!(cbor_response.data);
         let ctap_response = parse_cbor!(Ctap2GetAssertionResponse, &data);
@@ -164,19 +193,27 @@ where
     }
 
     #[instrument(skip_all)]
-    async fn ctap2_selection(&mut self, timeout: Duration) -> Result<(), Error> {
+    async fn ctap2_selection(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<(), WebAuthnError<Self::TransportError>> {
         debug!("CTAP2 Authenticator Selection request");
         let cbor_request = CborRequest::new(Ctap2CommandCode::AuthenticatorSelection);
 
-        self.cbor_send(&cbor_request, timeout).await?;
-        let cbor_response = self.cbor_recv(timeout).await?;
+        self.cbor_send(&cbor_request, timeout)
+            .await
+            .map_err(WebAuthnError::Transport)?;
+        let cbor_response = self
+            .cbor_recv(timeout)
+            .await
+            .map_err(WebAuthnError::Transport)?;
         match cbor_response.status_code {
             CtapError::Ok => {
                 return Ok(());
             }
             error => {
                 warn!(?error, "Selection request failed with status code");
-                return Err(Error::Ctap(error));
+                return Err(WebAuthnError::Ctap(error));
             }
         }
     }
@@ -186,13 +223,18 @@ where
         &mut self,
         request: &Ctap2ClientPinRequest,
         timeout: Duration,
-    ) -> Result<Ctap2ClientPinResponse, Error> {
+    ) -> Result<Ctap2ClientPinResponse, WebAuthnError<Self::TransportError>> {
         trace!(?request);
-        self.cbor_send(&request.try_into()?, timeout).await?;
-        let cbor_response = self.cbor_recv(timeout).await?;
+        self.cbor_send(&request.try_into()?, timeout)
+            .await
+            .map_err(WebAuthnError::Transport)?;
+        let cbor_response = self
+            .cbor_recv(timeout)
+            .await
+            .map_err(WebAuthnError::Transport)?;
         match cbor_response.status_code {
             CtapError::Ok => (),
-            error => return Err(Error::Ctap(error)),
+            error => return Err(WebAuthnError::Ctap(error)),
         };
         if let Some(data) = cbor_response.data {
             let ctap_response = parse_cbor!(Ctap2ClientPinResponse, &data);
@@ -212,10 +254,15 @@ where
         &mut self,
         request: &Ctap2AuthenticatorConfigRequest,
         timeout: Duration,
-    ) -> Result<(), Error> {
+    ) -> Result<(), WebAuthnError<Self::TransportError>> {
         trace!(?request);
-        self.cbor_send(&request.try_into()?, timeout).await?;
-        let cbor_response = self.cbor_recv(timeout).await?;
+        self.cbor_send(&request.try_into()?, timeout)
+            .await
+            .map_err(WebAuthnError::Transport)?;
+        let cbor_response = self
+            .cbor_recv(timeout)
+            .await
+            .map_err(WebAuthnError::Transport)?;
         match cbor_response.status_code {
             CtapError::Ok => {
                 return Ok(());
@@ -225,7 +272,7 @@ where
                     ?error,
                     "Authenticator config request failed with status code"
                 );
-                return Err(Error::Ctap(error));
+                return Err(WebAuthnError::Ctap(error));
             }
         }
     }
@@ -235,13 +282,18 @@ where
         &mut self,
         request: &Ctap2BioEnrollmentRequest,
         timeout: Duration,
-    ) -> Result<Ctap2BioEnrollmentResponse, Error> {
+    ) -> Result<Ctap2BioEnrollmentResponse, WebAuthnError<Self::TransportError>> {
         trace!(?request);
-        self.cbor_send(&request.try_into()?, timeout).await?;
-        let cbor_response = self.cbor_recv(timeout).await?;
+        self.cbor_send(&request.try_into()?, timeout)
+            .await
+            .map_err(WebAuthnError::Transport)?;
+        let cbor_response = self
+            .cbor_recv(timeout)
+            .await
+            .map_err(WebAuthnError::Transport)?;
         match cbor_response.status_code {
             CtapError::Ok => (),
-            error => return Err(Error::Ctap(error)),
+            error => return Err(WebAuthnError::Ctap(error)),
         };
         if let Some(data) = cbor_response.data {
             let ctap_response = parse_cbor!(Ctap2BioEnrollmentResponse, &data);
@@ -261,13 +313,18 @@ where
         &mut self,
         request: &Ctap2CredentialManagementRequest,
         timeout: Duration,
-    ) -> Result<Ctap2CredentialManagementResponse, Error> {
+    ) -> Result<Ctap2CredentialManagementResponse, WebAuthnError<Self::TransportError>> {
         trace!(?request);
-        self.cbor_send(&request.try_into()?, timeout).await?;
-        let cbor_response = self.cbor_recv(timeout).await?;
+        self.cbor_send(&request.try_into()?, timeout)
+            .await
+            .map_err(WebAuthnError::Transport)?;
+        let cbor_response = self
+            .cbor_recv(timeout)
+            .await
+            .map_err(WebAuthnError::Transport)?;
         match cbor_response.status_code {
             CtapError::Ok => (),
-            error => return Err(Error::Ctap(error)),
+            error => return Err(WebAuthnError::Ctap(error)),
         };
         if let Some(data) = cbor_response.data {
             let ctap_response = parse_cbor!(Ctap2CredentialManagementResponse, &data);
@@ -287,13 +344,18 @@ where
         &mut self,
         request: &Ctap2LargeBlobsRequest,
         timeout: Duration,
-    ) -> Result<Ctap2LargeBlobsResponse, Error> {
+    ) -> Result<Ctap2LargeBlobsResponse, WebAuthnError<Self::TransportError>> {
         trace!(?request);
-        self.cbor_send(&request.try_into()?, timeout).await?;
-        let cbor_response = self.cbor_recv(timeout).await?;
+        self.cbor_send(&request.try_into()?, timeout)
+            .await
+            .map_err(WebAuthnError::Transport)?;
+        let cbor_response = self
+            .cbor_recv(timeout)
+            .await
+            .map_err(WebAuthnError::Transport)?;
         match cbor_response.status_code {
             CtapError::Ok => (),
-            error => return Err(Error::Ctap(error)),
+            error => return Err(WebAuthnError::Ctap(error)),
         };
         if let Some(data) = cbor_response.data {
             let ctap_response = parse_cbor!(Ctap2LargeBlobsResponse, &data);
@@ -322,7 +384,7 @@ mod tests {
     };
     use crate::proto::ctap2::Ctap2CommandCode;
     use crate::transport::mock::channel::MockChannel;
-    use crate::webauthn::error::{CtapError, Error};
+    use crate::webauthn::error::{CtapError, WebAuthnError};
 
     use super::Ctap2;
 
@@ -342,7 +404,10 @@ mod tests {
         channel.push_command_pair(expected_request, error_response(CtapError::Other));
 
         let result = channel.ctap2_get_info().await;
-        assert_eq!(result.err(), Some(Error::Ctap(CtapError::Other)));
+        assert!(matches!(
+            result.err(),
+            Some(WebAuthnError::Ctap(CtapError::Other))
+        ));
     }
 
     // Regression test: cable's `cbor_send` blocks for the BLE handshake before
@@ -356,9 +421,8 @@ mod tests {
         channel.push_command_pair(expected_request, error_response(CtapError::Other));
 
         let result = channel.ctap2_get_info().await;
-        assert_eq!(
-            result.err(),
-            Some(Error::Ctap(CtapError::Other)),
+        assert!(
+            matches!(result.err(), Some(WebAuthnError::Ctap(CtapError::Other))),
             "GetInfo must not impose a wall-clock timeout that fires before \
              the channel's own cbor_send returns"
         );
@@ -372,7 +436,10 @@ mod tests {
         channel.push_command_pair(expected_request, error_response(CtapError::OperationDenied));
 
         let result = channel.ctap2_make_credential(&request, TIMEOUT).await;
-        assert_eq!(result.err(), Some(Error::Ctap(CtapError::OperationDenied)));
+        assert!(matches!(
+            result.err(),
+            Some(WebAuthnError::Ctap(CtapError::OperationDenied))
+        ));
     }
 
     #[tokio::test]
@@ -391,7 +458,10 @@ mod tests {
         channel.push_command_pair(expected_request, error_response(CtapError::NoCredentials));
 
         let result = channel.ctap2_get_assertion(&request, TIMEOUT).await;
-        assert_eq!(result.err(), Some(Error::Ctap(CtapError::NoCredentials)));
+        assert!(matches!(
+            result.err(),
+            Some(WebAuthnError::Ctap(CtapError::NoCredentials))
+        ));
     }
 
     #[tokio::test]
@@ -404,7 +474,10 @@ mod tests {
         channel.push_command_pair(expected_request, error_response(CtapError::NotAllowed));
 
         let result = channel.ctap2_get_next_assertion(TIMEOUT).await;
-        assert_eq!(result.err(), Some(Error::Ctap(CtapError::NotAllowed)));
+        assert!(matches!(
+            result.err(),
+            Some(WebAuthnError::Ctap(CtapError::NotAllowed))
+        ));
     }
 
     #[tokio::test]
@@ -421,7 +494,10 @@ mod tests {
         channel.push_command_pair(expected_request, response);
 
         let result = channel.ctap2_get_next_assertion(TIMEOUT).await;
-        assert_eq!(result.err(), Some(Error::Ctap(CtapError::Other)));
+        assert!(matches!(
+            result.err(),
+            Some(WebAuthnError::Ctap(CtapError::Other))
+        ));
     }
 
     #[tokio::test]
@@ -432,7 +508,10 @@ mod tests {
         channel.push_command_pair(expected_request, error_response(CtapError::PINBlocked));
 
         let result = channel.ctap2_client_pin(&request, TIMEOUT).await;
-        assert_eq!(result.err(), Some(Error::Ctap(CtapError::PINBlocked)));
+        assert!(matches!(
+            result.err(),
+            Some(WebAuthnError::Ctap(CtapError::PINBlocked))
+        ));
     }
 
     #[tokio::test]
@@ -447,10 +526,10 @@ mod tests {
         );
 
         let result = channel.ctap2_selection(TIMEOUT).await;
-        assert_eq!(
+        assert!(matches!(
             result.err(),
-            Some(Error::Ctap(CtapError::UserActionTimeout))
-        );
+            Some(WebAuthnError::Ctap(CtapError::UserActionTimeout))
+        ));
     }
 
     #[tokio::test]
@@ -464,10 +543,10 @@ mod tests {
         );
 
         let result = channel.ctap2_authenticator_config(&request, TIMEOUT).await;
-        assert_eq!(
+        assert!(matches!(
             result.err(),
-            Some(Error::Ctap(CtapError::UnauthorizedPermission))
-        );
+            Some(WebAuthnError::Ctap(CtapError::UnauthorizedPermission))
+        ));
     }
 
     #[tokio::test]
@@ -486,7 +565,10 @@ mod tests {
         channel.push_command_pair(expected_request, error_response(CtapError::InvalidOption));
 
         let result = channel.ctap2_bio_enrollment(&request, TIMEOUT).await;
-        assert_eq!(result.err(), Some(Error::Ctap(CtapError::InvalidOption)));
+        assert!(matches!(
+            result.err(),
+            Some(WebAuthnError::Ctap(CtapError::InvalidOption))
+        ));
     }
 
     #[tokio::test]
@@ -505,6 +587,9 @@ mod tests {
         channel.push_command_pair(expected_request, error_response(CtapError::PINRequired));
 
         let result = channel.ctap2_credential_management(&request, TIMEOUT).await;
-        assert_eq!(result.err(), Some(Error::Ctap(CtapError::PINRequired)));
+        assert!(matches!(
+            result.err(),
+            Some(WebAuthnError::Ctap(CtapError::PINRequired))
+        ));
     }
 }

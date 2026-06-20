@@ -7,8 +7,9 @@ use text_io::read;
 use libwebauthn::management::BioEnrollment;
 use libwebauthn::proto::ctap2::{Ctap2, Ctap2GetInfoResponse, Ctap2LastEnrollmentSampleStatus};
 use libwebauthn::transport::hid::list_devices;
+use libwebauthn::transport::hid::HidError;
 use libwebauthn::transport::{Channel as _, ChannelSettings, Device};
-use libwebauthn::webauthn::Error as WebAuthnError;
+use libwebauthn::webauthn::WebAuthnError;
 
 #[path = "../common/mod.rs"]
 mod common;
@@ -101,7 +102,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         }
 
         let idx = common::prompt_index(options.len());
-        let result: Result<String, WebAuthnError> = match options[idx] {
+        let result: Result<String, WebAuthnError<HidError>> = match options[idx] {
             Operation::GetModality => {
                 retry_user_errors!(channel.get_bio_modality(TIMEOUT)).map(|x| format!("{x:?}"))
             }

@@ -2,7 +2,7 @@ use crate::proto::ctap1::Ctap1Transport;
 use crate::Transport;
 use crate::{
     ops::webauthn::idl::create::PublicKeyCredentialUserEntity, pin::PinUvAuthProtocol,
-    webauthn::Error,
+    webauthn::PlatformError,
 };
 
 use num_enum::{IntoPrimitive, TryFromPrimitive};
@@ -382,7 +382,7 @@ pub trait Ctap2UserVerifiableRequest {
         &mut self,
         uv_proto: &dyn PinUvAuthProtocol,
         uv_auth_token: &[u8],
-    ) -> Result<(), Error>;
+    ) -> Result<(), PlatformError>;
     fn client_data_hash(&self) -> Option<&[u8]> {
         None
     }

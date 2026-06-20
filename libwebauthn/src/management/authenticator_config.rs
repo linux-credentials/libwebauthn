@@ -1,7 +1,7 @@
 use crate::proto::ctap2::cbor;
 use crate::proto::ctap2::Ctap2ClientPinRequest;
 use crate::transport::Channel;
-pub use crate::webauthn::error::{CtapError, Error, PlatformError};
+pub use crate::webauthn::error::{CtapError, PlatformError, WebAuthnError};
 use crate::webauthn::handle_errors;
 use crate::webauthn::pin_uv_auth_token::{user_verification, UsedPinUvAuthToken};
 use crate::{
@@ -19,24 +19,34 @@ use std::time::Duration;
 use tracing::info;
 
 #[async_trait]
-pub trait AuthenticatorConfig {
-    async fn toggle_always_uv(&mut self, timeout: Duration) -> Result<(), Error>;
+pub trait AuthenticatorConfig: Channel {
+    async fn toggle_always_uv(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<(), WebAuthnError<Self::TransportError>>;
 
-    async fn enable_enterprise_attestation(&mut self, timeout: Duration) -> Result<(), Error>;
+    async fn enable_enterprise_attestation(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<(), WebAuthnError<Self::TransportError>>;
 
     async fn set_min_pin_length(
         &mut self,
         new_pin_length: u64,
         timeout: Duration,
-    ) -> Result<(), Error>;
+    ) -> Result<(), WebAuthnError<Self::TransportError>>;
 
-    async fn force_change_pin(&mut self, force: bool, timeout: Duration) -> Result<(), Error>;
+    async fn force_change_pin(
+        &mut self,
+        force: bool,
+        timeout: Duration,
+    ) -> Result<(), WebAuthnError<Self::TransportError>>;
 
     async fn set_min_pin_length_rpids(
         &mut self,
         rpids: Vec<String>,
         timeout: Duration,
-    ) -> Result<(), Error>;
+    ) -> Result<(), WebAuthnError<Self::TransportError>>;
 }
 
 #[async_trait]
@@ -44,11 +54,14 @@ impl<C> AuthenticatorConfig for C
 where
     C: Channel,
 {
-    async fn toggle_always_uv(&mut self, timeout: Duration) -> Result<(), Error> {
+    async fn toggle_always_uv(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<(), WebAuthnError<Self::TransportError>> {
         let info = self.ctap2_get_info().await?;
         // CTAP 2.1 6.2.5: toggleAlwaysUv is gated on the alwaysUv option only.
         if !info.option_enabled("authnrCfg") || !info.option_exists("alwaysUv") {
-            return Err(Error::Platform(PlatformError::NotSupported));
+            return Err(WebAuthnError::Platform(PlatformError::NotSupported));
         }
 
         let mut req = Ctap2AuthenticatorConfigRequest::new_toggle_always_uv();
@@ -71,10 +84,13 @@ where
         }
     }
 
-    async fn enable_enterprise_attestation(&mut self, timeout: Duration) -> Result<(), Error> {
+    async fn enable_enterprise_attestation(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<(), WebAuthnError<Self::TransportError>> {
         let info = self.ctap2_get_info().await?;
         if !info.option_enabled("authnrCfg") || !info.option_exists("ep") {
-            return Err(Error::Platform(PlatformError::NotSupported));
+            return Err(WebAuthnError::Platform(PlatformError::NotSupported));
         }
 
         let mut req = Ctap2AuthenticatorConfigRequest::new_enable_enterprise_attestation();
@@ -101,10 +117,10 @@ where
         &mut self,
         new_pin_length: u64,
         timeout: Duration,
-    ) -> Result<(), Error> {
+    ) -> Result<(), WebAuthnError<Self::TransportError>> {
         let info = self.ctap2_get_info().await?;
         if !info.option_enabled("authnrCfg") || !info.option_exists("setMinPINLength") {
-            return Err(Error::Platform(PlatformError::NotSupported));
+            return Err(WebAuthnError::Platform(PlatformError::NotSupported));
         }
 
         let mut req = Ctap2AuthenticatorConfigRequest::new_set_min_pin_length(new_pin_length);
@@ -127,10 +143,14 @@ where
         }
     }
 
-    async fn force_change_pin(&mut self, force: bool, timeout: Duration) -> Result<(), Error> {
+    async fn force_change_pin(
+        &mut self,
+        force: bool,
+        timeout: Duration,
+    ) -> Result<(), WebAuthnError<Self::TransportError>> {
         let info = self.ctap2_get_info().await?;
         if !info.option_enabled("authnrCfg") || !info.option_exists("setMinPINLength") {
-            return Err(Error::Platform(PlatformError::NotSupported));
+            return Err(WebAuthnError::Platform(PlatformError::NotSupported));
         }
 
         let mut req = Ctap2AuthenticatorConfigRequest::new_force_change_pin(force);
@@ -157,17 +177,17 @@ where
         &mut self,
         rpids: Vec<String>,
         timeout: Duration,
-    ) -> Result<(), Error> {
+    ) -> Result<(), WebAuthnError<Self::TransportError>> {
         let info = self.ctap2_get_info().await?;
         if !info.option_enabled("authnrCfg")
             || !info.option_exists("setMinPINLength")
             || !info.supports_extension("minPinLength")
         {
-            return Err(Error::Platform(PlatformError::NotSupported));
+            return Err(WebAuthnError::Platform(PlatformError::NotSupported));
         }
         let max_rpids = u64::from(info.max_rpids_for_setminpinlength.unwrap_or(u32::MAX));
         if rpids.len() as u64 > max_rpids {
-            return Err(Error::Platform(PlatformError::RequestTooLarge));
+            return Err(WebAuthnError::Platform(PlatformError::RequestTooLarge));
         }
 
         let mut req = Ctap2AuthenticatorConfigRequest::new_set_min_pin_length_rpids(rpids);
@@ -199,7 +219,7 @@ impl Ctap2UserVerifiableRequest for Ctap2AuthenticatorConfigRequest {
         &mut self,
         uv_proto: &dyn PinUvAuthProtocol,
         uv_auth_token: &[u8],
-    ) -> Result<(), Error> {
+    ) -> Result<(), PlatformError> {
         // pinUvAuthParam (0x04): the result of calling
         // authenticate(pinUvAuthToken, 32×0xff || 0x0d || uint8(subCommand) || subCommandParams).
         let mut data = vec![0xff; 32];
@@ -240,7 +260,7 @@ mod test {
     use std::collections::HashMap;
     use std::time::Duration;
 
-    use super::{AuthenticatorConfig, Error, PlatformError};
+    use super::{AuthenticatorConfig, PlatformError, WebAuthnError};
     use crate::proto::ctap2::cbor::{self, CborRequest, CborResponse};
     use crate::proto::ctap2::{Ctap2CommandCode, Ctap2GetInfoResponse};
     use crate::transport::mock::channel::MockChannel;
@@ -265,7 +285,10 @@ mod test {
         );
 
         let result = channel.toggle_always_uv(TIMEOUT).await;
-        assert_eq!(result, Err(Error::Platform(PlatformError::NotSupported)));
+        assert!(matches!(
+            result,
+            Err(WebAuthnError::Platform(PlatformError::NotSupported))
+        ));
     }
 
     #[tokio::test]
@@ -280,7 +303,10 @@ mod test {
         );
 
         let result = channel.toggle_always_uv(TIMEOUT).await;
-        assert_eq!(result, Err(Error::Platform(PlatformError::NotSupported)));
+        assert!(matches!(
+            result,
+            Err(WebAuthnError::Platform(PlatformError::NotSupported))
+        ));
     }
 
     #[tokio::test]
@@ -300,7 +326,10 @@ mod test {
         let result = channel
             .set_min_pin_length_rpids(vec!["example.com".to_string()], TIMEOUT)
             .await;
-        assert_eq!(result, Err(Error::Platform(PlatformError::NotSupported)));
+        assert!(matches!(
+            result,
+            Err(WebAuthnError::Platform(PlatformError::NotSupported))
+        ));
     }
 
     #[tokio::test]
@@ -321,6 +350,9 @@ mod test {
 
         let rpids = vec!["example.com".to_string(), "example.org".to_string()];
         let result = channel.set_min_pin_length_rpids(rpids, TIMEOUT).await;
-        assert_eq!(result, Err(Error::Platform(PlatformError::RequestTooLarge)));
+        assert!(matches!(
+            result,
+            Err(WebAuthnError::Platform(PlatformError::RequestTooLarge))
+        ));
     }
 }

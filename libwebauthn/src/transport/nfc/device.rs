@@ -6,10 +6,11 @@ use tracing::{debug, info, instrument, trace};
 
 use crate::{
     transport::{device::Device, hid::HidDevice, Channel, ChannelSettings, UsbDeviceId},
-    webauthn::Error,
+    webauthn::error::WebAuthnError,
 };
 
 use super::channel::NfcChannel;
+use super::error::NfcError;
 #[cfg(feature = "nfc-backend-libnfc")]
 use super::libnfc;
 #[cfg(feature = "nfc-backend-pcsc")]
@@ -72,14 +73,18 @@ impl NfcDevice {
         }
     }
 
-    async fn channel_sync(&self, settings: ChannelSettings) -> Result<NfcChannel<Context>, Error> {
+    async fn channel_sync(
+        &self,
+        settings: ChannelSettings,
+    ) -> Result<NfcChannel<Context>, WebAuthnError<NfcError>> {
         trace!("nfc channel {:?}", self);
         let mut channel: NfcChannel<Context> = match &self.info {
             #[cfg(feature = "nfc-backend-libnfc")]
             DeviceInfo::LibNfc(info) => info.channel(settings),
             #[cfg(feature = "nfc-backend-pcsc")]
             DeviceInfo::Pcsc(info) => info.channel(settings),
-        }?;
+        }
+        .map_err(WebAuthnError::Transport)?;
 
         channel.select_fido2().await?;
         Ok(channel)
@@ -91,13 +96,13 @@ impl<'d> Device<'d, Nfc, NfcChannel<Context>> for NfcDevice {
     async fn channel(
         &'d mut self,
         settings: ChannelSettings,
-    ) -> Result<NfcChannel<Context>, Error> {
+    ) -> Result<NfcChannel<Context>, WebAuthnError<NfcError>> {
         self.channel_sync(settings).await
     }
 }
 
 async fn is_fido(device: &NfcDevice) -> bool {
-    async fn inner(device: &NfcDevice) -> Result<bool, Error> {
+    async fn inner(device: &NfcDevice) -> Result<bool, WebAuthnError<NfcError>> {
         let chan = device.channel_sync(ChannelSettings::default()).await?;
         let protocols = chan.supported_protocols().await?;
         Ok(protocols.fido2 || protocols.u2f)
@@ -109,7 +114,7 @@ async fn is_fido(device: &NfcDevice) -> bool {
 #[instrument]
 /// Returns Ok(None) if no devices are found, otherwise returns
 /// the first device found by either NFC-backend.
-pub async fn get_nfc_device() -> Result<Option<NfcDevice>, Error> {
+pub async fn get_nfc_device() -> Result<Option<NfcDevice>, WebAuthnError<NfcError>> {
     // See https://github.com/linux-credentials/libwebauthn/issues/154 for
     // why we only return the first found device here.
     // We'd otherwise need to deduplicate found devices here, as
@@ -123,7 +128,7 @@ pub async fn get_nfc_device() -> Result<Option<NfcDevice>, Error> {
     ];
 
     for list_devices in list_devices_fns {
-        for device in list_devices()? {
+        for device in list_devices().map_err(WebAuthnError::Transport)? {
             if is_fido(&device).await {
                 return Ok(Some(device));
             }

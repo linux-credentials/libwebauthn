@@ -12,21 +12,26 @@ use super::{
 };
 use crate::proto::ctap1::model::Preflight;
 use crate::proto::CtapError;
-use crate::transport::{error::TransportError, Channel};
-use crate::webauthn::error::Error;
+use crate::transport::Channel;
+use crate::webauthn::error::{PlatformError, WebAuthnError};
 use crate::UvUpdate;
 
 const UP_SLEEP: Duration = Duration::from_millis(150);
 const VERSION_TIMEOUT: Duration = Duration::from_millis(500);
 
 #[async_trait]
-pub trait Ctap1 {
-    async fn ctap1_version(&mut self) -> Result<Ctap1VersionResponse, Error>;
+pub trait Ctap1: Channel {
+    async fn ctap1_version(
+        &mut self,
+    ) -> Result<Ctap1VersionResponse, WebAuthnError<Self::TransportError>>;
     async fn ctap1_register(
         &mut self,
         op: &Ctap1RegisterRequest,
-    ) -> Result<Ctap1RegisterResponse, Error>;
-    async fn ctap1_sign(&mut self, op: &Ctap1SignRequest) -> Result<Ctap1SignResponse, Error>;
+    ) -> Result<Ctap1RegisterResponse, WebAuthnError<Self::TransportError>>;
+    async fn ctap1_sign(
+        &mut self,
+        op: &Ctap1SignRequest,
+    ) -> Result<Ctap1SignResponse, WebAuthnError<Self::TransportError>>;
 }
 
 #[async_trait]
@@ -35,11 +40,18 @@ where
     C: Channel,
 {
     #[instrument(skip_all)]
-    async fn ctap1_version(&mut self) -> Result<Ctap1VersionResponse, Error> {
+    async fn ctap1_version(
+        &mut self,
+    ) -> Result<Ctap1VersionResponse, WebAuthnError<Self::TransportError>> {
         let request = &Ctap1VersionRequest::new();
         let apdu_request: ApduRequest = request.into();
-        self.apdu_send(&apdu_request, VERSION_TIMEOUT).await?;
-        let apdu_response = self.apdu_recv(VERSION_TIMEOUT).await?;
+        self.apdu_send(&apdu_request, VERSION_TIMEOUT)
+            .await
+            .map_err(WebAuthnError::Transport)?;
+        let apdu_response = self
+            .apdu_recv(VERSION_TIMEOUT)
+            .await
+            .map_err(WebAuthnError::Transport)?;
         let response: Ctap1VersionResponse = apdu_response.try_into().or(Err(CtapError::Other))?;
         debug!({ ?response.version }, "CTAP1 version response");
         Ok(response)
@@ -49,7 +61,7 @@ where
     async fn ctap1_register(
         &mut self,
         request: &Ctap1RegisterRequest,
-    ) -> Result<Ctap1RegisterResponse, Error> {
+    ) -> Result<Ctap1RegisterResponse, WebAuthnError<Self::TransportError>> {
         debug!({ %request.require_user_presence }, "CTAP1 register request");
         trace!(?request);
         self.send_ux_update(UvUpdate::PresenceRequired.into()).await;
@@ -62,9 +74,9 @@ where
             match self.ctap1_sign(preflight).await {
                 Ok(_) => {
                     info!("Already-registered credential found during preflight request.");
-                    return Err(Error::Ctap(CtapError::CredentialExcluded));
+                    return Err(WebAuthnError::Ctap(CtapError::CredentialExcluded));
                 }
-                Err(Error::Ctap(CtapError::NoCredentials)) => {
+                Err(WebAuthnError::Ctap(CtapError::NoCredentials)) => {
                     debug!("Credential doesn't already exist, continuing.");
                 }
                 Err(err) => {
@@ -78,7 +90,7 @@ where
         let status = apdu_response.status().or(Err(CtapError::Other))?;
         if status != ApduResponseStatus::NoError {
             error!(?status, "APDU response has error code");
-            return Err(Error::Ctap(CtapError::from(status)));
+            return Err(WebAuthnError::Ctap(CtapError::from(status)));
         }
 
         let response: Ctap1RegisterResponse = apdu_response.try_into().or(Err(CtapError::Other))?;
@@ -88,7 +100,10 @@ where
     }
 
     #[instrument(skip_all, fields(preflight = !request.require_user_presence))]
-    async fn ctap1_sign(&mut self, request: &Ctap1SignRequest) -> Result<Ctap1SignResponse, Error> {
+    async fn ctap1_sign(
+        &mut self,
+        request: &Ctap1SignRequest,
+    ) -> Result<Ctap1SignResponse, WebAuthnError<Self::TransportError>> {
         debug!({ %request.require_user_presence }, "CTAP1 sign request");
         trace!(?request);
         self.send_ux_update(UvUpdate::PresenceRequired.into()).await;
@@ -98,7 +113,7 @@ where
         let status = apdu_response.status().or(Err(CtapError::Other))?;
         if status != ApduResponseStatus::NoError {
             error!(?status, "APDU response has error code");
-            return Err(Error::Ctap(CtapError::from(status)));
+            return Err(WebAuthnError::Ctap(CtapError::from(status)));
         }
 
         let response: Ctap1SignResponse = apdu_response.try_into().or(Err(CtapError::Other))?;
@@ -112,24 +127,30 @@ async fn send_apdu_request_wait_uv<C: Channel>(
     channel: &mut C,
     request: &ApduRequest,
     timeout: Duration,
-) -> Result<ApduResponse, Error> {
+) -> Result<ApduResponse, WebAuthnError<C::TransportError>> {
     tokio_timeout(timeout, async {
         loop {
-            channel.apdu_send(request, timeout).await?;
-            let apdu_response = channel.apdu_recv(timeout).await?;
-            let apdu_status = apdu_response
-                .status()
-                .or(Err(Error::Transport(TransportError::InvalidFraming)))?;
+            channel
+                .apdu_send(request, timeout)
+                .await
+                .map_err(WebAuthnError::Transport)?;
+            let apdu_response = channel
+                .apdu_recv(timeout)
+                .await
+                .map_err(WebAuthnError::Transport)?;
+            let apdu_status = apdu_response.status().or(Err(WebAuthnError::Platform(
+                PlatformError::InvalidDeviceResponse,
+            )))?;
             let ctap_error: CtapError = apdu_status.into();
             match ctap_error {
                 CtapError::Ok => return Ok(apdu_response),
                 CtapError::UserPresenceRequired => (), // Sleep some more.
-                _ => return Err(Error::Ctap(ctap_error)),
+                _ => return Err(WebAuthnError::Ctap(ctap_error)),
             };
             debug!("UP required. Sleeping for {:?}.", UP_SLEEP);
             sleep(UP_SLEEP).await;
         }
     })
     .await
-    .or(Err(Error::Ctap(CtapError::UserActionTimeout)))?
+    .or(Err(WebAuthnError::Ctap(CtapError::UserActionTimeout)))?
 }

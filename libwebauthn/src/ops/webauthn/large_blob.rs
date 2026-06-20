@@ -12,7 +12,7 @@ use tracing::{debug, trace, warn};
 use crate::pin::PinUvAuthProtocol;
 use crate::proto::ctap2::cbor::Value;
 use crate::proto::ctap2::{Ctap2, Ctap2LargeBlobsRequest, Ctap2PinUvAuthProtocol};
-use crate::webauthn::Error;
+use crate::webauthn::WebAuthnError;
 
 /// Spec default for `maxFragmentLength` when `maxMsgSize` is absent (CTAP 2.2 §6.10.2).
 pub(crate) const LARGE_BLOB_DEFAULT_FRAGMENT: u32 = 960;
@@ -28,14 +28,14 @@ const LARGE_BLOB_NONCE_LEN: usize = 12;
 const LARGE_BLOB_AD_PREFIX: &[u8] = b"blob";
 
 #[derive(thiserror::Error, Debug)]
-pub(crate) enum LargeBlobError {
+pub(crate) enum LargeBlobError<E> {
     #[error("On-device largeBlobArray is malformed: {0}")]
     Corrupted(String),
     /// CTAP 2.2 §6.10.6 line 303 "Return an error": delete called but no entry decrypted under our key.
     #[error("largeBlobArray has no entry to delete for this credential")]
     NoMatch,
     #[error(transparent)]
-    Webauthn(#[from] Error),
+    Webauthn(#[from] WebAuthnError<E>),
 }
 
 /// `maxFragmentLength` per CTAP 2.2 §6.10.2 (`maxMsgSize - 64`, default 960). Floored at 1.
@@ -62,17 +62,17 @@ pub(crate) async fn fetch_large_blob_entries<C: Ctap2 + ?Sized>(
     channel: &mut C,
     max_fragment: u32,
     timeout: Duration,
-) -> Result<Vec<LargeBlobMapEntry>, LargeBlobError> {
+) -> Result<Vec<LargeBlobMapEntry>, LargeBlobError<C::TransportError>> {
     let serialized = fetch_serialized_array(channel, max_fragment, timeout).await?;
     let array_bytes = strip_array_trailer(&serialized)?;
     parse_large_blob_array(array_bytes)
 }
 
 /// Decrypt the first entry that authenticates under `key`.
-pub(crate) fn decrypt_first_matching(
+pub(crate) fn decrypt_first_matching<E>(
     entries: &[LargeBlobMapEntry],
     key: &[u8; 32],
-) -> Result<Option<Vec<u8>>, LargeBlobError> {
+) -> Result<Option<Vec<u8>>, LargeBlobError<E>> {
     for entry in entries {
         if let Some(plaintext) = entry.try_decrypt(key)? {
             return Ok(Some(plaintext));
@@ -88,7 +88,7 @@ async fn read_authenticator_large_blob<C: Ctap2 + ?Sized>(
     large_blob_key: &[u8; 32],
     max_fragment: u32,
     timeout: Duration,
-) -> Result<Option<Vec<u8>>, LargeBlobError> {
+) -> Result<Option<Vec<u8>>, LargeBlobError<C::TransportError>> {
     let entries = fetch_large_blob_entries(channel, max_fragment, timeout).await?;
     decrypt_first_matching(&entries, large_blob_key)
 }
@@ -97,7 +97,7 @@ async fn fetch_serialized_array<C: Ctap2 + ?Sized>(
     channel: &mut C,
     max_fragment: u32,
     timeout: Duration,
-) -> Result<Vec<u8>, LargeBlobError> {
+) -> Result<Vec<u8>, LargeBlobError<C::TransportError>> {
     let mut out: Vec<u8> = Vec::new();
     let mut offset: u32 = 0;
     loop {
@@ -148,7 +148,7 @@ pub(crate) struct LargeBlobMapEntry {
 
 impl LargeBlobMapEntry {
     /// `Ok(None)` on AEAD failure (skip to next entry), `Err` only on structural problems.
-    fn try_decrypt(&self, key: &[u8; 32]) -> Result<Option<Vec<u8>>, LargeBlobError> {
+    fn try_decrypt<E>(&self, key: &[u8; 32]) -> Result<Option<Vec<u8>>, LargeBlobError<E>> {
         if self.nonce.len() != LARGE_BLOB_NONCE_LEN {
             return Ok(None);
         }
@@ -199,7 +199,7 @@ impl LargeBlobMapEntry {
     }
 }
 
-fn strip_array_trailer(serialized: &[u8]) -> Result<&[u8], LargeBlobError> {
+fn strip_array_trailer<E>(serialized: &[u8]) -> Result<&[u8], LargeBlobError<E>> {
     if serialized.len() < LARGE_BLOB_HASH_LEN {
         return Err(LargeBlobError::Corrupted(format!(
             "serialized array length {} < trailer length {}",
@@ -219,7 +219,7 @@ fn strip_array_trailer(serialized: &[u8]) -> Result<&[u8], LargeBlobError> {
 }
 
 /// Parse entries, skipping any with per-entry structural errors (CTAP 2.2 §6.10.3).
-fn parse_large_blob_array(bytes: &[u8]) -> Result<Vec<LargeBlobMapEntry>, LargeBlobError> {
+fn parse_large_blob_array<E>(bytes: &[u8]) -> Result<Vec<LargeBlobMapEntry>, LargeBlobError<E>> {
     if bytes.is_empty() {
         return Ok(Vec::new());
     }
@@ -286,11 +286,11 @@ fn parse_large_blob_array(bytes: &[u8]) -> Result<Vec<LargeBlobMapEntry>, LargeB
 }
 
 /// Encrypt+compress one entry under `key`, returning the canonical CBOR map per CTAP 2.2 §6.10.3.
-pub(crate) fn encrypt_entry(
+pub(crate) fn encrypt_entry<E>(
     key: &[u8; 32],
     nonce: &[u8],
     plaintext: &[u8],
-) -> Result<Vec<u8>, LargeBlobError> {
+) -> Result<Vec<u8>, LargeBlobError<E>> {
     use flate2::write::DeflateEncoder;
     use flate2::Compression;
     use std::io::Write;
@@ -373,18 +373,18 @@ pub(crate) fn build_serialized_array(entries: &[Vec<u8>]) -> Vec<u8> {
 
 /// `pinUvAuthParam` for an `authenticatorLargeBlobs(set)` chunk. CTAP 2.2 §6.10.2:
 /// `authenticate(token, 32×0xff || h'0c00' || uint32LittleEndian(offset) || SHA-256(set))`.
-pub(crate) fn large_blob_pin_uv_auth_param(
+pub(crate) fn large_blob_pin_uv_auth_param<E>(
     token: &[u8],
     proto: &dyn PinUvAuthProtocol,
     offset: u32,
     chunk: &[u8],
-) -> Result<Vec<u8>, Error> {
+) -> Result<Vec<u8>, WebAuthnError<E>> {
     let mut buf = Vec::with_capacity(32 + 2 + 4 + 32);
     buf.extend_from_slice(&[0xff; 32]);
     buf.extend_from_slice(&[0x0c, 0x00]);
     buf.extend_from_slice(&offset.to_le_bytes());
     buf.extend_from_slice(&Sha256::digest(chunk));
-    proto.authenticate(token, &buf)
+    Ok(proto.authenticate(token, &buf)?)
 }
 
 /// One array element kept as its exact CBOR bytes, plus a best-effort decode for ownership testing.
@@ -393,7 +393,7 @@ struct RawArrayEntry {
     value: Option<Value>,
 }
 
-fn read_byte(cursor: &mut std::io::Cursor<&[u8]>) -> Result<u8, LargeBlobError> {
+fn read_byte<E>(cursor: &mut std::io::Cursor<&[u8]>) -> Result<u8, LargeBlobError<E>> {
     use std::io::Read;
     let mut b = [0u8; 1];
     cursor
@@ -403,7 +403,7 @@ fn read_byte(cursor: &mut std::io::Cursor<&[u8]>) -> Result<u8, LargeBlobError> 
     Ok(byte)
 }
 
-fn read_uint(cursor: &mut std::io::Cursor<&[u8]>, n: usize) -> Result<u64, LargeBlobError> {
+fn read_uint<E>(cursor: &mut std::io::Cursor<&[u8]>, n: usize) -> Result<u64, LargeBlobError<E>> {
     let mut val: u64 = 0;
     for _ in 0..n {
         val = (val << 8) | read_byte(cursor)? as u64;
@@ -412,7 +412,7 @@ fn read_uint(cursor: &mut std::io::Cursor<&[u8]>, n: usize) -> Result<u64, Large
 }
 
 /// Read a definite-length CBOR array header (major type 4), returning the element count.
-fn read_array_header(cursor: &mut std::io::Cursor<&[u8]>) -> Result<usize, LargeBlobError> {
+fn read_array_header<E>(cursor: &mut std::io::Cursor<&[u8]>) -> Result<usize, LargeBlobError<E>> {
     let initial = read_byte(cursor)?;
     if initial >> 5 != 4 {
         return Err(LargeBlobError::Corrupted(format!(
@@ -453,7 +453,7 @@ fn encode_array_header(n: usize) -> Vec<u8> {
 }
 
 /// Parse the top-level array into per-element raw byte spans, preserving foreign entries exactly.
-fn parse_array_raw_entries(bytes: &[u8]) -> Result<Vec<RawArrayEntry>, LargeBlobError> {
+fn parse_array_raw_entries<E>(bytes: &[u8]) -> Result<Vec<RawArrayEntry>, LargeBlobError<E>> {
     if bytes.is_empty() {
         return Ok(Vec::new());
     }
@@ -532,11 +532,11 @@ fn entry_decrypts_under_key(entry: &Value, key: &[u8; 32]) -> bool {
 
 /// Drop entries that AEAD-verify under `drop_key`, optionally append `new_entry`, append the trailer.
 /// Foreign entries are spliced back by their original bytes per CTAP 2.2 §6.10.2.
-fn rebuild_serialized_array(
+fn rebuild_serialized_array<E>(
     existing: &[RawArrayEntry],
     drop_key: &[u8; 32],
     new_entry: Option<Vec<u8>>,
-) -> Result<Vec<u8>, LargeBlobError> {
+) -> Result<Vec<u8>, LargeBlobError<E>> {
     let mut kept: Vec<&[u8]> = Vec::with_capacity(existing.len() + 1);
     for entry in existing {
         if entry
@@ -566,9 +566,9 @@ async fn fetch_or_initial<C: Ctap2 + ?Sized>(
     channel: &mut C,
     max_fragment: u32,
     timeout: Duration,
-) -> Result<Vec<RawArrayEntry>, LargeBlobError> {
+) -> Result<Vec<RawArrayEntry>, LargeBlobError<C::TransportError>> {
     let serialized = fetch_serialized_array(channel, max_fragment, timeout).await?;
-    match strip_array_trailer(&serialized) {
+    match strip_array_trailer::<C::TransportError>(&serialized) {
         Ok(array_bytes) => parse_array_raw_entries(array_bytes),
         Err(_) => {
             warn!("largeBlobArray trailer mismatch; treating as initial empty array (CTAP 2.2 §6.10.2)");
@@ -585,7 +585,7 @@ async fn upload_serialized_array<C: Ctap2 + ?Sized>(
     max_fragment: u32,
     pin_uv_auth: Option<(&[u8], Ctap2PinUvAuthProtocol)>,
     timeout: Duration,
-) -> Result<(), LargeBlobError> {
+) -> Result<(), LargeBlobError<C::TransportError>> {
     let total: u32 = serialized
         .len()
         .try_into()
@@ -654,7 +654,7 @@ pub(crate) async fn write_authenticator_large_blob<C: Ctap2 + ?Sized>(
     max_fragment: u32,
     pin_uv_auth: Option<(&[u8], Ctap2PinUvAuthProtocol)>,
     timeout: Duration,
-) -> Result<(), LargeBlobError> {
+) -> Result<(), LargeBlobError<C::TransportError>> {
     if (blob.len() as u64) > LARGE_BLOB_MAX_ORIG_SIZE {
         return Err(LargeBlobError::Corrupted(format!(
             "blob length {} exceeds platform cap {LARGE_BLOB_MAX_ORIG_SIZE}",
@@ -678,7 +678,7 @@ pub(crate) async fn delete_authenticator_large_blob<C: Ctap2 + ?Sized>(
     max_fragment: u32,
     pin_uv_auth: Option<(&[u8], Ctap2PinUvAuthProtocol)>,
     timeout: Duration,
-) -> Result<(), LargeBlobError> {
+) -> Result<(), LargeBlobError<C::TransportError>> {
     let existing = fetch_or_initial(channel, max_fragment, timeout).await?;
     let any_owned = existing.iter().any(|e| {
         e.value
@@ -696,6 +696,7 @@ pub(crate) async fn delete_authenticator_large_blob<C: Ctap2 + ?Sized>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::convert::Infallible;
 
     fn rp_id_hash(rp_id: &str) -> Vec<u8> {
         use sha2::{Digest, Sha256};
@@ -733,14 +734,14 @@ mod tests {
         let key = [0x42u8; 32];
         let nonce = [0x07u8; 12];
         let plaintext = b"the quick brown fox".to_vec();
-        let entry_bytes = encrypt_entry(&key, &nonce, &plaintext).expect("encrypt");
+        let entry_bytes = encrypt_entry::<Infallible>(&key, &nonce, &plaintext).expect("encrypt");
 
         let serialized = build_serialized_array(&[entry_bytes]);
-        let array_bytes = strip_array_trailer(&serialized).expect("trailer");
-        let parsed = parse_large_blob_array(array_bytes).expect("parse");
+        let array_bytes = strip_array_trailer::<Infallible>(&serialized).expect("trailer");
+        let parsed = parse_large_blob_array::<Infallible>(array_bytes).expect("parse");
         assert_eq!(parsed.len(), 1);
         let plaintext_decoded = parsed[0]
-            .try_decrypt(&key)
+            .try_decrypt::<Infallible>(&key)
             .expect("decrypt")
             .expect("entry should verify under the correct key");
         assert_eq!(plaintext_decoded, plaintext);
@@ -752,12 +753,13 @@ mod tests {
         let wrong_key = [0x43u8; 32];
         let nonce = [0x07u8; 12];
         let plaintext = b"secret".to_vec();
-        let entry_bytes = encrypt_entry(&real_key, &nonce, &plaintext).expect("encrypt");
+        let entry_bytes =
+            encrypt_entry::<Infallible>(&real_key, &nonce, &plaintext).expect("encrypt");
         let serialized = build_serialized_array(&[entry_bytes]);
-        let array_bytes = strip_array_trailer(&serialized).expect("trailer");
-        let parsed = parse_large_blob_array(array_bytes).expect("parse");
+        let array_bytes = strip_array_trailer::<Infallible>(&serialized).expect("trailer");
+        let parsed = parse_large_blob_array::<Infallible>(array_bytes).expect("parse");
         let res = parsed[0]
-            .try_decrypt(&wrong_key)
+            .try_decrypt::<Infallible>(&wrong_key)
             .expect("decrypt should not error on AEAD failure");
         assert!(res.is_none());
     }
@@ -767,22 +769,22 @@ mod tests {
         let mut serialized = build_serialized_array(&[]);
         let last = serialized.len() - 1;
         serialized[last] ^= 0xff;
-        let err = strip_array_trailer(&serialized).unwrap_err();
+        let err = strip_array_trailer::<Infallible>(&serialized).unwrap_err();
         assert!(matches!(err, LargeBlobError::Corrupted(_)));
     }
 
     #[test]
     fn truncated_serialized_array_is_rejected() {
         let too_short = vec![0u8; 8];
-        let err = strip_array_trailer(&too_short).unwrap_err();
+        let err = strip_array_trailer::<Infallible>(&too_short).unwrap_err();
         assert!(matches!(err, LargeBlobError::Corrupted(_)));
     }
 
     #[test]
     fn empty_array_parses_to_zero_entries() {
         let serialized = build_serialized_array(&[]);
-        let array_bytes = strip_array_trailer(&serialized).unwrap();
-        let parsed = parse_large_blob_array(array_bytes).unwrap();
+        let array_bytes = strip_array_trailer::<Infallible>(&serialized).unwrap();
+        let parsed = parse_large_blob_array::<Infallible>(array_bytes).unwrap();
         assert!(parsed.is_empty());
     }
 
@@ -792,17 +794,17 @@ mod tests {
         let key_b = [0xb2u8; 32];
         let key_c = [0xc3u8; 32];
         let nonce = [0x55u8; 12];
-        let entry_a = encrypt_entry(&key_a, &nonce, b"alpha").unwrap();
-        let entry_b = encrypt_entry(&key_b, &nonce, b"bravo").unwrap();
-        let entry_c = encrypt_entry(&key_c, &nonce, b"charlie").unwrap();
+        let entry_a = encrypt_entry::<Infallible>(&key_a, &nonce, b"alpha").unwrap();
+        let entry_b = encrypt_entry::<Infallible>(&key_b, &nonce, b"bravo").unwrap();
+        let entry_c = encrypt_entry::<Infallible>(&key_c, &nonce, b"charlie").unwrap();
         let serialized = build_serialized_array(&[entry_a, entry_b, entry_c]);
-        let array_bytes = strip_array_trailer(&serialized).unwrap();
-        let parsed = parse_large_blob_array(array_bytes).unwrap();
+        let array_bytes = strip_array_trailer::<Infallible>(&serialized).unwrap();
+        let parsed = parse_large_blob_array::<Infallible>(array_bytes).unwrap();
         assert_eq!(parsed.len(), 3);
 
         let mut found_b = None;
         for e in &parsed {
-            if let Some(pt) = e.try_decrypt(&key_b).unwrap() {
+            if let Some(pt) = e.try_decrypt::<Infallible>(&key_b).unwrap() {
                 found_b = Some(pt);
             }
         }
@@ -818,7 +820,7 @@ mod tests {
 
         let key = [0xCAu8; 32];
         let nonce = [0x33u8; 12];
-        let good = encrypt_entry(&key, &nonce, b"survivor").unwrap();
+        let good = encrypt_entry::<Infallible>(&key, &nonce, b"survivor").unwrap();
 
         let bad_entry_bytes = {
             let mut buf = Vec::new();
@@ -827,10 +829,11 @@ mod tests {
             buf
         };
         let serialized = build_serialized_array(&[bad_entry_bytes, good]);
-        let array_bytes = strip_array_trailer(&serialized).unwrap();
-        let parsed = parse_large_blob_array(array_bytes).expect("parse must not error");
+        let array_bytes = strip_array_trailer::<Infallible>(&serialized).unwrap();
+        let parsed =
+            parse_large_blob_array::<Infallible>(array_bytes).expect("parse must not error");
         assert_eq!(parsed.len(), 1, "bad entry skipped, good entry kept");
-        let pt = parsed[0].try_decrypt(&key).unwrap().unwrap();
+        let pt = parsed[0].try_decrypt::<Infallible>(&key).unwrap().unwrap();
         assert_eq!(pt, b"survivor");
     }
 
@@ -842,7 +845,7 @@ mod tests {
 
         let key = [0xCBu8; 32];
         let nonce = [0x44u8; 12];
-        let good = encrypt_entry(&key, &nonce, b"present").unwrap();
+        let good = encrypt_entry::<Infallible>(&key, &nonce, b"present").unwrap();
 
         let incomplete = {
             let mut map = BTreeMap::new();
@@ -854,10 +857,11 @@ mod tests {
             buf
         };
         let serialized = build_serialized_array(&[incomplete, good]);
-        let array_bytes = strip_array_trailer(&serialized).unwrap();
-        let parsed = parse_large_blob_array(array_bytes).expect("parse must not error");
+        let array_bytes = strip_array_trailer::<Infallible>(&serialized).unwrap();
+        let parsed =
+            parse_large_blob_array::<Infallible>(array_bytes).expect("parse must not error");
         assert_eq!(parsed.len(), 1);
-        let pt = parsed[0].try_decrypt(&key).unwrap().unwrap();
+        let pt = parsed[0].try_decrypt::<Infallible>(&key).unwrap().unwrap();
         assert_eq!(pt, b"present");
     }
 
@@ -870,7 +874,7 @@ mod tests {
         let key = [0xC0u8; 32];
         let nonce = [0x11u8; 12];
         let plaintext = b"hello, largeBlob".to_vec();
-        let entry = encrypt_entry(&key, &nonce, &plaintext).unwrap();
+        let entry = encrypt_entry::<Infallible>(&key, &nonce, &plaintext).unwrap();
         let serialized = build_serialized_array(&[entry]);
         assert!(
             serialized.len() < LARGE_BLOB_DEFAULT_FRAGMENT as usize,
@@ -957,7 +961,7 @@ mod tests {
         let large_blob_key = [0x77u8; 32];
         let nonce = [0x22u8; 12];
         let plaintext = b"webauthn end-to-end largeBlob".to_vec();
-        let entry = encrypt_entry(&large_blob_key, &nonce, &plaintext).unwrap();
+        let entry = encrypt_entry::<Infallible>(&large_blob_key, &nonce, &plaintext).unwrap();
         let serialized_array = build_serialized_array(&[entry]);
 
         let credential_id = b"cred-id".to_vec();
@@ -1089,8 +1093,8 @@ mod tests {
         let key1 = [0x22u8; 32];
         let pt0 = b"blob for credential zero".to_vec();
         let pt1 = b"blob for credential one".to_vec();
-        let entry0 = encrypt_entry(&key0, &[0xa0u8; 12], &pt0).unwrap();
-        let entry1 = encrypt_entry(&key1, &[0xb1u8; 12], &pt1).unwrap();
+        let entry0 = encrypt_entry::<Infallible>(&key0, &[0xa0u8; 12], &pt0).unwrap();
+        let entry1 = encrypt_entry::<Infallible>(&key1, &[0xb1u8; 12], &pt1).unwrap();
         let serialized_array = build_serialized_array(&[entry0, entry1]);
         assert!(
             serialized_array.len() < LARGE_BLOB_DEFAULT_FRAGMENT as usize,
@@ -1207,7 +1211,8 @@ mod tests {
         let offset: u32 = 0x12345678;
 
         let proto = PinUvAuthProtocolTwo::new();
-        let got = large_blob_pin_uv_auth_param(&token, &proto, offset, chunk).expect("auth_param");
+        let got = large_blob_pin_uv_auth_param::<Infallible>(&token, &proto, offset, chunk)
+            .expect("auth_param");
 
         let mut expected_msg = Vec::new();
         expected_msg.extend_from_slice(&[0xff; 32]);
@@ -1225,7 +1230,7 @@ mod tests {
     fn entry_decrypts_under_key_matches_owned_entry() {
         let key = [0x42u8; 32];
         let nonce = [0x07u8; 12];
-        let entry_bytes = encrypt_entry(&key, &nonce, b"owned blob").unwrap();
+        let entry_bytes = encrypt_entry::<Infallible>(&key, &nonce, b"owned blob").unwrap();
         let entry: Value = crate::proto::ctap2::cbor::from_slice(&entry_bytes).unwrap();
         assert!(entry_decrypts_under_key(&entry, &key));
     }
@@ -1235,7 +1240,8 @@ mod tests {
         let owner = [0xa1u8; 32];
         let other = [0xb2u8; 32];
         let nonce = [0x33u8; 12];
-        let entry_bytes = encrypt_entry(&owner, &nonce, b"someone else's blob").unwrap();
+        let entry_bytes =
+            encrypt_entry::<Infallible>(&owner, &nonce, b"someone else's blob").unwrap();
         let entry: Value = crate::proto::ctap2::cbor::from_slice(&entry_bytes).unwrap();
         assert!(!entry_decrypts_under_key(&entry, &other));
     }
@@ -1251,20 +1257,20 @@ mod tests {
         let owner_a = [0xa1u8; 32];
         let owner_b = [0xb2u8; 32];
         let nonce = [0x55u8; 12];
-        let entry_a = encrypt_entry(&owner_a, &nonce, b"alpha").unwrap();
-        let entry_b = encrypt_entry(&owner_b, &nonce, b"bravo").unwrap();
+        let entry_a = encrypt_entry::<Infallible>(&owner_a, &nonce, b"alpha").unwrap();
+        let entry_b = encrypt_entry::<Infallible>(&owner_b, &nonce, b"bravo").unwrap();
 
-        let new_entry = encrypt_entry(&owner_a, &[0x99u8; 12], b"alpha v2").unwrap();
+        let new_entry = encrypt_entry::<Infallible>(&owner_a, &[0x99u8; 12], b"alpha v2").unwrap();
 
-        let rebuilt = rebuild_serialized_array(
+        let rebuilt = rebuild_serialized_array::<Infallible>(
             &[raw_entry(&entry_a), raw_entry(&entry_b)],
             &owner_a,
             Some(new_entry),
         )
         .unwrap();
 
-        let array_bytes = strip_array_trailer(&rebuilt).unwrap();
-        let parsed = parse_array_raw_entries(array_bytes).unwrap();
+        let array_bytes = strip_array_trailer::<Infallible>(&rebuilt).unwrap();
+        let parsed = parse_array_raw_entries::<Infallible>(array_bytes).unwrap();
         assert_eq!(
             parsed.len(),
             2,
@@ -1285,14 +1291,17 @@ mod tests {
         let owner_a = [0xa1u8; 32];
         let owner_b = [0xb2u8; 32];
         let nonce = [0x55u8; 12];
-        let entry_a = encrypt_entry(&owner_a, &nonce, b"alpha").unwrap();
-        let entry_b = encrypt_entry(&owner_b, &nonce, b"bravo").unwrap();
+        let entry_a = encrypt_entry::<Infallible>(&owner_a, &nonce, b"alpha").unwrap();
+        let entry_b = encrypt_entry::<Infallible>(&owner_b, &nonce, b"bravo").unwrap();
 
-        let rebuilt =
-            rebuild_serialized_array(&[raw_entry(&entry_a), raw_entry(&entry_b)], &owner_a, None)
-                .unwrap();
-        let array_bytes = strip_array_trailer(&rebuilt).unwrap();
-        let parsed = parse_array_raw_entries(array_bytes).unwrap();
+        let rebuilt = rebuild_serialized_array::<Infallible>(
+            &[raw_entry(&entry_a), raw_entry(&entry_b)],
+            &owner_a,
+            None,
+        )
+        .unwrap();
+        let array_bytes = strip_array_trailer::<Infallible>(&rebuilt).unwrap();
+        let parsed = parse_array_raw_entries::<Infallible>(array_bytes).unwrap();
         assert_eq!(parsed.len(), 1);
         assert!(entry_decrypts_under_key(
             parsed[0].value.as_ref().unwrap(),
@@ -1306,10 +1315,11 @@ mod tests {
         let owner_a = [0xa1u8; 32];
         let owner_b = [0xb2u8; 32];
         let nonce = [0x55u8; 12];
-        let entry_b = encrypt_entry(&owner_b, &nonce, b"bravo").unwrap();
-        let rebuilt = rebuild_serialized_array(&[raw_entry(&entry_b)], &owner_a, None).unwrap();
-        let array_bytes = strip_array_trailer(&rebuilt).unwrap();
-        let parsed = parse_array_raw_entries(array_bytes).unwrap();
+        let entry_b = encrypt_entry::<Infallible>(&owner_b, &nonce, b"bravo").unwrap();
+        let rebuilt =
+            rebuild_serialized_array::<Infallible>(&[raw_entry(&entry_b)], &owner_a, None).unwrap();
+        let array_bytes = strip_array_trailer::<Infallible>(&rebuilt).unwrap();
+        let parsed = parse_array_raw_entries::<Infallible>(array_bytes).unwrap();
         assert_eq!(parsed.len(), 1);
         assert!(entry_decrypts_under_key(
             parsed[0].value.as_ref().unwrap(),
@@ -1323,10 +1333,10 @@ mod tests {
         let owner_a = [0xa1u8; 32];
         let owner_b = [0xb2u8; 32];
 
-        let entry_a_bytes = encrypt_entry(&owner_a, &[0x55u8; 12], b"alpha").unwrap();
+        let entry_a_bytes = encrypt_entry::<Infallible>(&owner_a, &[0x55u8; 12], b"alpha").unwrap();
 
         // Foreign entry under owner_b carrying an extra (future) key 0x07.
-        let entry_b_base = encrypt_entry(&owner_b, &[0x66u8; 12], b"bravo").unwrap();
+        let entry_b_base = encrypt_entry::<Infallible>(&owner_b, &[0x66u8; 12], b"bravo").unwrap();
         let Value::Map(mut map_b) = crate::proto::ctap2::cbor::from_slice(&entry_b_base).unwrap()
         else {
             panic!("entry_b is a map");
@@ -1339,16 +1349,16 @@ mod tests {
         entry_b_bytes.extend_from_slice(&canonical[1..]);
         entry_b_bytes.push(0xFF);
 
-        let new_entry = encrypt_entry(&owner_a, &[0x99u8; 12], b"alpha v2").unwrap();
+        let new_entry = encrypt_entry::<Infallible>(&owner_a, &[0x99u8; 12], b"alpha v2").unwrap();
 
-        let rebuilt = rebuild_serialized_array(
+        let rebuilt = rebuild_serialized_array::<Infallible>(
             &[raw_entry(&entry_a_bytes), raw_entry(&entry_b_bytes)],
             &owner_a,
             Some(new_entry),
         )
         .unwrap();
-        let array_bytes = strip_array_trailer(&rebuilt).unwrap();
-        let parsed = parse_array_raw_entries(array_bytes).unwrap();
+        let array_bytes = strip_array_trailer::<Infallible>(&rebuilt).unwrap();
+        let parsed = parse_array_raw_entries::<Infallible>(array_bytes).unwrap();
         assert_eq!(parsed.len(), 2);
         assert_eq!(
             parsed[0].raw, entry_b_bytes,
@@ -1366,32 +1376,37 @@ mod tests {
 
     #[test]
     fn parse_array_raw_entries_rejects_hostile_headers() {
-        let e0 = encrypt_entry(&[0x01u8; 32], &[0u8; 12], b"a").unwrap();
-        let e1 = encrypt_entry(&[0x02u8; 32], &[0u8; 12], b"b").unwrap();
+        let e0 = encrypt_entry::<Infallible>(&[0x01u8; 32], &[0u8; 12], b"a").unwrap();
+        let e1 = encrypt_entry::<Infallible>(&[0x02u8; 32], &[0u8; 12], b"b").unwrap();
         let mut canonical = encode_array_header(2);
         canonical.extend_from_slice(&e0);
         canonical.extend_from_slice(&e1);
-        assert_eq!(parse_array_raw_entries(&canonical).unwrap().len(), 2);
+        assert_eq!(
+            parse_array_raw_entries::<Infallible>(&canonical)
+                .unwrap()
+                .len(),
+            2
+        );
 
         // Huge declared count (array(2^32-1)) with no element bytes: bounded alloc, errors fast.
-        assert!(parse_array_raw_entries(&[0x9a, 0xff, 0xff, 0xff, 0xff]).is_err());
+        assert!(parse_array_raw_entries::<Infallible>(&[0x9a, 0xff, 0xff, 0xff, 0xff]).is_err());
 
         // Valid array plus one trailing byte: rejected by the full-consumption check.
         let mut trailing = canonical.clone();
         trailing.push(0x00);
-        assert!(parse_array_raw_entries(&trailing).is_err());
+        assert!(parse_array_raw_entries::<Infallible>(&trailing).is_err());
 
         // Header count smaller than the actual element bytes: rejected.
         let mut short = encode_array_header(1);
         short.extend_from_slice(&e0);
         short.extend_from_slice(&e1);
-        assert!(parse_array_raw_entries(&short).is_err());
+        assert!(parse_array_raw_entries::<Infallible>(&short).is_err());
     }
 
     #[test]
     fn rebuild_meets_minimum_17_bytes_when_empty() {
         // CTAP 2.2 §6.10.2: serialized array length MUST be >= 17.
-        let rebuilt = rebuild_serialized_array(&[], &[0u8; 32], None).unwrap();
+        let rebuilt = rebuild_serialized_array::<Infallible>(&[], &[0u8; 32], None).unwrap();
         assert!(rebuilt.len() >= 17);
         // Empty array: 0x80 (1 byte) + 16-byte trailer = 17 bytes.
         assert_eq!(rebuilt.len(), 17);
@@ -1403,7 +1418,7 @@ mod tests {
     /// emission against future serializer drift.
     #[test]
     fn rebuild_empty_array_matches_spec_initial_bytes() {
-        let rebuilt = rebuild_serialized_array(&[], &[0u8; 32], None).unwrap();
+        let rebuilt = rebuild_serialized_array::<Infallible>(&[], &[0u8; 32], None).unwrap();
         assert_eq!(hex::encode(&rebuilt), "8076be8b528d0075f7aae98d6fa57a6d3c");
     }
 
@@ -1421,15 +1436,16 @@ mod tests {
         let plaintext = b"round-trip blob".to_vec();
 
         let nonce = [0x07u8; 12];
-        let entry_bytes = encrypt_entry(&key, &nonce, &plaintext).unwrap();
-        let serialized = rebuild_serialized_array(&[], &key, Some(entry_bytes)).unwrap();
+        let entry_bytes = encrypt_entry::<Infallible>(&key, &nonce, &plaintext).unwrap();
+        let serialized =
+            rebuild_serialized_array::<Infallible>(&[], &key, Some(entry_bytes)).unwrap();
         assert!(
             serialized.len() <= LARGE_BLOB_DEFAULT_FRAGMENT as usize,
             "test fixture must fit in one chunk"
         );
 
-        let auth_param =
-            large_blob_pin_uv_auth_param(&token, &proto, 0, &serialized).expect("auth_param");
+        let auth_param = large_blob_pin_uv_auth_param::<Infallible>(&token, &proto, 0, &serialized)
+            .expect("auth_param");
         let set_req = Ctap2LargeBlobsRequest::new_set_first(
             serialized.clone(),
             serialized.len() as u32,
@@ -1478,7 +1494,8 @@ mod tests {
         for (offset, chunk_len) in [(0u32, 32), (32u32, 32), (64u32, 6)] {
             let chunk = serialized[offset as usize..(offset as usize + chunk_len)].to_vec();
             let auth_param =
-                large_blob_pin_uv_auth_param(&token, &proto, offset, &chunk).expect("auth_param");
+                large_blob_pin_uv_auth_param::<Infallible>(&token, &proto, offset, &chunk)
+                    .expect("auth_param");
             let req = if offset == 0 {
                 Ctap2LargeBlobsRequest::new_set_first(
                     chunk,
@@ -1571,7 +1588,7 @@ mod tests {
         let key = [0xC0u8; 32];
         let nonce = [0x11u8; 12];
         let plaintext = incompressible(31);
-        let entry = encrypt_entry(&key, &nonce, &plaintext).unwrap();
+        let entry = encrypt_entry::<Infallible>(&key, &nonce, &plaintext).unwrap();
         let serialized = build_serialized_array(&[entry]);
         assert!(
             serialized.len() > 2 * MF as usize,
@@ -1589,7 +1606,7 @@ mod tests {
         let entries = fetch_large_blob_entries(&mut channel, MF, Duration::from_secs(5))
             .await
             .expect("fetch");
-        let got = decrypt_first_matching(&entries, &key).expect("decrypt");
+        let got = decrypt_first_matching::<Infallible>(&entries, &key).expect("decrypt");
         assert_eq!(got.as_deref(), Some(plaintext.as_slice()));
     }
 
@@ -1601,7 +1618,7 @@ mod tests {
         let key = [0xD0u8; 32];
         let nonce = [0x22u8; 12];
         let plaintext = incompressible(37);
-        let entry = encrypt_entry(&key, &nonce, &plaintext).unwrap();
+        let entry = encrypt_entry::<Infallible>(&key, &nonce, &plaintext).unwrap();
         let serialized = build_serialized_array(&[entry]);
         assert!(
             serialized.len() > 2 * MF as usize,
@@ -1619,7 +1636,7 @@ mod tests {
         let entries = fetch_large_blob_entries(&mut channel, MF, Duration::from_secs(5))
             .await
             .expect("fetch");
-        let got = decrypt_first_matching(&entries, &key).expect("decrypt");
+        let got = decrypt_first_matching::<Infallible>(&entries, &key).expect("decrypt");
         assert_eq!(got.as_deref(), Some(plaintext.as_slice()));
     }
 
@@ -1660,7 +1677,7 @@ mod tests {
             orig_size: over,
         };
         assert!(oversize
-            .try_decrypt(&key)
+            .try_decrypt::<Infallible>(&key)
             .expect("must not error")
             .is_none());
 
@@ -1691,7 +1708,7 @@ mod tests {
             nonce: nonce.to_vec(),
             orig_size: 4,
         };
-        let err = bomb.try_decrypt(&key).unwrap_err();
+        let err = bomb.try_decrypt::<Infallible>(&key).unwrap_err();
         assert!(
             matches!(&err, LargeBlobError::Corrupted(msg) if msg.contains("decompressed length")),
             "expected length-mismatch Corrupted, got {err:?}"
@@ -1708,7 +1725,7 @@ mod tests {
         let nonce = [0x07u8; 12];
         let plaintext = b"largeBlob deflate rawness payload ".repeat(16);
 
-        let entry_bytes = encrypt_entry(&key, &nonce, &plaintext).expect("encrypt");
+        let entry_bytes = encrypt_entry::<Infallible>(&key, &nonce, &plaintext).expect("encrypt");
 
         let Value::Map(map) = crate::proto::ctap2::cbor::from_slice::<Value>(&entry_bytes).unwrap()
         else {
@@ -1783,98 +1800,133 @@ mod tests {
     /// under the same key MUST emit distinct nonces.
     #[tokio::test]
     async fn each_write_uses_a_distinct_nonce() {
-        use crate::proto::ctap2::{
-            Ctap2AuthenticatorConfigRequest, Ctap2BioEnrollmentRequest, Ctap2BioEnrollmentResponse,
-            Ctap2ClientPinRequest, Ctap2ClientPinResponse, Ctap2CredentialManagementRequest,
-            Ctap2CredentialManagementResponse, Ctap2GetAssertionRequest, Ctap2GetAssertionResponse,
-            Ctap2GetInfoResponse, Ctap2LargeBlobsRequest, Ctap2LargeBlobsResponse,
-            Ctap2MakeCredentialRequest, Ctap2MakeCredentialResponse,
+        use crate::proto::ctap1::apdu::{ApduRequest, ApduResponse};
+        use crate::proto::ctap2::cbor::{CborRequest, CborResponse};
+        use crate::proto::ctap2::Ctap2LargeBlobsResponse;
+        use crate::transport::mock::channel::MockChannel;
+        use crate::transport::{
+            device::SupportedProtocols, AuthTokenData, Channel, ChannelStatus, Ctap2AuthTokenStore,
         };
+        use crate::UvUpdate;
+        use std::fmt::{self, Display};
+        use tokio::sync::broadcast;
 
-        // Records each uploaded array; get() replays the most recent one (RMW round-trip).
+        // Records each uploaded array; a get() replays the most recent one (RMW round-trip).
         struct RecordingChannel {
+            inner: MockChannel,
             current: Vec<u8>,
             sets: Vec<Vec<u8>>,
+            pending_get: bool,
+        }
+
+        impl Display for RecordingChannel {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "RecordingChannel")
+            }
+        }
+
+        impl Ctap2AuthTokenStore for RecordingChannel {
+            fn store_auth_data(&mut self, data: AuthTokenData) {
+                self.inner.store_auth_data(data);
+            }
+            fn get_auth_data(&self) -> Option<&AuthTokenData> {
+                self.inner.get_auth_data()
+            }
+            fn clear_uv_auth_token_store(&mut self) {
+                self.inner.clear_uv_auth_token_store();
+            }
+            fn set_cred_mgmt_preview(&mut self, uses_preview: bool) {
+                self.inner.set_cred_mgmt_preview(uses_preview);
+            }
+            fn cred_mgmt_preview(&self) -> bool {
+                self.inner.cred_mgmt_preview()
+            }
         }
 
         #[async_trait::async_trait]
-        impl Ctap2 for RecordingChannel {
-            async fn ctap2_large_blobs(
+        impl Channel for RecordingChannel {
+            type UxUpdate = UvUpdate;
+            type TransportError = Infallible;
+
+            fn get_ux_update_sender(&self) -> &broadcast::Sender<Self::UxUpdate> {
+                self.inner.get_ux_update_sender()
+            }
+            async fn supported_protocols(
+                &self,
+            ) -> Result<SupportedProtocols, WebAuthnError<Self::TransportError>> {
+                self.inner.supported_protocols().await
+            }
+            async fn status(&self) -> ChannelStatus {
+                ChannelStatus::Ready
+            }
+            async fn close(&mut self) {}
+            async fn apdu_send(
                 &mut self,
-                request: &Ctap2LargeBlobsRequest,
+                _request: &ApduRequest,
                 _timeout: Duration,
-            ) -> Result<Ctap2LargeBlobsResponse, Error> {
-                if request.get.is_some() {
-                    Ok(Ctap2LargeBlobsResponse {
-                        config: Some(serde_bytes::ByteBuf::from(self.current.clone())),
-                    })
-                } else if let Some(set) = request.set.as_ref() {
-                    self.current = set.to_vec();
-                    self.sets.push(set.to_vec());
-                    Ok(Ctap2LargeBlobsResponse::default())
+            ) -> Result<(), Self::TransportError> {
+                unimplemented!()
+            }
+            async fn apdu_recv(
+                &mut self,
+                _timeout: Duration,
+            ) -> Result<ApduResponse, Self::TransportError> {
+                unimplemented!()
+            }
+            async fn cbor_send(
+                &mut self,
+                request: &CborRequest,
+                _timeout: Duration,
+            ) -> Result<(), Self::TransportError> {
+                let Value::Map(map) =
+                    crate::proto::ctap2::cbor::from_slice::<Value>(&request.encoded_data).unwrap()
+                else {
+                    panic!("largeBlobs request must be a CBOR map");
+                };
+                let mut set_bytes: Option<Vec<u8>> = None;
+                let mut is_get = false;
+                for (k, v) in map.iter() {
+                    let Value::Integer(key) = k else { continue };
+                    match *key {
+                        1 => is_get = true,
+                        2 => {
+                            if let Value::Bytes(b) = v {
+                                set_bytes = Some(b.clone());
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if let Some(bytes) = set_bytes {
+                    self.current = bytes.clone();
+                    self.sets.push(bytes);
+                    self.pending_get = false;
+                } else if is_get {
+                    self.pending_get = true;
                 } else {
                     panic!("largeBlobs request was neither get nor set");
                 }
+                Ok(())
             }
-            async fn ctap2_get_info(&mut self) -> Result<Ctap2GetInfoResponse, Error> {
-                unimplemented!()
-            }
-            async fn ctap2_make_credential(
+            async fn cbor_recv(
                 &mut self,
-                _r: &Ctap2MakeCredentialRequest,
-                _t: Duration,
-            ) -> Result<Ctap2MakeCredentialResponse, Error> {
-                unimplemented!()
-            }
-            async fn ctap2_client_pin(
-                &mut self,
-                _r: &Ctap2ClientPinRequest,
-                _t: Duration,
-            ) -> Result<Ctap2ClientPinResponse, Error> {
-                unimplemented!()
-            }
-            async fn ctap2_get_assertion(
-                &mut self,
-                _r: &Ctap2GetAssertionRequest,
-                _t: Duration,
-            ) -> Result<Ctap2GetAssertionResponse, Error> {
-                unimplemented!()
-            }
-            async fn ctap2_get_next_assertion(
-                &mut self,
-                _t: Duration,
-            ) -> Result<Ctap2GetAssertionResponse, Error> {
-                unimplemented!()
-            }
-            async fn ctap2_selection(&mut self, _t: Duration) -> Result<(), Error> {
-                unimplemented!()
-            }
-            async fn ctap2_authenticator_config(
-                &mut self,
-                _r: &Ctap2AuthenticatorConfigRequest,
-                _t: Duration,
-            ) -> Result<(), Error> {
-                unimplemented!()
-            }
-            async fn ctap2_bio_enrollment(
-                &mut self,
-                _r: &Ctap2BioEnrollmentRequest,
-                _t: Duration,
-            ) -> Result<Ctap2BioEnrollmentResponse, Error> {
-                unimplemented!()
-            }
-            async fn ctap2_credential_management(
-                &mut self,
-                _r: &Ctap2CredentialManagementRequest,
-                _t: Duration,
-            ) -> Result<Ctap2CredentialManagementResponse, Error> {
-                unimplemented!()
+                _timeout: Duration,
+            ) -> Result<CborResponse, Self::TransportError> {
+                let resp = if self.pending_get {
+                    Ctap2LargeBlobsResponse {
+                        config: Some(serde_bytes::ByteBuf::from(self.current.clone())),
+                    }
+                } else {
+                    Ctap2LargeBlobsResponse::default()
+                };
+                let bytes = crate::proto::ctap2::cbor::to_vec(&resp).unwrap();
+                Ok(CborResponse::new_success_from_slice(&bytes))
             }
         }
 
         fn entry_nonce(serialized: &[u8]) -> Vec<u8> {
-            let array_bytes = strip_array_trailer(serialized).expect("trailer");
-            let parsed = parse_large_blob_array(array_bytes).expect("parse");
+            let array_bytes = strip_array_trailer::<Infallible>(serialized).expect("trailer");
+            let parsed = parse_large_blob_array::<Infallible>(array_bytes).expect("parse");
             assert_eq!(parsed.len(), 1, "exactly one entry per write");
             parsed[0].nonce.clone()
         }
@@ -1883,8 +1935,10 @@ mod tests {
         let blob = b"distinct-nonce blob".to_vec();
 
         let mut channel = RecordingChannel {
+            inner: MockChannel::new(),
             current: build_serialized_array(&[]),
             sets: Vec::new(),
+            pending_get: false,
         };
         for _ in 0..2 {
             write_authenticator_large_blob(
@@ -1920,7 +1974,8 @@ mod tests {
         let offset: u32 = 0x12345678;
 
         let proto = PinUvAuthProtocolOne::new();
-        let got = large_blob_pin_uv_auth_param(&token, &proto, offset, chunk).expect("auth_param");
+        let got = large_blob_pin_uv_auth_param::<Infallible>(&token, &proto, offset, chunk)
+            .expect("auth_param");
 
         let mut expected_msg = Vec::new();
         expected_msg.extend_from_slice(&[0xff; 32]);

@@ -13,9 +13,10 @@ use crate::{
     transport::{
         device::SupportedProtocols, AuthTokenData, Channel, ChannelStatus, Ctap2AuthTokenStore,
     },
-    webauthn::Error,
+    webauthn::WebAuthnError,
     UvUpdate,
 };
+use std::convert::Infallible;
 
 pub struct MockChannel {
     expected_requests: VecDeque<CborRequest>,
@@ -97,12 +98,15 @@ impl Display for MockChannel {
 #[async_trait]
 impl Channel for MockChannel {
     type UxUpdate = UvUpdate;
+    type TransportError = Infallible;
 
     fn get_ux_update_sender(&self) -> &broadcast::Sender<Self::UxUpdate> {
         &self.ux_update_sender
     }
 
-    async fn supported_protocols(&self) -> Result<SupportedProtocols, Error> {
+    async fn supported_protocols(
+        &self,
+    ) -> Result<SupportedProtocols, WebAuthnError<Self::TransportError>> {
         Ok(SupportedProtocols {
             u2f: false,
             fido2: true,
@@ -115,14 +119,25 @@ impl Channel for MockChannel {
         unimplemented!();
     }
 
-    async fn apdu_send(&mut self, _request: &ApduRequest, _timeout: Duration) -> Result<(), Error> {
+    async fn apdu_send(
+        &mut self,
+        _request: &ApduRequest,
+        _timeout: Duration,
+    ) -> Result<(), Self::TransportError> {
         unimplemented!();
     }
-    async fn apdu_recv(&mut self, _timeout: Duration) -> Result<ApduResponse, Error> {
+    async fn apdu_recv(
+        &mut self,
+        _timeout: Duration,
+    ) -> Result<ApduResponse, Self::TransportError> {
         unimplemented!();
     }
 
-    async fn cbor_send(&mut self, request: &CborRequest, _timeout: Duration) -> Result<(), Error> {
+    async fn cbor_send(
+        &mut self,
+        request: &CborRequest,
+        _timeout: Duration,
+    ) -> Result<(), Self::TransportError> {
         if let Some(delay) = self.pre_send_delay {
             sleep(delay).await;
         }
@@ -138,7 +153,10 @@ impl Channel for MockChannel {
         );
         Ok(())
     }
-    async fn cbor_recv(&mut self, _timeout: Duration) -> Result<CborResponse, Error> {
+    async fn cbor_recv(
+        &mut self,
+        _timeout: Duration,
+    ) -> Result<CborResponse, Self::TransportError> {
         let response = self
             .responses
             .pop_back()

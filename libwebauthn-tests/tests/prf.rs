@@ -8,8 +8,9 @@ use libwebauthn::ops::webauthn::{
 use libwebauthn::pin::PinManagement;
 use libwebauthn::proto::ctap2::{Ctap2PinUvAuthProtocol, Ctap2PublicKeyCredentialDescriptor};
 use libwebauthn::transport::hid::channel::HidChannel;
+use libwebauthn::transport::hid::HidError;
 use libwebauthn::transport::{Channel, ChannelSettings, Ctap2AuthTokenStore, Device};
-use libwebauthn::webauthn::{Error as WebAuthnError, PlatformError, WebAuthn};
+use libwebauthn::webauthn::{PlatformError, WebAuthn, WebAuthnError};
 use libwebauthn::UvUpdate;
 use libwebauthn::{
     ops::webauthn::{MakeCredentialRequest, ResidentKeyRequirement, UserVerificationRequirement},
@@ -490,7 +491,7 @@ async fn run_test_battery(channel: &mut HidChannel<'_>, using_pin: bool) {
         &challenge,
         prf,
         "Wrongly encoded credential_id",
-        WebAuthnError::Platform(PlatformError::SyntaxError),
+        PlatformError::SyntaxError,
     )
     .await;
 
@@ -514,7 +515,7 @@ async fn run_test_battery(channel: &mut HidChannel<'_>, using_pin: bool) {
         &challenge,
         prf,
         "Empty credential_id",
-        WebAuthnError::Platform(PlatformError::SyntaxError),
+        PlatformError::SyntaxError,
     )
     .await;
 
@@ -538,7 +539,7 @@ async fn run_test_battery(channel: &mut HidChannel<'_>, using_pin: bool) {
         &challenge,
         prf,
         "Empty allow_list, set eval_by_credential",
-        WebAuthnError::Platform(PlatformError::NotSupported),
+        PlatformError::NotSupported,
     )
     .await;
 
@@ -621,7 +622,7 @@ async fn run_failed_test(
     challenge: &[u8; 32],
     prf: PrfInput,
     printoutput: &str,
-    expected_error: WebAuthnError,
+    expected_error: PlatformError,
 ) {
     let get_assertion = GetAssertionRequest {
         relying_party_id: "example.org".to_owned(),
@@ -637,7 +638,7 @@ async fn run_failed_test(
         top_origin: None,
     };
 
-    let response: Result<(), WebAuthnError> = loop {
+    let response: Result<(), WebAuthnError<HidError>> = loop {
         match channel.webauthn_get_assertion(&get_assertion).await {
             Ok(_) => panic!("Success, even though it should have errored out!"),
             Err(WebAuthnError::Ctap(ctap_error)) => {
@@ -651,7 +652,10 @@ async fn run_failed_test(
         };
     };
 
-    assert_eq!(response, Err(expected_error), "{printoutput}:");
+    match response {
+        Err(WebAuthnError::Platform(got)) => assert_eq!(got, expected_error, "{printoutput}:"),
+        other => panic!("{printoutput}: expected {expected_error:?}, got {other:?}"),
+    }
     println!("Success for test: {printoutput}")
 }
 

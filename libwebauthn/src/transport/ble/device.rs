@@ -5,10 +5,10 @@ use async_trait::async_trait;
 use hex::ToHex;
 use tracing::{info, instrument};
 
+use crate::transport::ble::error::BleError;
 use crate::transport::device::Device;
-use crate::transport::error::TransportError;
 use crate::transport::ChannelSettings;
-use crate::webauthn::error::Error;
+use crate::webauthn::error::WebAuthnError;
 
 use super::btleplug::manager::SupportedRevisions;
 use super::btleplug::{supported_fido_revisions, FidoDevice as BtleplugFidoDevice};
@@ -22,10 +22,9 @@ pub async fn is_available() -> bool {
 }
 
 #[instrument]
-pub async fn list_devices() -> Result<Vec<BleDevice>, Error> {
+pub async fn list_devices() -> Result<Vec<BleDevice>, BleError> {
     let devices: Vec<_> = btleplug::list_fido_devices()
-        .await
-        .or(Err(Error::Transport(TransportError::TransportUnavailable)))?
+        .await?
         .iter()
         .map(|bluez_device| bluez_device.into())
         .collect();
@@ -79,8 +78,14 @@ impl fmt::Display for BleDevice {
 
 #[async_trait]
 impl<'d> Device<'d, Ble, BleChannel<'d>> for BleDevice {
-    async fn channel(&'d mut self, settings: ChannelSettings) -> Result<BleChannel<'d>, Error> {
-        let revisions = self.supported_revisions().await?;
+    async fn channel(
+        &'d mut self,
+        settings: ChannelSettings,
+    ) -> Result<BleChannel<'d>, WebAuthnError<BleError>> {
+        let revisions = self
+            .supported_revisions()
+            .await
+            .map_err(WebAuthnError::Transport)?;
         let channel = BleChannel::new(self, &revisions, settings).await?;
         Ok(channel)
     }
@@ -93,12 +98,10 @@ impl<'d> Device<'d, Ble, BleChannel<'d>> for BleDevice {
 }
 
 impl BleDevice {
-    async fn supported_revisions(&mut self) -> Result<SupportedRevisions, Error> {
+    async fn supported_revisions(&mut self) -> Result<SupportedRevisions, BleError> {
         let revisions = match self.revisions {
             None => {
-                let revisions = supported_fido_revisions(&self.btleplug_device.peripheral)
-                    .await
-                    .or(Err(Error::Transport(TransportError::NegotiationFailed)))?;
+                let revisions = supported_fido_revisions(&self.btleplug_device.peripheral).await?;
                 self.revisions = Some(revisions);
                 revisions
             }

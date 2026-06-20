@@ -18,7 +18,7 @@ use crate::proto::ctap2::{
     Ctap2AttestationStatement, Ctap2GetAssertionResponse, Ctap2MakeCredentialResponse,
     Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialType, FidoU2fAttestationStmt,
 };
-use crate::webauthn::{CtapError, Error, PlatformError};
+use crate::webauthn::{CtapError, PlatformError, WebAuthnError};
 
 // FIDO U2F operations can be aliased to CTAP1 requests, as they have no other representation.
 pub type RegisterRequest = Ctap1RegisterRequest;
@@ -44,43 +44,43 @@ impl SignRequest {
 }
 
 pub trait UpgradableResponse<T, R> {
-    fn try_upgrade(&self, request: &R) -> Result<T, Error>;
+    fn try_upgrade<E>(&self, request: &R) -> Result<T, WebAuthnError<E>>;
 }
 
 impl UpgradableResponse<MakeCredentialResponse, MakeCredentialRequest> for RegisterResponse {
-    fn try_upgrade(
+    fn try_upgrade<E>(
         &self,
         request: &MakeCredentialRequest,
-    ) -> Result<MakeCredentialResponse, Error> {
+    ) -> Result<MakeCredentialResponse, WebAuthnError<E>> {
         // Let x9encodedUserPublicKeybe the user public key returned in the U2F registration response message [U2FRawMsgs].
         // Let coseEncodedCredentialPublicKey be the result of converting x9encodedUserPublicKey’s value
         // from ANS X9.62 / Sec-1 v2 uncompressed curve point representation [SEC1V2]
         // to COSE_Key representation ([RFC8152] Section 7).
         let Ok(encoded_point) = p256::EncodedPoint::from_bytes(&self.public_key) else {
             error!(?self.public_key, "Failed to parse public key as SEC-1 v2 encoded point");
-            return Err(Error::Ctap(CtapError::Other));
+            return Err(WebAuthnError::Ctap(CtapError::Other));
         };
         let x_bytes = encoded_point.x().ok_or_else(|| {
             error!("Public key is the identity point");
-            Error::Platform(PlatformError::CryptoError(
+            WebAuthnError::Platform(PlatformError::CryptoError(
                 "public key is the identity point".into(),
             ))
         })?;
         let y_bytes = encoded_point.y().ok_or_else(|| {
             error!("Public key is identity or compressed");
-            Error::Platform(PlatformError::CryptoError(
+            WebAuthnError::Platform(PlatformError::CryptoError(
                 "public key is identity or compressed".into(),
             ))
         })?;
         let x: heapless::Vec<u8, 32> =
             heapless::Vec::from_slice(x_bytes.as_bytes()).map_err(|_| {
-                Error::Platform(PlatformError::CryptoError(
+                WebAuthnError::Platform(PlatformError::CryptoError(
                     "x coordinate exceeds 32 bytes".into(),
                 ))
             })?;
         let y: heapless::Vec<u8, 32> =
             heapless::Vec::from_slice(y_bytes.as_bytes()).map_err(|_| {
-                Error::Platform(PlatformError::CryptoError(
+                WebAuthnError::Platform(PlatformError::CryptoError(
                     "y coordinate exceeds 32 bytes".into(),
                 ))
             })?;
@@ -97,7 +97,7 @@ impl UpgradableResponse<MakeCredentialResponse, MakeCredentialRequest> for Regis
                 len = cose_encoded_public_key.len(),
                 "COSE-encoded P-256 public key is not 77 bytes"
             );
-            return Err(Error::Platform(PlatformError::CryptoError(
+            return Err(WebAuthnError::Platform(PlatformError::CryptoError(
                 "unexpected COSE-encoded public key length".into(),
             )));
         }
@@ -175,7 +175,10 @@ impl UpgradableResponse<MakeCredentialResponse, MakeCredentialRequest> for Regis
 }
 
 impl UpgradableResponse<GetAssertionResponse, SignRequest> for SignResponse {
-    fn try_upgrade(&self, request: &SignRequest) -> Result<GetAssertionResponse, Error> {
+    fn try_upgrade<E>(
+        &self,
+        request: &SignRequest,
+    ) -> Result<GetAssertionResponse, WebAuthnError<E>> {
         // Generate authenticatorData from the U2F authentication response message received from the authenticator:
 
         // Copy bits 0 (the UP bit) and bit 1 from the CTAP2/U2F response user presence byte to bits 0 and 1 of the
@@ -197,7 +200,7 @@ impl UpgradableResponse<GetAssertionResponse, SignRequest> for SignResponse {
         let authenticator_data = AuthenticatorData {
             rp_id_hash: request.app_id_hash.clone().try_into().map_err(|_| {
                 error!("app_id_hash has invalid length, expected 32 bytes");
-                Error::Platform(PlatformError::InvalidDeviceResponse)
+                WebAuthnError::Platform(PlatformError::InvalidDeviceResponse)
             })?,
             flags,
             signature_count,

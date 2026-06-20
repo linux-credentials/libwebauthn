@@ -15,14 +15,22 @@ use crate::fido::FidoProtocol;
 use crate::ops::u2f::{RegisterRequest, SignRequest};
 use crate::ops::u2f::{RegisterResponse, SignResponse};
 use crate::proto::ctap1::Ctap1;
-use crate::transport::{error::TransportError, Channel};
-use crate::webauthn::error::Error;
+use crate::transport::Channel;
+use crate::webauthn::error::{PlatformError, WebAuthnError};
 
 #[async_trait]
-pub trait U2F {
-    async fn u2f_negotiate_protocol(&mut self) -> Result<FidoProtocol, Error>;
-    async fn u2f_register(&mut self, op: &RegisterRequest) -> Result<RegisterResponse, Error>;
-    async fn u2f_sign(&mut self, op: &SignRequest) -> Result<SignResponse, Error>;
+pub trait U2F: Channel {
+    async fn u2f_negotiate_protocol(
+        &mut self,
+    ) -> Result<FidoProtocol, WebAuthnError<Self::TransportError>>;
+    async fn u2f_register(
+        &mut self,
+        op: &RegisterRequest,
+    ) -> Result<RegisterResponse, WebAuthnError<Self::TransportError>>;
+    async fn u2f_sign(
+        &mut self,
+        op: &SignRequest,
+    ) -> Result<SignResponse, WebAuthnError<Self::TransportError>>;
 }
 
 #[async_trait]
@@ -31,11 +39,13 @@ where
     C: Channel,
 {
     #[instrument(skip_all)]
-    async fn u2f_negotiate_protocol(&mut self) -> Result<FidoProtocol, Error> {
+    async fn u2f_negotiate_protocol(
+        &mut self,
+    ) -> Result<FidoProtocol, WebAuthnError<Self::TransportError>> {
         let supported = self.supported_protocols().await?;
         if !supported.u2f && !supported.fido2 {
             warn!("Negotiation failed: channel doesn't support U2F nor FIDO2");
-            return Err(Error::Transport(TransportError::NegotiationFailed));
+            return Err(WebAuthnError::Platform(PlatformError::NotSupported));
         }
         // Ensure CTAP1 version is reported correctly.
         self.ctap1_version().await?;
@@ -44,20 +54,26 @@ where
     }
 
     #[instrument(skip_all, fields(dev = %self))]
-    async fn u2f_register(&mut self, op: &RegisterRequest) -> Result<RegisterResponse, Error> {
+    async fn u2f_register(
+        &mut self,
+        op: &RegisterRequest,
+    ) -> Result<RegisterResponse, WebAuthnError<Self::TransportError>> {
         let protocol = self.u2f_negotiate_protocol().await?;
         match protocol {
             FidoProtocol::U2F => self.ctap1_register(op).await,
-            _ => Err(Error::Transport(TransportError::NegotiationFailed)),
+            _ => Err(WebAuthnError::Platform(PlatformError::NotSupported)),
         }
     }
 
     #[instrument(skip_all, fields(dev = %self))]
-    async fn u2f_sign(&mut self, op: &SignRequest) -> Result<SignResponse, Error> {
+    async fn u2f_sign(
+        &mut self,
+        op: &SignRequest,
+    ) -> Result<SignResponse, WebAuthnError<Self::TransportError>> {
         let protocol = self.u2f_negotiate_protocol().await?;
         match protocol {
             FidoProtocol::U2F => self.ctap1_sign(op).await,
-            _ => Err(Error::Transport(TransportError::NegotiationFailed)),
+            _ => Err(WebAuthnError::Platform(PlatformError::NotSupported)),
         }
     }
 }

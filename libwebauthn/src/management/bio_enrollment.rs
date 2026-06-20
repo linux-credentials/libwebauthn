@@ -11,7 +11,7 @@ use crate::{
     transport::Channel,
     unwrap_field,
     webauthn::{
-        error::{CtapError, Error, PlatformError},
+        error::{CtapError, PlatformError, WebAuthnError},
         handle_errors,
         pin_uv_auth_token::{user_verification, UsedPinUvAuthToken},
     },
@@ -23,42 +23,45 @@ use std::time::Duration;
 use tracing::{info, warn};
 
 #[async_trait]
-pub trait BioEnrollment {
+pub trait BioEnrollment: Channel {
     async fn get_bio_modality(
         &mut self,
         timeout: Duration,
-    ) -> Result<Ctap2BioEnrollmentModality, Error>;
+    ) -> Result<Ctap2BioEnrollmentModality, WebAuthnError<Self::TransportError>>;
     async fn get_fingerprint_sensor_info(
         &mut self,
         timeout: Duration,
-    ) -> Result<Ctap2BioEnrollmentFingerprintSensorInfo, Error>;
+    ) -> Result<Ctap2BioEnrollmentFingerprintSensorInfo, WebAuthnError<Self::TransportError>>;
     async fn get_bio_enrollments(
         &mut self,
         timeout: Duration,
-    ) -> Result<Vec<Ctap2BioEnrollmentTemplateId>, Error>;
+    ) -> Result<Vec<Ctap2BioEnrollmentTemplateId>, WebAuthnError<Self::TransportError>>;
     async fn remove_bio_enrollment(
         &mut self,
         template_id: &[u8],
         timeout: Duration,
-    ) -> Result<(), Error>;
+    ) -> Result<(), WebAuthnError<Self::TransportError>>;
     async fn rename_bio_enrollment(
         &mut self,
         template_id: &[u8],
         template_friendly_name: &str,
         timeout: Duration,
-    ) -> Result<(), Error>;
+    ) -> Result<(), WebAuthnError<Self::TransportError>>;
     async fn start_new_bio_enrollment(
         &mut self,
         enrollment_timeout: Option<Duration>,
         timeout: Duration,
-    ) -> Result<(Vec<u8>, Ctap2LastEnrollmentSampleStatus, u64), Error>;
+    ) -> Result<(Vec<u8>, Ctap2LastEnrollmentSampleStatus, u64), WebAuthnError<Self::TransportError>>;
     async fn capture_next_bio_enrollment_sample(
         &mut self,
         template_id: &[u8],
         enrollment_timeout: Option<Duration>,
         timeout: Duration,
-    ) -> Result<(Ctap2LastEnrollmentSampleStatus, u64), Error>;
-    async fn cancel_current_bio_enrollment(&mut self, timeout: Duration) -> Result<(), Error>;
+    ) -> Result<(Ctap2LastEnrollmentSampleStatus, u64), WebAuthnError<Self::TransportError>>;
+    async fn cancel_current_bio_enrollment(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<(), WebAuthnError<Self::TransportError>>;
 }
 
 #[derive(Debug, Clone)]
@@ -77,7 +80,7 @@ where
     async fn get_bio_modality(
         &mut self,
         timeout: Duration,
-    ) -> Result<Ctap2BioEnrollmentModality, Error> {
+    ) -> Result<Ctap2BioEnrollmentModality, WebAuthnError<Self::TransportError>> {
         let req = Ctap2BioEnrollmentRequest::new_get_modality();
         // No UV needed
         let resp = self.ctap2_bio_enrollment(&req, timeout).await?;
@@ -85,7 +88,7 @@ where
             Some(modality) => Ok(modality),
             None => {
                 warn!("Channel did not return modality.");
-                Err(Error::Ctap(CtapError::Other))
+                Err(WebAuthnError::Ctap(CtapError::Other))
             }
         }
     }
@@ -93,13 +96,13 @@ where
     async fn get_fingerprint_sensor_info(
         &mut self,
         timeout: Duration,
-    ) -> Result<Ctap2BioEnrollmentFingerprintSensorInfo, Error> {
+    ) -> Result<Ctap2BioEnrollmentFingerprintSensorInfo, WebAuthnError<Self::TransportError>> {
         let req = Ctap2BioEnrollmentRequest::new_fingerprint_sensor_info();
         // No UV needed
         let resp = self.ctap2_bio_enrollment(&req, timeout).await?;
         let Some(fingerprint_kind) = resp.fingerprint_kind else {
             warn!("Channel did not return fingerprint_kind in sensor info.");
-            return Err(Error::Ctap(CtapError::Other));
+            return Err(WebAuthnError::Ctap(CtapError::Other));
         };
         Ok(Ctap2BioEnrollmentFingerprintSensorInfo {
             fingerprint_kind,
@@ -111,7 +114,7 @@ where
     async fn get_bio_enrollments(
         &mut self,
         timeout: Duration,
-    ) -> Result<Vec<Ctap2BioEnrollmentTemplateId>, Error> {
+    ) -> Result<Vec<Ctap2BioEnrollmentTemplateId>, WebAuthnError<Self::TransportError>> {
         let mut req = Ctap2BioEnrollmentRequest::new_enumerate_enrollments();
 
         let resp = loop {
@@ -138,7 +141,7 @@ where
         &mut self,
         template_id: &[u8],
         timeout: Duration,
-    ) -> Result<(), Error> {
+    ) -> Result<(), WebAuthnError<Self::TransportError>> {
         let mut req = Ctap2BioEnrollmentRequest::new_remove_enrollment(template_id);
 
         loop {
@@ -169,7 +172,7 @@ where
         template_id: &[u8],
         template_friendly_name: &str,
         timeout: Duration,
-    ) -> Result<(), Error> {
+    ) -> Result<(), WebAuthnError<Self::TransportError>> {
         let mut req =
             Ctap2BioEnrollmentRequest::new_rename_enrollment(template_id, template_friendly_name);
         loop {
@@ -198,7 +201,8 @@ where
         &mut self,
         enrollment_timeout: Option<Duration>,
         timeout: Duration,
-    ) -> Result<(Vec<u8>, Ctap2LastEnrollmentSampleStatus, u64), Error> {
+    ) -> Result<(Vec<u8>, Ctap2LastEnrollmentSampleStatus, u64), WebAuthnError<Self::TransportError>>
+    {
         let mut req = Ctap2BioEnrollmentRequest::new_start_new_enrollment(enrollment_timeout);
 
         let resp = loop {
@@ -230,7 +234,7 @@ where
         template_id: &[u8],
         enrollment_timeout: Option<Duration>,
         timeout: Duration,
-    ) -> Result<(Ctap2LastEnrollmentSampleStatus, u64), Error> {
+    ) -> Result<(Ctap2LastEnrollmentSampleStatus, u64), WebAuthnError<Self::TransportError>> {
         let mut req =
             Ctap2BioEnrollmentRequest::new_next_enrollment(template_id, enrollment_timeout);
 
@@ -257,7 +261,10 @@ where
         Ok((sample_status, remaining_samples))
     }
 
-    async fn cancel_current_bio_enrollment(&mut self, timeout: Duration) -> Result<(), Error> {
+    async fn cancel_current_bio_enrollment(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<(), WebAuthnError<Self::TransportError>> {
         let mut req = Ctap2BioEnrollmentRequest::new_cancel_current_enrollment();
 
         loop {
@@ -293,11 +300,11 @@ impl Ctap2UserVerifiableRequest for Ctap2BioEnrollmentRequest {
         &mut self,
         uv_proto: &dyn PinUvAuthProtocol,
         uv_auth_token: &[u8],
-    ) -> Result<(), Error> {
+    ) -> Result<(), PlatformError> {
         // pinUvAuthParam (0x05): authenticate(pinUvAuthToken, fingerprint (0x01) || enumerateEnrollments (0x04)).
         let subcommand = self
             .subcommand
-            .ok_or(Error::Platform(PlatformError::InvalidDeviceResponse))?;
+            .ok_or(PlatformError::InvalidDeviceResponse)?;
         let mut data = vec![
             Ctap2BioEnrollmentModality::Fingerprint as u8,
             subcommand as u8,

@@ -4,7 +4,7 @@ use crate::fido::FidoRevision;
 use async_trait::async_trait;
 
 use crate::transport::ble::btleplug::manager::SupportedRevisions;
-use crate::webauthn::error::Error;
+use crate::webauthn::error::WebAuthnError;
 
 use super::{Channel, ChannelSettings, Transport};
 
@@ -14,8 +14,10 @@ where
     T: Transport,
     C: Channel + 'd,
 {
-    async fn channel(&'d mut self, settings: ChannelSettings) -> Result<C, Error>;
-    // async fn supported_protocols(&mut self) -> Result<SupportedProtocols, Error>;
+    async fn channel(
+        &'d mut self,
+        settings: ChannelSettings,
+    ) -> Result<C, WebAuthnError<C::TransportError>>;
 }
 
 #[derive(Debug, Copy, Clone, Default)]

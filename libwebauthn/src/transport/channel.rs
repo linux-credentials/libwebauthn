@@ -10,7 +10,7 @@ use crate::proto::{
     ctap1::apdu::{ApduRequest, ApduResponse},
     ctap2::cbor::{CborRequest, CborResponse},
 };
-use crate::webauthn::error::Error;
+use crate::webauthn::error::WebAuthnError;
 use crate::Transport;
 use crate::UvUpdate;
 
@@ -44,6 +44,9 @@ pub trait Channel: Send + Sync + Display + Ctap2AuthTokenStore {
     /// UX updates for this channel, must include UV updates.
     type UxUpdate: Send + Sync + Debug + From<UvUpdate>;
 
+    /// Per-transport concrete error. Set by each transport to its own enum.
+    type TransportError: std::error::Error + Send + Sync + 'static;
+
     /// Broadcast sender fanning UX updates out to subscribed receivers.
     fn get_ux_update_sender(&self) -> &broadcast::Sender<Self::UxUpdate>;
 
@@ -64,7 +67,9 @@ pub trait Channel: Send + Sync + Display + Ctap2AuthTokenStore {
         };
     }
 
-    async fn supported_protocols(&self) -> Result<SupportedProtocols, Error>;
+    async fn supported_protocols(
+        &self,
+    ) -> Result<SupportedProtocols, WebAuthnError<Self::TransportError>>;
     async fn status(&self) -> ChannelStatus;
     async fn close(&mut self);
 
@@ -74,11 +79,19 @@ pub trait Channel: Send + Sync + Display + Ctap2AuthTokenStore {
         Transport::Usb
     }
 
-    async fn apdu_send(&mut self, request: &ApduRequest, timeout: Duration) -> Result<(), Error>;
-    async fn apdu_recv(&mut self, timeout: Duration) -> Result<ApduResponse, Error>;
+    async fn apdu_send(
+        &mut self,
+        request: &ApduRequest,
+        timeout: Duration,
+    ) -> Result<(), Self::TransportError>;
+    async fn apdu_recv(&mut self, timeout: Duration) -> Result<ApduResponse, Self::TransportError>;
 
-    async fn cbor_send(&mut self, request: &CborRequest, timeout: Duration) -> Result<(), Error>;
-    async fn cbor_recv(&mut self, timeout: Duration) -> Result<CborResponse, Error>;
+    async fn cbor_send(
+        &mut self,
+        request: &CborRequest,
+        timeout: Duration,
+    ) -> Result<(), Self::TransportError>;
+    async fn cbor_recv(&mut self, timeout: Duration) -> Result<CborResponse, Self::TransportError>;
 
     /// Allows channels to disable support for pre-flight requests
     fn supports_preflight() -> bool {

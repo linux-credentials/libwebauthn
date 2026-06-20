@@ -13,7 +13,7 @@ use super::error::CableTunnelError;
 use super::known_devices::CableKnownDeviceId;
 use super::protocol::CableTunnelConnectionType;
 use crate::proto::ctap2::cbor;
-use crate::transport::error::TransportError;
+use crate::transport::cable::error::CableError;
 
 const MAX_TUNNEL_REDIRECTS: usize = 5;
 
@@ -66,42 +66,30 @@ pub fn decode_tunnel_server_domain(encoded: u16) -> Option<String> {
 pub(crate) fn build_tunnel_request(
     url: &str,
     connection_type: &CableTunnelConnectionType,
-) -> Result<Request, TransportError> {
-    let mut request = url
-        .into_client_request()
-        .or(Err(TransportError::InvalidEndpoint))?;
+) -> Result<Request, CableError> {
+    let mut request = url.into_client_request().map_err(CableError::from)?;
     let headers = request.headers_mut();
-    headers.insert(
-        "Sec-WebSocket-Protocol",
-        "fido.cable"
-            .parse()
-            .or(Err(TransportError::InvalidEndpoint))?,
-    );
+    headers.insert("Sec-WebSocket-Protocol", "fido.cable".parse()?);
 
     if let CableTunnelConnectionType::KnownDevice { client_payload, .. } = connection_type {
-        let client_payload =
-            cbor::to_vec(client_payload).or(Err(TransportError::InvalidEndpoint))?;
+        let client_payload = cbor::to_vec(client_payload)?;
         headers.insert(
             "X-caBLE-Client-Payload",
-            hex::encode(client_payload)
-                .parse()
-                .or(Err(TransportError::InvalidEndpoint))?,
+            hex::encode(client_payload).parse()?,
         );
     }
     Ok(request)
 }
 
 /// Resolves a redirect Location, which may be relative, against the current URL.
-fn resolve_redirect_target(base: &str, location: &str) -> Result<String, TransportError> {
-    let base = Url::parse(base).or(Err(TransportError::InvalidEndpoint))?;
-    let target = base
-        .join(location)
-        .or(Err(TransportError::InvalidEndpoint))?;
+fn resolve_redirect_target(base: &str, location: &str) -> Result<String, CableError> {
+    let base = Url::parse(base)?;
+    let target = base.join(location)?;
     Ok(target.to_string())
 }
 
 /// Maps a non-101 tunnel handshake status to a transport error, distinguishing 410 Gone.
-fn tunnel_status_error(status: StatusCode) -> TransportError {
+fn tunnel_status_error(status: StatusCode) -> CableError {
     if status == StatusCode::GONE {
         CableTunnelError::Gone.into()
     } else {
@@ -111,12 +99,12 @@ fn tunnel_status_error(status: StatusCode) -> TransportError {
 
 /// The known-device id to forget on a 410 Gone, for a known-device connection.
 pub(crate) fn known_device_id_to_forget(
-    error: &TransportError,
+    error: &CableError,
     connection_type: &CableTunnelConnectionType,
 ) -> Option<CableKnownDeviceId> {
     match (error, connection_type) {
         (
-            TransportError::CableTunnel(CableTunnelError::Gone),
+            CableError::CableTunnel(CableTunnelError::Gone),
             CableTunnelConnectionType::KnownDevice {
                 authenticator_public_key,
                 ..
@@ -129,7 +117,7 @@ pub(crate) fn known_device_id_to_forget(
 pub(crate) async fn connect(
     tunnel_domain: &str,
     connection_type: &CableTunnelConnectionType,
-) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>, TransportError> {
+) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>, CableError> {
     ensure_rustls_crypto_provider();
 
     let mut connect_url = match connection_type {
@@ -156,7 +144,7 @@ pub(crate) async fn connect(
                 debug!(?response, "Connected to tunnel server");
                 if response.status() != StatusCode::SWITCHING_PROTOCOLS {
                     error!(?response, "Failed to switch to websocket protocol");
-                    return Err(TransportError::ConnectionFailed);
+                    return Err(CableError::ConnectionFailed);
                 }
                 debug!("Tunnel server returned success");
                 return Ok(ws_stream);
@@ -164,9 +152,12 @@ pub(crate) async fn connect(
             Err(error) => error,
         };
 
-        let TungsteniteError::Http(response) = error else {
-            error!(?error, "Failed to connect to tunnel server");
-            return Err(TransportError::ConnectionFailed);
+        let response = match error {
+            TungsteniteError::Http(response) => response,
+            error => {
+                error!(?error, "Failed to connect to tunnel server");
+                return Err(CableError::from(error));
+            }
         };
 
         let status = response.status();
@@ -177,7 +168,7 @@ pub(crate) async fn connect(
                 .and_then(|value| value.to_str().ok())
             else {
                 error!(?status, "Tunnel redirect missing a usable Location header");
-                return Err(TransportError::ConnectionFailed);
+                return Err(CableError::ConnectionFailed);
             };
             connect_url = resolve_redirect_target(&connect_url, location)?;
             debug!(?connect_url, "Following tunnel redirect");
@@ -291,7 +282,7 @@ mod tests {
         let connection_type = known_device_connection_type(public_key.clone());
         assert_eq!(
             known_device_id_to_forget(
-                &TransportError::CableTunnel(CableTunnelError::Gone),
+                &CableError::CableTunnel(CableTunnelError::Gone),
                 &connection_type
             ),
             Some(hex::encode(&public_key))
@@ -303,7 +294,7 @@ mod tests {
         let connection_type = qr_connection_type();
         assert_eq!(
             known_device_id_to_forget(
-                &TransportError::CableTunnel(CableTunnelError::Gone),
+                &CableError::CableTunnel(CableTunnelError::Gone),
                 &connection_type
             ),
             None
@@ -314,20 +305,20 @@ mod tests {
     fn non_gone_error_does_not_forget_known_device() {
         let connection_type = known_device_connection_type(vec![7u8; 65]);
         assert_eq!(
-            known_device_id_to_forget(&TransportError::ConnectionFailed, &connection_type),
+            known_device_id_to_forget(&CableError::ConnectionFailed, &connection_type),
             None
         );
     }
 
     #[test]
     fn gone_status_maps_to_distinct_error() {
-        assert_eq!(
+        assert!(matches!(
             tunnel_status_error(StatusCode::GONE),
-            TransportError::CableTunnel(CableTunnelError::Gone)
-        );
-        assert_eq!(
+            CableError::CableTunnel(CableTunnelError::Gone)
+        ));
+        assert!(matches!(
             tunnel_status_error(StatusCode::BAD_GATEWAY),
-            TransportError::CableTunnel(CableTunnelError::UnexpectedStatus(502))
-        );
+            CableError::CableTunnel(CableTunnelError::UnexpectedStatus(502))
+        ));
     }
 }
