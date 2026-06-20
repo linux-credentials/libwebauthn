@@ -6,6 +6,7 @@ use super::{Ctap2GetAssertionRequest, Ctap2PublicKeyCredentialDescriptor};
 use crate::{
     proto::ctap2::{model::Ctap2GetAssertionOptions, Ctap2},
     transport::Channel,
+    webauthn::error::{CtapError, Error},
 };
 
 /// https://fidoalliance.org/specs/fido-v2.1-ps-20210615/fido-client-to-authenticator-protocol-v2.1-ps-20210615.html#pre-flight
@@ -23,7 +24,7 @@ pub async fn ctap2_preflight<C: Channel>(
     credentials: &[Ctap2PublicKeyCredentialDescriptor],
     client_data_hash: &[u8],
     rp: &str,
-) -> Vec<Ctap2PublicKeyCredentialDescriptor> {
+) -> Result<Vec<Ctap2PublicKeyCredentialDescriptor>, Error> {
     ctap2_preflight_with_appid(channel, credentials, client_data_hash, rp, None).await
 }
 
@@ -38,12 +39,12 @@ pub async fn ctap2_preflight_with_appid<C: Channel>(
     client_data_hash: &[u8],
     rp: &str,
     appid_exclude: Option<&str>,
-) -> Vec<Ctap2PublicKeyCredentialDescriptor> {
+) -> Result<Vec<Ctap2PublicKeyCredentialDescriptor>, Error> {
     info!("Credential list BEFORE preflight: {credentials:?}");
     let mut filtered_list = Vec::new();
     for credential in credentials {
         // Test against the canonical rpId first.
-        if let Some(matched) = preflight_one(channel, credential, client_data_hash, rp).await {
+        if let Some(matched) = preflight_one(channel, credential, client_data_hash, rp).await? {
             debug!("Pre-flight: Found already known credential under rpId {credential:?}");
             filtered_list.push(matched);
             continue;
@@ -54,7 +55,8 @@ pub async fn ctap2_preflight_with_appid<C: Channel>(
         // the AppID URL as the rpId here; the authenticator hashes it the
         // same way the U2F device hashed the original AppID.
         if let Some(appid) = appid_exclude {
-            if let Some(matched) = preflight_one(channel, credential, client_data_hash, appid).await
+            if let Some(matched) =
+                preflight_one(channel, credential, client_data_hash, appid).await?
             {
                 debug!(
                     "Pre-flight: Found already known credential under appidExclude {credential:?}"
@@ -66,7 +68,7 @@ pub async fn ctap2_preflight_with_appid<C: Channel>(
         debug!("Pre-flight: Filtering out {credential:?}");
     }
     info!("Credential list AFTER preflight: {filtered_list:?}");
-    filtered_list
+    Ok(filtered_list)
 }
 
 async fn preflight_one<C: Channel>(
@@ -74,7 +76,7 @@ async fn preflight_one<C: Channel>(
     credential: &Ctap2PublicKeyCredentialDescriptor,
     client_data_hash: &[u8],
     rp: &str,
-) -> Option<Ctap2PublicKeyCredentialDescriptor> {
+) -> Result<Option<Ctap2PublicKeyCredentialDescriptor>, Error> {
     let preflight_request = Ctap2GetAssertionRequest {
         relying_party_id: rp.to_string(),
         client_data_hash: ByteBuf::from(client_data_hash),
@@ -105,11 +107,95 @@ async fn preflight_one<C: Channel>(
                 // 3. Neither, which is allowed, if the allow_list was of length 1, then
                 //    we have to copy it ourselfs from the input
                 .unwrap_or(credential.clone());
-            Some(id)
+            Ok(Some(id))
         }
+        // Only CTAP2_ERR_NO_CREDENTIALS proves the credential is absent.
+        Err(Error::Ctap(CtapError::NoCredentials)) => {
+            debug!("Pre-flight: Not found under {rp:?}");
+            Ok(None)
+        }
+        // Any other error is transient or unexpected, not absence: propagate it.
         Err(e) => {
-            debug!("Pre-flight: Not found under {rp:?}: {e:?}");
-            None
+            debug!("Pre-flight: Error testing under {rp:?}: {e:?}");
+            Err(e)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_bytes::ByteBuf;
+
+    use super::ctap2_preflight;
+    use crate::proto::ctap2::cbor::{CborRequest, CborResponse};
+    use crate::proto::ctap2::model::Ctap2GetAssertionOptions;
+    use crate::proto::ctap2::{
+        Ctap2GetAssertionRequest, Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialType,
+    };
+    use crate::transport::mock::channel::MockChannel;
+    use crate::webauthn::error::{CtapError, Error};
+
+    fn credential(id: &[u8]) -> Ctap2PublicKeyCredentialDescriptor {
+        Ctap2PublicKeyCredentialDescriptor {
+            r#type: Ctap2PublicKeyCredentialType::PublicKey,
+            id: ByteBuf::from(id),
+            transports: None,
+        }
+    }
+
+    fn expected_preflight_request(
+        cred: &Ctap2PublicKeyCredentialDescriptor,
+        hash: &[u8],
+        rp: &str,
+    ) -> CborRequest {
+        let request = Ctap2GetAssertionRequest {
+            relying_party_id: rp.to_string(),
+            client_data_hash: ByteBuf::from(hash),
+            allow: vec![cred.clone()],
+            extensions: None,
+            options: Some(Ctap2GetAssertionOptions {
+                require_user_presence: false,
+                require_user_verification: false,
+            }),
+            pin_auth_param: None,
+            pin_auth_proto: None,
+        };
+        (&request).try_into().expect("encode preflight request")
+    }
+
+    #[tokio::test]
+    async fn preflight_propagates_non_no_credentials_error() {
+        let cred = credential(&[1, 2, 3, 4]);
+        let hash = [0u8; 32];
+        let mut channel = MockChannel::new();
+        channel.push_command_pair(
+            expected_preflight_request(&cred, &hash, "example.org"),
+            CborResponse {
+                status_code: CtapError::OperationDenied,
+                data: None,
+            },
+        );
+
+        let result = ctap2_preflight(&mut channel, &[cred], &hash, "example.org").await;
+        assert_eq!(result.err(), Some(Error::Ctap(CtapError::OperationDenied)));
+    }
+
+    #[tokio::test]
+    async fn preflight_treats_no_credentials_as_absence() {
+        let cred = credential(&[1, 2, 3, 4]);
+        let hash = [0u8; 32];
+        let mut channel = MockChannel::new();
+        channel.push_command_pair(
+            expected_preflight_request(&cred, &hash, "example.org"),
+            CborResponse {
+                status_code: CtapError::NoCredentials,
+                data: None,
+            },
+        );
+
+        let filtered = ctap2_preflight(&mut channel, &[cred], &hash, "example.org")
+            .await
+            .expect("preflight should succeed on NoCredentials");
+        assert!(filtered.is_empty());
     }
 }

@@ -251,7 +251,7 @@ async fn make_credential_fido2<C: Channel>(
                 &op.relying_party.id,
                 appid_exclude,
             )
-            .await;
+            .await?;
             ctap2_request.exclude = Some(filtered_exclude_list);
         }
     }
@@ -340,7 +340,7 @@ async fn get_assertion_fido2<C: Channel>(
             &op.client_data_hash(),
             &op.relying_party_id,
         )
-        .await;
+        .await?;
         if filtered_allow_list.is_empty() && !op.allow.is_empty() {
             // We filtered out everything in preflight, meaning none of the allowed
             // credentials are present on this device. So we error out here
