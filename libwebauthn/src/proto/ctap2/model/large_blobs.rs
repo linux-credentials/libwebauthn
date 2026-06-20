@@ -88,6 +88,7 @@ impl Ctap2LargeBlobsRequest {
 
 #[cfg_attr(test, derive(SerializeIndexed))]
 #[derive(Debug, Default, Clone, DeserializeIndexed)]
+#[non_exhaustive]
 pub struct Ctap2LargeBlobsResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(index = 0x01)]

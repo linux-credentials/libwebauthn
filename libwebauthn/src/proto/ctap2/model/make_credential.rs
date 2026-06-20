@@ -357,6 +357,7 @@ impl Ctap2MakeCredentialsRequestExtensions {
 }
 
 #[derive(Debug, Clone, DeserializeIndexed)]
+#[non_exhaustive]
 pub struct Ctap2MakeCredentialResponse {
     #[serde(index = 0x01)]
     pub format: String,
@@ -469,6 +470,7 @@ impl Ctap2UserVerifiableRequest for Ctap2MakeCredentialRequest {
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Ctap2MakeCredentialsResponseExtensions {
     // If storing credBlob was successful
     #[serde(default, skip_serializing_if = "Option::is_none")]

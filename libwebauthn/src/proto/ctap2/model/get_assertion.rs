@@ -92,6 +92,7 @@ pub struct AppleAnonymousAttestationStmt {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
+#[non_exhaustive]
 pub enum Ctap2AttestationStatement {
     PackedOrAndroid(PackedAttestationStmt),
     Tpm(TpmAttestationStmt),
@@ -512,6 +513,7 @@ pub struct CalculatedHMACGetSecretInput {
 }
 
 #[derive(Debug, Clone, DeserializeIndexed)]
+#[non_exhaustive]
 pub struct Ctap2GetAssertionResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(index = 0x01)]
@@ -687,6 +689,7 @@ impl Ctap2GetAssertionResponse {
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Ctap2GetAssertionResponseExtensions {
     // Stored credBlob
     #[serde(default, skip_serializing_if = "Option::is_none", with = "serde_bytes")]

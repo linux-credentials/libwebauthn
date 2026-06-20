@@ -652,7 +652,8 @@ pub struct MakeCredentialsRequestExtensions {
 pub type MakeCredentialsResponseExtensions = Ctap2MakeCredentialsResponseExtensions;
 
 impl MakeCredentialRequest {
-    pub fn dummy() -> Self {
+    #[cfg(test)]
+    pub(crate) fn dummy() -> Self {
         Self {
             challenge: Vec::new(),
             origin: "example.org".to_owned(),
