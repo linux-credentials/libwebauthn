@@ -4,7 +4,7 @@ use crate::{
     ops::webauthn::{
         MakeCredentialsRequestExtensions, ResidentKeyRequirement, UserVerificationRequirement,
     },
-    proto::ctap2::{Ctap2CredentialType, Ctap2PublicKeyCredentialRpEntity},
+    proto::ctap2::Ctap2CredentialType,
 };
 
 use serde::Deserialize;
@@ -28,6 +28,13 @@ fn default_user_verification() -> UserVerificationRequirement {
     UserVerificationRequirement::Preferred
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PublicKeyCredentialRpEntityJSON {
+    pub id: Option<String>,
+    pub name: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PublicKeyCredentialUserEntity {
@@ -39,7 +46,7 @@ pub struct PublicKeyCredentialUserEntity {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PublicKeyCredentialCreationOptionsJSON {
-    pub rp: Ctap2PublicKeyCredentialRpEntity,
+    pub rp: PublicKeyCredentialRpEntityJSON,
     pub user: PublicKeyCredentialUserEntity,
     pub challenge: Base64UrlString,
     #[serde(rename = "pubKeyCredParams")]

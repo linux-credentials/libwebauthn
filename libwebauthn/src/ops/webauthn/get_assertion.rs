@@ -192,7 +192,9 @@ impl FromIdlModel<PublicKeyCredentialRequestOptionsJSON> for GetAssertionRequest
             }
             parsed.0
         } else {
-            effective_rp_id.to_string()
+            RelyingPartyId::try_from(effective_rp_id)
+                .map_err(|err| GetAssertionPrepareError::InvalidRelyingPartyId(err.to_string()))?
+                .0
         };
 
         let prf = match inner.extensions.as_ref() {
@@ -892,6 +894,42 @@ mod tests {
     async fn test_request_from_json_invalid_rp_id() {
         let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
         let req_json = json_field_add(REQUEST_BASE_JSON, "rpId", r#""example.org.""#);
+
+        let result = from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            RelatedOrigins::Disabled,
+            &req_json,
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(GetAssertionPrepareError::InvalidRelyingPartyId(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_request_from_json_rejects_ip_effective_domain() {
+        let request_origin: RequestOrigin = "https://127.0.0.1:8443".parse().unwrap();
+        let req_json = json_field_rm(REQUEST_BASE_JSON, "rpId");
+
+        let result = from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            RelatedOrigins::Disabled,
+            &req_json,
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(GetAssertionPrepareError::InvalidRelyingPartyId(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_request_from_json_rejects_ipv6_effective_domain() {
+        let request_origin: RequestOrigin = "https://[::1]:8443".parse().unwrap();
+        let req_json = json_field_rm(REQUEST_BASE_JSON, "rpId");
 
         let result = from_json(
             &request_origin,
