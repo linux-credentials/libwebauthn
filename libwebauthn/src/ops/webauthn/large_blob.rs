@@ -697,6 +697,13 @@ pub(crate) async fn delete_authenticator_large_blob<C: Ctap2 + ?Sized>(
 mod tests {
     use super::*;
 
+    fn rp_id_hash(rp_id: &str) -> Vec<u8> {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::default();
+        hasher.update(rp_id.as_bytes());
+        hasher.finalize().to_vec()
+    }
+
     fn raw_entry(bytes: &[u8]) -> RawArrayEntry {
         RawArrayEntry {
             raw: bytes.to_vec(),
@@ -955,6 +962,7 @@ mod tests {
 
         let credential_id = b"cred-id".to_vec();
         let mut auth_data = vec![0u8; 37];
+        auth_data[..32].copy_from_slice(&rp_id_hash("example.com"));
         auth_data[32] = 0x01; // USER_PRESENT flag
         let mut cred_id_map = BTreeMap::new();
         cred_id_map.insert(Value::Text("type".into()), Value::Text("public-key".into()));
@@ -1091,6 +1099,7 @@ mod tests {
 
         let assertion_cbor = |cred: &[u8], lbk: &[u8; 32], count: Option<i128>| {
             let mut auth_data = vec![0u8; 37];
+            auth_data[..32].copy_from_slice(&rp_id_hash("example.com"));
             auth_data[32] = 0x01; // USER_PRESENT
             let mut cred_map = BTreeMap::new();
             cred_map.insert(Value::Text("type".into()), Value::Text("public-key".into()));
