@@ -147,14 +147,54 @@ pub enum Ctap2PublicKeyCredentialType {
     Unknown,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+/// AuthenticatorTransport from a credential descriptor. Unknown values are kept in `Other` so they pass through unchanged.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(from = "String", into = "String")]
 pub enum Ctap2Transport {
     Ble,
     Nfc,
     Usb,
     Internal,
     Hybrid,
+    SmartCard,
+    Other(String),
+}
+
+impl Ctap2Transport {
+    fn as_str(&self) -> &str {
+        match self {
+            Self::Ble => "ble",
+            Self::Nfc => "nfc",
+            Self::Usb => "usb",
+            Self::Internal => "internal",
+            Self::Hybrid => "hybrid",
+            Self::SmartCard => "smart-card",
+            Self::Other(value) => value,
+        }
+    }
+}
+
+impl From<String> for Ctap2Transport {
+    fn from(value: String) -> Self {
+        match value.as_str() {
+            "ble" => Self::Ble,
+            "nfc" => Self::Nfc,
+            "usb" => Self::Usb,
+            "internal" => Self::Internal,
+            "hybrid" => Self::Hybrid,
+            "smart-card" => Self::SmartCard,
+            _ => Self::Other(value),
+        }
+    }
+}
+
+impl From<Ctap2Transport> for String {
+    fn from(transport: Ctap2Transport) -> Self {
+        match transport {
+            Ctap2Transport::Other(value) => value,
+            known => known.as_str().to_owned(),
+        }
+    }
 }
 
 impl From<&Ctap1Transport> for Ctap2Transport {
@@ -506,5 +546,20 @@ mod tests {
             Ctap2COSEAlgorithmIdentifier(-9)
         );
         assert!(Ctap2COSEAlgorithmIdentifier::ESP256.is_known());
+    }
+
+    #[test]
+    fn unrecognised_transport_roundtrips_through_cbor() {
+        let value = Ctap2Transport::Other("future-transport".to_string());
+        let encoded = serde_cbor::to_vec(&value).unwrap();
+        let decoded: Ctap2Transport = serde_cbor::from_slice(&encoded).unwrap();
+        assert_eq!(decoded, value);
+    }
+
+    #[test]
+    fn smart_card_transport_roundtrips_through_cbor() {
+        let encoded = serde_cbor::to_vec(&Ctap2Transport::SmartCard).unwrap();
+        let decoded: Ctap2Transport = serde_cbor::from_slice(&encoded).unwrap();
+        assert_eq!(decoded, Ctap2Transport::SmartCard);
     }
 }

@@ -839,6 +839,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_request_from_json_passes_through_unknown_transports() {
+        use crate::proto::ctap2::Ctap2Transport;
+
+        let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
+        let req_json = json_field_add(
+            REQUEST_BASE_JSON,
+            "allowCredentials",
+            r#"[{"type":"public-key","id":"bXktY3JlZGVudGlhbC1pZA","transports":["usb","smart-card","future-transport"]}]"#,
+        );
+
+        let req: GetAssertionRequest = from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            RelatedOrigins::Disabled,
+            &req_json,
+        )
+        .await
+        .unwrap();
+
+        let transports = req.allow[0]
+            .transports
+            .as_ref()
+            .expect("transports preserved");
+        assert_eq!(
+            transports,
+            &vec![
+                Ctap2Transport::Usb,
+                Ctap2Transport::SmartCard,
+                Ctap2Transport::Other("future-transport".to_string()),
+            ]
+        );
+    }
+
+    #[tokio::test]
     async fn test_request_from_json_ignore_missing_rp_id() {
         let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
         let req_json = json_field_rm(REQUEST_BASE_JSON, "rpId");
