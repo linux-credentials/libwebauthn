@@ -51,9 +51,17 @@ Validating the relying party ID against the calling origin requires the [Public 
 | ---------------------------- | --------------------- | --------------------- |
 | **USB (HID)**                | 🟢 Supported (hidapi) | 🟢 Supported (hidapi) |
 | **Bluetooth Low Energy**     | 🟢 Supported (bluez)  | 🟢 Supported (bluez)  |
-| **NFC**                      | 🟢 Supported (pcsc or libnfc) | 🟢 Supported (pcsc or libnfc) |
+| **NFC** [^nfc-optin]         | 🟢 Supported (pcsc or libnfc) | 🟢 Supported (pcsc or libnfc) |
 | **TPM 2.0 (Platform)**       | 🟠 Planned ([#4][#4]) | 🟠 Planned ([#4][#4]) |
+| **Hybrid (caBLE v2, cloud-assisted)** | N/A          | 🟢 Supported          |
 | **CTAP 2.3 hybrid (QR-initiated, BLE only)**    | N/A                   | 🟢 Supported          |
+
+USB, BLE, and the two hybrid transports build with the default features. NFC is
+opt-in: the crate ships with `default = []` for the NFC stack, so enable the
+`nfc-backend-pcsc` feature (pure userspace, recommended) or `nfc-backend-libnfc`
+(requires the `libnfc` system library) to compile it in.
+
+[^nfc-optin]: Off by default. Enable `nfc-backend-pcsc` and/or `nfc-backend-libnfc`.
 
 ## Example programs
 
@@ -61,11 +69,6 @@ Examples live in [`libwebauthn/examples/`](libwebauthn/examples) and are grouped
 `ceremony/` for register and authenticate flows, `features/` for per-feature demos
 (extensions, preflight, PRF, device selection), and `management/` for CTAP2 admin
 operations. All examples share helpers from `examples/common/`.
-
-```
-$ cd libwebauthn
-$ git submodule update --init
-```
 
 The basic ceremony examples (register + authenticate) cover all transports. The
 WebAuthn examples consume and emit JSON per the [WebAuthn IDL][webauthn].
@@ -102,6 +105,17 @@ $ cargo run --example authenticator_config_hid
 $ cargo run --example cred_management_hid
 $ cargo run --example persistent_cred_management_hid
 ```
+
+## Minimum Supported Rust Version (MSRV)
+
+libwebauthn uses Rust edition 2021 and tracks recent stable Rust. CI builds and
+tests on the current stable toolchain. There is no separate older MSRV floor: if
+a recent stable `rustc` builds the crate, it is supported.
+
+## License
+
+Licensed under the GNU Lesser General Public License v2.1 or later
+(`LGPL-2.1-or-later`). See [COPYING](COPYING) for the full text.
 
 ## Contributing
 

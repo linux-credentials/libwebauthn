@@ -44,12 +44,15 @@ pub trait Channel: Send + Sync + Display + Ctap2AuthTokenStore {
     /// UX updates for this channel, must include UV updates.
     type UxUpdate: Send + Sync + Debug + From<UvUpdate>;
 
+    /// Broadcast sender fanning UX updates out to subscribed receivers.
     fn get_ux_update_sender(&self) -> &broadcast::Sender<Self::UxUpdate>;
 
+    /// Subscribe to this channel's UX updates; drive the receiver on a separate task so the ceremony can make progress.
     fn get_ux_update_receiver(&self) -> broadcast::Receiver<Self::UxUpdate> {
         self.get_ux_update_sender().subscribe()
     }
 
+    /// Broadcast a UX update to all current receivers.
     #[instrument(skip(self))]
     async fn send_ux_update(&mut self, state: Self::UxUpdate) {
         trace!("Sending UX update");
