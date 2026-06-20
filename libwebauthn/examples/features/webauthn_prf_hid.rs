@@ -58,6 +58,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             algorithms: vec![Ctap2CredentialType::default()],
             exclude: None,
             extensions: Some(extensions.clone()),
+            attestation: None,
             timeout: TIMEOUT,
         };
 
