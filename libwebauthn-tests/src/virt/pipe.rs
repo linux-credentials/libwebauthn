@@ -234,7 +234,7 @@ impl<'a, const N: usize> Pipe<'a, N> {
     }
 
     fn start_sending_error_on_channel(&mut self, channel: u32, error: CtapError) {
-        self.buffer[0] = error as u8;
+        self.buffer[0] = u8::from(error);
         let response = Response::error_on_channel(channel);
         self.start_sending(response);
     }
@@ -243,7 +243,7 @@ impl<'a, const N: usize> Pipe<'a, N> {
         let last_state = core::mem::replace(&mut self.state, State::Idle);
         let last_first_byte = self.buffer[0];
 
-        self.buffer[0] = error as u8;
+        self.buffer[0] = u8::from(error);
         let response = Response::error_from_request(request);
         self.start_sending(response);
         self.maybe_write_packet();
