@@ -35,3 +35,19 @@ jobs:
           LIBWEBAUTHN_PSL_SYSTEM_TEST: "1"
       - name: Verify libwebauthn publishes cleanly
         run: cargo publish --dry-run -p libwebauthn
+
+  msrv:
+    name: Verify MSRV
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Checkout submodules
+        run: git submodule update --init --recursive
+      - name: Update apt cache
+        run: sudo apt-get update
+      - name: Install system dependencies
+        run: sudo apt-get install libudev-dev libdbus-1-dev libsodium-dev libnfc-dev libpcsclite-dev publicsuffix
+      - name: Install declared MSRV toolchain
+        run: rustup toolchain install 1.88 --profile minimal
+      - name: Check against declared MSRV
+        run: cargo +1.88 check --workspace --all-features
