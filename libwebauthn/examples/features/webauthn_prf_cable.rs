@@ -118,6 +118,7 @@ async fn create() -> Result<(), Box<dyn Error>> {
         algorithms: vec![Ctap2CredentialType::default()],
         exclude: None,
         extensions: Some(extensions),
+        attestation: None,
         timeout: TIMEOUT,
     };
 

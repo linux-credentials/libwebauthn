@@ -120,6 +120,7 @@ async fn make_credential_call(
         algorithms: vec![Ctap2CredentialType::default()],
         exclude: exclude_list,
         extensions: None,
+        attestation: None,
         timeout: TIMEOUT,
     };
 

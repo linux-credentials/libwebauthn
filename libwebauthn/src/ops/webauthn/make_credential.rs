@@ -80,6 +80,35 @@ fn registration_transports(transport: Option<Transport>) -> Vec<String> {
     tokens
 }
 
+fn scrub_aaguid(authenticator_data: &mut [u8]) -> Result<(), ResponseSerializationError> {
+    const AAGUID_OFFSET: usize = 37;
+    const AAGUID_LEN: usize = 16;
+    authenticator_data
+        .get_mut(AAGUID_OFFSET..AAGUID_OFFSET + AAGUID_LEN)
+        .ok_or_else(|| {
+            ResponseSerializationError::AuthenticatorDataError(
+                "authenticator data too short to scrub AAGUID".into(),
+            )
+        })?
+        .fill(0);
+    Ok(())
+}
+
+fn build_attestation_object(
+    format: &str,
+    attestation_statement: &Ctap2AttestationStatement,
+    authenticator_data_bytes: &[u8],
+) -> Result<Vec<u8>, ResponseSerializationError> {
+    let attestation_object = AttestationObject {
+        format,
+        auth_data: authenticator_data_bytes,
+        attestation_statement,
+    };
+
+    cbor::to_vec(&attestation_object)
+        .map_err(|e| ResponseSerializationError::AttestationObjectError(e.to_string()))
+}
+
 impl WebAuthnIDLResponse for MakeCredentialResponse {
     type IdlModel = RegistrationResponseJSON;
     type Context = MakeCredentialRequest;
@@ -102,10 +131,15 @@ impl WebAuthnIDLResponse for MakeCredentialResponse {
         let id = base64_url::encode(&attested.credential_id);
         let raw_id = Base64UrlString::from(attested.credential_id.clone());
 
-        let authenticator_data_bytes = self
+        let mut authenticator_data_bytes = self
             .authenticator_data
             .to_response_bytes()
             .map_err(|e| ResponseSerializationError::AuthenticatorDataError(e.to_string()))?;
+
+        let scrub_attestation = request.attestation.as_deref() == Some("none");
+        if scrub_attestation {
+            scrub_aaguid(&mut authenticator_data_bytes)?;
+        }
 
         let public_key_algorithm = i64::from(
             cose::read_alg(&attested.credential_public_key)
@@ -120,7 +154,14 @@ impl WebAuthnIDLResponse for MakeCredentialResponse {
             .map(Base64UrlString::from);
 
         // Build attestation object (CBOR map with authData, fmt, attStmt)
-        let attestation_object_bytes = self.build_attestation_object(&authenticator_data_bytes)?;
+        let none_statement = Ctap2AttestationStatement::None(BTreeMap::new());
+        let (format, attestation_statement) = if scrub_attestation {
+            ("none", &none_statement)
+        } else {
+            (self.format.as_str(), &self.attestation_statement)
+        };
+        let attestation_object_bytes =
+            build_attestation_object(format, attestation_statement, &authenticator_data_bytes)?;
 
         // WebAuthn getTransports(): the authenticator's getInfo 0x09 transports
         // folded with the ceremony transport, unique tokens lexicographically sorted.
@@ -151,20 +192,6 @@ impl WebAuthnIDLResponse for MakeCredentialResponse {
 }
 
 impl MakeCredentialResponse {
-    fn build_attestation_object(
-        &self,
-        authenticator_data_bytes: &[u8],
-    ) -> Result<Vec<u8>, ResponseSerializationError> {
-        let attestation_object = AttestationObject {
-            format: &self.format,
-            auth_data: authenticator_data_bytes,
-            attestation_statement: &self.attestation_statement,
-        };
-
-        cbor::to_vec(&attestation_object)
-            .map_err(|e| ResponseSerializationError::AttestationObjectError(e.to_string()))
-    }
-
     fn build_client_extension_results(&self) -> AuthenticationExtensionsClientOutputsJSON {
         let mut results = AuthenticationExtensionsClientOutputsJSON::default();
         let unsigned_ext = &self.unsigned_extensions_output;
@@ -374,6 +401,8 @@ pub struct MakeCredentialRequest {
     pub exclude: Option<Vec<Ctap2PublicKeyCredentialDescriptor>>,
     /// extensions
     pub extensions: Option<MakeCredentialsRequestExtensions>,
+    /// Attestation conveyance preference. `Some("none")` scrubs attestation.
+    pub attestation: Option<String>,
     pub timeout: Duration,
 }
 
@@ -468,6 +497,8 @@ impl FromIdlModel<PublicKeyCredentialCreationOptionsJSON> for MakeCredentialRequ
                 )
             },
             extensions: inner.extensions,
+            // WebAuthn IDL defaults attestation conveyance to "none".
+            attestation: inner.attestation.or_else(|| Some("none".to_string())),
             timeout,
         })
     }
@@ -631,6 +662,7 @@ impl MakeCredentialRequest {
             algorithms: vec![Ctap2CredentialType::default()],
             exclude: None,
             extensions: None,
+            attestation: None,
             resident_key: None,
             user_verification: UserVerificationRequirement::Discouraged,
             timeout: Duration::from_secs(10),
@@ -847,6 +879,7 @@ mod tests {
             algorithms: vec![Ctap2CredentialType::default()],
             exclude: None,
             extensions: None,
+            attestation: Some("none".to_string()),
             timeout: Duration::from_secs(30),
         }
     }
@@ -1504,6 +1537,7 @@ mod tests {
             algorithms: vec![Ctap2CredentialType::default()],
             exclude: None,
             extensions: None,
+            attestation: None,
             timeout: Duration::from_secs(30),
         }
     }
@@ -1729,6 +1763,114 @@ mod tests {
         } else {
             panic!("attestation object should be a CBOR map");
         }
+    }
+
+    fn create_attested_response(aaguid: [u8; 16]) -> MakeCredentialResponse {
+        use crate::fido::{AttestedCredentialData, AuthenticatorData, AuthenticatorDataFlags};
+        use crate::proto::ctap2::FidoU2fAttestationStmt;
+        use cosey::Bytes;
+        use serde_bytes::ByteBuf;
+
+        let cose_public_key = cosey::PublicKey::P256Key(cosey::P256PublicKey {
+            x: Bytes::from_slice(&[0u8; 32]).unwrap(),
+            y: Bytes::from_slice(&[0u8; 32]).unwrap(),
+        });
+        let credential_public_key = cbor::to_vec(&cose_public_key).unwrap();
+
+        let authenticator_data = AuthenticatorData {
+            rp_id_hash: [0u8; 32],
+            flags: AuthenticatorDataFlags::USER_PRESENT
+                | AuthenticatorDataFlags::ATTESTED_CREDENTIALS,
+            signature_count: 0,
+            attested_credential: Some(AttestedCredentialData {
+                aaguid,
+                credential_id: vec![0x01, 0x02, 0x03, 0x04],
+                credential_public_key,
+            }),
+            extensions: None,
+            raw: None,
+        };
+
+        MakeCredentialResponse {
+            format: "fido-u2f".to_string(),
+            authenticator_data,
+            attestation_statement: Ctap2AttestationStatement::FidoU2F(FidoU2fAttestationStmt {
+                signature: ByteBuf::from(vec![0xAA; 16]),
+                certificates: vec![ByteBuf::from(vec![0xBB; 8])],
+            }),
+            enterprise_attestation: None,
+            large_blob_key: None,
+            unsigned_extensions_output: MakeCredentialsResponseUnsignedExtensions::default(),
+            transport: None,
+            authenticator_transports: None,
+        }
+    }
+
+    #[test]
+    fn attestation_none_conveyance_scrubs_fmt_attstmt_and_aaguid() {
+        let response = create_attested_response([0x11u8; 16]);
+        let mut request = create_test_request();
+        request.attestation = Some("none".to_string());
+
+        let model = response.to_idl_model(&request).unwrap();
+
+        let auth_data = &model.response.authenticator_data.0;
+        assert_eq!(&auth_data[37..53], &[0u8; 16], "top-level authData AAGUID");
+
+        let attestation: cbor::Value =
+            cbor::from_slice(&model.response.attestation_object.0).unwrap();
+        let cbor::Value::Map(map) = attestation else {
+            panic!("attestation object should be a CBOR map");
+        };
+        let value_for = |key: &str| {
+            map.iter()
+                .find(|(k, _)| matches!(k, cbor::Value::Text(s) if s == key))
+                .map(|(_, v)| v)
+        };
+        assert!(
+            matches!(value_for("fmt"), Some(cbor::Value::Text(s)) if s == "none"),
+            "fmt must be scrubbed to none"
+        );
+        match value_for("attStmt") {
+            Some(cbor::Value::Map(stmt)) => assert!(stmt.is_empty(), "attStmt must be empty"),
+            other => panic!("attStmt must be an empty map, got {other:?}"),
+        }
+        match value_for("authData") {
+            Some(cbor::Value::Bytes(embedded)) => {
+                assert_eq!(&embedded[37..53], &[0u8; 16], "embedded authData AAGUID");
+            }
+            other => panic!("authData must be CBOR bytes, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn attestation_direct_preserves_attestation() {
+        let response = create_attested_response([0x11u8; 16]);
+        let mut request = create_test_request();
+        request.attestation = Some("direct".to_string());
+
+        let model = response.to_idl_model(&request).unwrap();
+
+        let auth_data = &model.response.authenticator_data.0;
+        assert_eq!(
+            &auth_data[37..53],
+            &[0x11u8; 16],
+            "AAGUID must be preserved"
+        );
+
+        let attestation: cbor::Value =
+            cbor::from_slice(&model.response.attestation_object.0).unwrap();
+        let cbor::Value::Map(map) = attestation else {
+            panic!("attestation object should be a CBOR map");
+        };
+        let fmt = map
+            .iter()
+            .find(|(k, _)| matches!(k, cbor::Value::Text(s) if s == "fmt"))
+            .map(|(_, v)| v);
+        assert!(
+            matches!(fmt, Some(cbor::Value::Text(s)) if s == "fido-u2f"),
+            "fmt must be preserved"
+        );
     }
 
     #[test]

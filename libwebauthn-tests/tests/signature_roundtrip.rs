@@ -75,6 +75,7 @@ async fn test_ctap2_signature_roundtrip() {
         resident_key: Some(ResidentKeyRequirement::Discouraged),
         user_verification: UserVerificationRequirement::Preferred,
         algorithms: vec![Ctap2CredentialType::default()],
+        attestation: None,
         exclude: None,
         extensions: Some(MakeCredentialsRequestExtensions {
             hmac_create_secret: Some(true),

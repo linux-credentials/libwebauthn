@@ -677,6 +677,7 @@ mod tests {
                 prf: Some(MakeCredentialPrfInput { eval }),
                 ..Default::default()
             }),
+            attestation: None,
             timeout: Duration::from_secs(10),
         }
     }

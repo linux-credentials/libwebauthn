@@ -46,6 +46,7 @@ async fn test_webauthn_basic_ctap2() {
         resident_key: Some(ResidentKeyRequirement::Discouraged),
         user_verification: UserVerificationRequirement::Preferred,
         algorithms: vec![Ctap2CredentialType::default()],
+        attestation: None,
         exclude: None,
         extensions: None,
         timeout: TIMEOUT,

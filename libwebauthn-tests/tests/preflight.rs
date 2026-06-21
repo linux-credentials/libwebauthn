@@ -55,6 +55,7 @@ async fn make_credential_call_with_rp(
         resident_key: Some(ResidentKeyRequirement::Discouraged),
         user_verification: UserVerificationRequirement::Preferred,
         algorithms: vec![Ctap2CredentialType::default()],
+        attestation: None,
         exclude: exclude_list,
         extensions: None,
         timeout: TIMEOUT,
