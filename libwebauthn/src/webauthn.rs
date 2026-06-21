@@ -402,12 +402,33 @@ async fn get_assertion_fido2<C: Channel>(
             op.timeout
         )
     }?;
-    let count = response.credentials_count.unwrap_or(1);
+    let expected_rp_id_hash = {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::default();
+        hasher.update(op.relying_party_id.as_bytes());
+        hasher.finalize()
+    };
+    let validate_rp_id_hash = |resp: &Ctap2GetAssertionResponse| -> Result<(), Error> {
+        if resp.authenticator_data.rp_id_hash.as_slice() != expected_rp_id_hash.as_slice() {
+            warn!("getAssertion rpIdHash does not match the requested RP ID");
+            return Err(Error::Platform(PlatformError::InvalidDeviceResponse));
+        }
+        Ok(())
+    };
+
+    validate_rp_id_hash(&response)?;
+    // Cap iteration so a hostile numberOfCredentials cannot force an unbounded loop.
+    let max_count = get_info_response
+        .max_credential_count_in_list()
+        .unwrap_or(255);
+    let count = (response.credentials_count.unwrap_or(1) as usize).min(max_count);
     let mut ctap_responses = vec![response];
     for i in 1..count {
         debug!({ i }, "Fetching additional credential");
         // GetNextAssertion doesn't use PinUVAuthToken, so we don't need to check uv_auth_used here
-        ctap_responses.push(channel.ctap2_get_next_assertion(op.timeout).await?);
+        let next = channel.ctap2_get_next_assertion(op.timeout).await?;
+        validate_rp_id_hash(&next)?;
+        ctap_responses.push(next);
     }
 
     // largeBlob extension (WebAuthn L3 §10.1.5):
@@ -846,16 +867,34 @@ mod tests {
             }
         }
 
-        fn get_assertion_response() -> CborResponse {
+        fn rp_id_hash(rp_id: &str) -> Vec<u8> {
+            use sha2::{Digest, Sha256};
+            let mut hasher = Sha256::default();
+            hasher.update(rp_id.as_bytes());
+            hasher.finalize().to_vec()
+        }
+
+        fn get_assertion_response_with(
+            rp_hash: &[u8],
+            credentials_count: Option<u32>,
+        ) -> CborResponse {
             let mut auth_data = vec![0u8; 37];
+            auth_data[..32].copy_from_slice(rp_hash);
             auth_data[32] = AuthenticatorDataFlags::USER_PRESENT.bits();
             let mut map: BTreeMap<u64, Value> = BTreeMap::new();
             map.insert(0x02, Value::Bytes(auth_data));
             map.insert(0x03, Value::Bytes(vec![0xAAu8; 64]));
+            if let Some(count) = credentials_count {
+                map.insert(0x05, Value::Integer(count as i128));
+            }
             CborResponse {
                 status_code: CtapError::Ok,
                 data: Some(cbor::to_vec(&map).unwrap()),
             }
+        }
+
+        fn get_assertion_response() -> CborResponse {
+            get_assertion_response_with(&rp_id_hash("example.com"), None)
         }
 
         fn assertion_request(
@@ -978,6 +1017,58 @@ mod tests {
             let info = Ctap2GetInfoResponse::default();
             let request = ctap2_get_assertion(vec![descriptor(&[0u8; 16])]);
             assert_eq!(enforce_get_assertion_limits(&request, &info), Ok(()));
+        }
+
+        #[tokio::test]
+        async fn get_next_assertion_iteration_is_bounded() {
+            let info = Ctap2GetInfoResponse {
+                max_credential_count: Some(2),
+                ..Default::default()
+            };
+            let op = assertion_request(vec![]);
+            let expected_request =
+                Ctap2GetAssertionRequest::from_webauthn_request(&op, &info).unwrap();
+            let expected_cbor: CborRequest = (&expected_request).try_into().unwrap();
+
+            let hash = rp_id_hash("example.com");
+            let mut channel = NoPreflightChannel::new();
+            let get_info_request = CborRequest::new(Ctap2CommandCode::AuthenticatorGetInfo);
+            channel.push_command_pair(get_info_request.clone(), get_info_response(&info));
+            channel.push_command_pair(get_info_request, get_info_response(&info));
+            channel.push_command_pair(
+                expected_cbor,
+                get_assertion_response_with(&hash, Some(u32::MAX)),
+            );
+            // Only one getNextAssertion is queued, so unbounded iteration would panic.
+            let next_request = CborRequest::new(Ctap2CommandCode::AuthenticatorGetNextAssertion);
+            channel.push_command_pair(next_request, get_assertion_response_with(&hash, None));
+
+            let result = get_assertion_fido2(&mut channel, &op).await;
+            assert!(result.is_ok(), "bounded iteration failed: {result:?}");
+        }
+
+        #[tokio::test]
+        async fn mismatched_rp_id_hash_is_rejected() {
+            let info = Ctap2GetInfoResponse::default();
+            let op = assertion_request(vec![]);
+            let expected_request =
+                Ctap2GetAssertionRequest::from_webauthn_request(&op, &info).unwrap();
+            let expected_cbor: CborRequest = (&expected_request).try_into().unwrap();
+
+            let mut channel = NoPreflightChannel::new();
+            let get_info_request = CborRequest::new(Ctap2CommandCode::AuthenticatorGetInfo);
+            channel.push_command_pair(get_info_request.clone(), get_info_response(&info));
+            channel.push_command_pair(get_info_request, get_info_response(&info));
+            channel.push_command_pair(
+                expected_cbor,
+                get_assertion_response_with(&[0xFFu8; 32], None),
+            );
+
+            let result = get_assertion_fido2(&mut channel, &op).await;
+            assert_eq!(
+                result.err(),
+                Some(Error::Platform(PlatformError::InvalidDeviceResponse))
+            );
         }
     }
 }
