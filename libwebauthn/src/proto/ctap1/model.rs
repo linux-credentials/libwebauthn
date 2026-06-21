@@ -25,8 +25,7 @@ impl TryFrom<&Ctap2Transport> for Ctap1Transport {
             Ctap2Transport::Ble => Ok(Ctap1Transport::Ble),
             Ctap2Transport::Usb => Ok(Ctap1Transport::Usb),
             Ctap2Transport::Nfc => Ok(Ctap1Transport::Nfc),
-            Ctap2Transport::Internal => Err(CtapError::UnsupportedOption),
-            Ctap2Transport::Hybrid => Err(CtapError::UnsupportedOption),
+            _ => Err(CtapError::UnsupportedOption),
         }
     }
 }
@@ -352,5 +351,43 @@ mod tests {
         assert_eq!(decoded.key_handle, hex::decode("602CFD267868E84D4852BD5B008BC6CE0211D4858C8A647328A13B7D5C0A42B3893D63A58FCA7BD3EBB74F55CE537195DFF0113D4C561BBB7DFAC0C0ECD1AFB5").unwrap());
         assert_eq!(decoded.attestation, hex::decode("3082015930820100A003020102020102300A06082A8648CE3D0403023028311530130603550403130C5365637572697479204B6579310F300D060355040A1306476F6F676C653022180F32303030303130313030303030305A180F32303939313233313233353935395A3028311530130603550403130C5365637572697479204B6579310F300D060355040A1306476F6F676C653059301306072A8648CE3D020106082A8648CE3D030107034200040393AF897BE858E88C1953876A1A538477C4DA6E6EA14ACF0A2FD89A4DCCF95878A8CD2929029CC1D794BFFB9C37547CBBB5BB31AB3A6756ACF74F123CECD45CA31730153013060B2B0601040182E51C020101040403020470300A06082A8648CE3D040302034700304402207F958ABE6CF08CB2E9A03774D52DF8C0EA261E1AC0C283409FEDD8D36DFAF09302204EEB7501C720428D206E1B092D8D26CA8536B70F5F09AEA99562390BEF1BA7EC").unwrap());
         assert_eq!(decoded.signature, hex::decode("3044022031413D6E238A5F998B26B3931655C411847D99776B6E5CF15AA2E11BFAF325F00220098745DA82C11BB242934BAC6AE95155EAAD68520D695D46982DA9B2C94F94E3").unwrap());
+    }
+
+    #[test]
+    fn known_ctap2_transports_downgrade_to_ctap1() {
+        use crate::proto::ctap1::Ctap1Transport;
+        use crate::proto::ctap2::Ctap2Transport;
+
+        assert!(matches!(
+            Ctap1Transport::try_from(&Ctap2Transport::Usb),
+            Ok(Ctap1Transport::Usb)
+        ));
+        assert!(matches!(
+            Ctap1Transport::try_from(&Ctap2Transport::Ble),
+            Ok(Ctap1Transport::Ble)
+        ));
+        assert!(matches!(
+            Ctap1Transport::try_from(&Ctap2Transport::Nfc),
+            Ok(Ctap1Transport::Nfc)
+        ));
+    }
+
+    #[test]
+    fn unsupported_ctap2_transports_fail_to_downgrade() {
+        use crate::proto::ctap1::Ctap1Transport;
+        use crate::proto::ctap2::Ctap2Transport;
+        use crate::webauthn::CtapError;
+
+        for transport in [
+            Ctap2Transport::Internal,
+            Ctap2Transport::Hybrid,
+            Ctap2Transport::SmartCard,
+            Ctap2Transport::Other("future-transport".to_string()),
+        ] {
+            assert!(matches!(
+                Ctap1Transport::try_from(&transport),
+                Err(CtapError::UnsupportedOption)
+            ));
+        }
     }
 }
