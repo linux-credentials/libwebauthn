@@ -1,8 +1,7 @@
 use crate::proto::error::CtapError;
 
-use std::convert::{TryFrom, TryInto};
+use std::convert::TryFrom;
 use std::io::{Error as IOError, ErrorKind as IOErrorKind};
-use tracing::error;
 
 #[derive(Debug, Clone)]
 pub struct CborResponse {
@@ -32,13 +31,7 @@ impl TryFrom<&Vec<u8>> for CborResponse {
             )
         })?;
 
-        let Ok(status_code) = (*status_byte).try_into() else {
-            error!({ code = ?*status_byte }, "Invalid CTAP error code");
-            return Err(IOError::new(
-                IOErrorKind::InvalidData,
-                format!("Invalid CTAP error code: {:x}", status_byte),
-            ));
-        };
+        let status_code = CtapError::from(*status_byte);
 
         let data = if body.is_empty() {
             None
@@ -46,5 +39,27 @@ impl TryFrom<&Vec<u8>> for CborResponse {
             Some(Vec::from(body))
         };
         Ok(CborResponse { status_code, data })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CborResponse;
+    use crate::proto::error::CtapError;
+    use std::convert::TryFrom;
+
+    #[test]
+    fn unknown_status_byte_is_preserved() {
+        let response = CborResponse::try_from(&vec![0xDEu8]).expect("must not be a framing error");
+        assert_eq!(response.status_code, CtapError::Unknown(0xDE));
+        assert!(response.data.is_none());
+    }
+
+    #[test]
+    fn unknown_status_byte_keeps_body() {
+        let response =
+            CborResponse::try_from(&vec![0xF5u8, 0xAA, 0xBB]).expect("must not be a framing error");
+        assert_eq!(response.status_code, CtapError::Unknown(0xF5));
+        assert_eq!(response.data.as_deref(), Some(&[0xAA, 0xBB][..]));
     }
 }

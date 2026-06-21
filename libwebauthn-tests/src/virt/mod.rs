@@ -5,10 +5,8 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::thread;
 use std::thread::JoinHandle;
 
-use libwebauthn::proto::CtapError;
 use libwebauthn::transport::hid::framing::{HidCommand, HidMessage};
 use libwebauthn::transport::hid::{virtual_device, HidDevice, HidPipeBackend};
-use num_enum::TryFromPrimitive;
 
 /// `HidPipeBackend` implementation backed by an in-process trussed-staging
 /// fido-authenticator. Each instance owns a worker thread that owns the
@@ -75,18 +73,14 @@ impl TrussedVirtBackend {
                         }
                         Err(ctaphid::error::Error::CommandError(
                             ctaphid::error::CommandError::CborError(value),
-                        )) => match CtapError::try_from_primitive(value) {
-                            Ok(_) => {
-                                // Known CTAP error code: forward as a successful
-                                // transmission with the status byte as payload.
-                                let mut response = msg.clone();
-                                response.payload = vec![value];
-                                if resp_tx.send(response).is_err() {
-                                    break;
-                                }
+                        )) => {
+                            // Forward the status byte as a successful transmission.
+                            let mut response = msg.clone();
+                            response.payload = vec![value];
+                            if resp_tx.send(response).is_err() {
+                                break;
                             }
-                            Err(_) => panic!("Failed to parse CtapError from {value}"),
-                        },
+                        }
                         Err(err) => panic!("failed to execute CTAP2 command: {err:?}"),
                     }
                 }
