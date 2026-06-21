@@ -614,30 +614,43 @@ async fn connection_recv(
             debug!("Received update message with linking info");
             trace!(?linking_info);
 
-            let device_id: CableKnownDeviceId = (&linking_info).into();
             match known_device_store {
                 Some(store) => {
-                    match parse_known_device(private_key, tunnel_domain, &linking_info, noise_state)
-                    {
-                        Ok(known_device) => {
-                            debug!(?device_id, "Updating known device");
-                            trace!(?known_device);
-                            store.put_known_device(&device_id, &known_device).await;
-                        }
-                        Err(e) => {
-                            warn!(
-                                ?e,
-                                "Invalid linking update from authenticator, forgetting device"
-                            );
-                            store.delete_known_device(&device_id).await;
-                        }
-                    }
+                    apply_linking_update(
+                        store,
+                        private_key,
+                        tunnel_domain,
+                        &linking_info,
+                        &noise_state.handshake_hash,
+                    )
+                    .await;
                 }
                 None => {
                     warn!("Ignoring update message without a device store");
                 }
             };
             Ok(RecvOutcome::Continue)
+        }
+    }
+}
+
+/// Stores the update only on a valid signature; invalid updates are dropped without evicting.
+async fn apply_linking_update(
+    store: &Arc<dyn CableKnownDeviceInfoStore>,
+    private_key: &NonZeroScalar,
+    tunnel_domain: &str,
+    linking_info: &CableLinkingInfo,
+    handshake_hash: &[u8],
+) {
+    let device_id: CableKnownDeviceId = linking_info.into();
+    match parse_known_device(private_key, tunnel_domain, linking_info, handshake_hash) {
+        Ok(known_device) => {
+            debug!(?device_id, "Updating known device");
+            trace!(?known_device);
+            store.put_known_device(&device_id, &known_device).await;
+        }
+        Err(e) => {
+            warn!(?e, "Ignoring invalid linking update from authenticator");
         }
     }
 }
@@ -650,7 +663,7 @@ fn parse_known_device(
     private_key: &NonZeroScalar,
     tunnel_domain: &str,
     linking_info: &CableLinkingInfo,
-    noise_state: &TunnelNoiseState,
+    handshake_hash: &[u8],
 ) -> Result<CableKnownDeviceInfo, TransportError> {
     let known_device = CableKnownDeviceInfo::new(tunnel_domain, linking_info)?;
     let secret_key = SecretKey::from(private_key);
@@ -671,7 +684,7 @@ fn parse_known_device(
 
     let mut hmac =
         Hmac::<Sha256>::new_from_slice(&shared_secret).map_err(|_| TransportError::InvalidKey)?;
-    hmac.update(&noise_state.handshake_hash);
+    hmac.update(handshake_hash);
     let expected_mac = hmac.finalize().into_bytes().to_vec();
 
     if expected_mac != linking_info.handshake_signature {
@@ -687,6 +700,82 @@ fn parse_known_device(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::sync::Mutex;
+
+    use async_trait::async_trait;
+    use p256::elliptic_curve::sec1::ToEncodedPoint;
+    use rand::rngs::OsRng;
+
+    #[derive(Debug, Default)]
+    struct RecordingStore {
+        puts: Mutex<Vec<CableKnownDeviceId>>,
+        deletes: Mutex<Vec<CableKnownDeviceId>>,
+    }
+
+    #[async_trait]
+    impl CableKnownDeviceInfoStore for RecordingStore {
+        async fn put_known_device(
+            &self,
+            device_id: &CableKnownDeviceId,
+            _device: &CableKnownDeviceInfo,
+        ) {
+            if let Ok(mut puts) = self.puts.lock() {
+                puts.push(device_id.clone());
+            }
+        }
+        async fn delete_known_device(&self, device_id: &CableKnownDeviceId) {
+            if let Ok(mut deletes) = self.deletes.lock() {
+                deletes.push(device_id.clone());
+            }
+        }
+    }
+
+    fn linking_info_with_authenticator_key(authenticator_public_key: Vec<u8>) -> CableLinkingInfo {
+        CableLinkingInfo {
+            contact_id: vec![0u8; 4],
+            link_id: vec![0u8; 8],
+            link_secret: vec![0u8; 32],
+            authenticator_public_key,
+            authenticator_name: "alice's authenticator".to_string(),
+            handshake_signature: vec![0xFFu8; 32],
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_signature_does_not_evict() {
+        let client_private_key = NonZeroScalar::random(&mut OsRng);
+        let authenticator_secret = SecretKey::random(&mut OsRng);
+        let authenticator_public_key = authenticator_secret
+            .public_key()
+            .to_encoded_point(false)
+            .as_bytes()
+            .to_vec();
+
+        let linking_info = linking_info_with_authenticator_key(authenticator_public_key);
+
+        let recording = Arc::new(RecordingStore::default());
+        let store: Arc<dyn CableKnownDeviceInfoStore> = recording.clone();
+
+        // Signature is intentionally bogus, so the update must be rejected.
+        apply_linking_update(
+            &store,
+            &client_private_key,
+            "example.com",
+            &linking_info,
+            &[0u8; 32],
+        )
+        .await;
+
+        assert!(
+            recording.deletes.lock().expect("deletes").is_empty(),
+            "invalid update must not delete a known device"
+        );
+        assert!(
+            recording.puts.lock().expect("puts").is_empty(),
+            "invalid update must not store anything"
+        );
+    }
 
     #[test]
     fn strip_frame_padding_rejects_empty() {
