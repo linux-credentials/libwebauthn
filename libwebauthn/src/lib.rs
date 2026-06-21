@@ -36,8 +36,9 @@
 //!     SystemPublicSuffixList,
 //! };
 //! use libwebauthn::transport::hid::list_devices;
-//! use libwebauthn::transport::{ChannelSettings, Device};
+//! use libwebauthn::transport::{Channel, ChannelSettings, Device};
 //! use libwebauthn::webauthn::WebAuthn;
+//! use libwebauthn::UvUpdate;
 //!
 //! # async fn run() -> Result<(), Box<dyn std::error::Error>> {
 //! // 1. Enumerate authenticators on your transport of choice (HID shown here).
@@ -47,7 +48,22 @@
 //!     // 2. Open a channel to the device.
 //!     let mut channel = device.channel(ChannelSettings::default()).await?;
 //!
-//!     // 3. Build a request from its WebAuthn IDL JSON.
+//!     // 3. Drive user-verification updates on a separate task: each update
+//!     //    carries the means to answer it. See `examples/ceremony/`.
+//!     let mut updates = channel.get_ux_update_receiver();
+//!     tokio::spawn(async move {
+//!         while let Ok(update) = updates.recv().await {
+//!             match update {
+//!                 UvUpdate::PresenceRequired => println!("Touch your authenticator"),
+//!                 UvUpdate::PinRequired(request) => {
+//!                     let _ = request.send_pin("the user's PIN");
+//!                 }
+//!                 _ => {}
+//!             }
+//!         }
+//!     });
+//!
+//!     // 4. Build a request from its WebAuthn IDL JSON.
 //!     let origin: RequestOrigin = "https://example.org".try_into().expect("invalid origin");
 //!     let psl = SystemPublicSuffixList::auto().expect("public suffix list unavailable");
 //!     let settings = RequestSettings {
@@ -60,7 +76,7 @@
 //!     let request =
 //!         MakeCredentialRequest::prepare(&origin, request_json, &settings).await?;
 //!
-//!     // 4. Run the ceremony on the channel.
+//!     // 5. Run the ceremony on the channel.
 //!     let _response = channel.webauthn_make_credential(&request).await?;
 //! }
 //! # Ok(())
