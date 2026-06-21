@@ -50,8 +50,29 @@ pub use credential_management::{
 mod large_blobs;
 pub use large_blobs::{Ctap2LargeBlobsRequest, Ctap2LargeBlobsResponse};
 
+/// CTAP2 command codes; `#[non_exhaustive]` so consumers handle unknown variants.
+///
+/// ```compile_fail
+/// use libwebauthn::proto::ctap2::Ctap2CommandCode;
+/// let code = Ctap2CommandCode::AuthenticatorGetInfo;
+/// let _value: u8 = match code {
+///     Ctap2CommandCode::AuthenticatorMakeCredential => 0x01,
+///     Ctap2CommandCode::AuthenticatorGetAssertion => 0x02,
+///     Ctap2CommandCode::AuthenticatorGetInfo => 0x04,
+///     Ctap2CommandCode::AuthenticatorClientPin => 0x06,
+///     Ctap2CommandCode::AuthenticatorGetNextAssertion => 0x08,
+///     Ctap2CommandCode::AuthenticatorBioEnrollment => 0x09,
+///     Ctap2CommandCode::AuthenticatorBioEnrollmentPreview => 0x40,
+///     Ctap2CommandCode::AuthenticatorCredentialManagement => 0x0A,
+///     Ctap2CommandCode::AuthenticatorCredentialManagementPreview => 0x41,
+///     Ctap2CommandCode::AuthenticatorSelection => 0x0B,
+///     Ctap2CommandCode::AuthenticatorLargeBlobs => 0x0C,
+///     Ctap2CommandCode::AuthenticatorConfig => 0x0D,
+/// };
+/// ```
 #[derive(Debug, IntoPrimitive, TryFromPrimitive, Copy, Clone, PartialEq, Serialize_repr)]
 #[repr(u8)]
+#[non_exhaustive]
 pub enum Ctap2CommandCode {
     AuthenticatorMakeCredential = 0x01,
     AuthenticatorGetAssertion = 0x02,
@@ -78,7 +99,7 @@ pub struct Ctap2PublicKeyCredentialRpEntity {
 }
 
 impl Ctap2PublicKeyCredentialRpEntity {
-    pub fn dummy() -> Self {
+    pub(crate) fn dummy() -> Self {
         Self {
             id: String::from(".dummy"),
             name: Some(String::from(".dummy")),
@@ -109,7 +130,7 @@ pub struct Ctap2PublicKeyCredentialUserEntity {
 }
 
 impl Ctap2PublicKeyCredentialUserEntity {
-    pub fn dummy() -> Self {
+    pub(crate) fn dummy() -> Self {
         Self {
             id: ByteBuf::from([1]),
             name: Some(String::from("dummy")),
@@ -150,6 +171,7 @@ pub enum Ctap2PublicKeyCredentialType {
 /// AuthenticatorTransport from a credential descriptor. Unknown values are kept in `Other` so they pass through unchanged.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(from = "String", into = "String")]
+#[non_exhaustive]
 pub enum Ctap2Transport {
     Ble,
     Nfc,

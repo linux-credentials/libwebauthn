@@ -86,7 +86,7 @@ impl Ctap1RegisterRequest {
         }
     }
 
-    pub fn dummy(timeout: Duration) -> Self {
+    pub(crate) fn dummy(timeout: Duration) -> Self {
         Ctap1RegisterRequest {
             version: Ctap1Version::U2fV2,
             app_id_hash: vec![0; 32],

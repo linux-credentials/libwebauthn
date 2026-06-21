@@ -224,6 +224,7 @@ pub enum Ctap2PinUvAuthProtocolCommand {
 
 #[cfg_attr(test, derive(SerializeIndexed))]
 #[derive(Debug, Clone, Default, DeserializeIndexed)]
+#[non_exhaustive]
 pub struct Ctap2ClientPinResponse {
     /// keyAgreement (0x01)
     #[serde(skip_serializing_if = "Option::is_none")]

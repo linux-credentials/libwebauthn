@@ -10,6 +10,7 @@ use super::{Ctap2CredentialType, Ctap2UserVerificationOperation};
 
 #[cfg_attr(test, derive(SerializeIndexed))]
 #[derive(Debug, Clone, DeserializeIndexed, Default)]
+#[non_exhaustive]
 pub struct Ctap2GetInfoResponse {
     /// versions (0x01)
     #[serde(index = 0x01)]

@@ -68,6 +68,7 @@ pub struct Ctap2BioEnrollmentParams {
 }
 
 #[derive(Debug, Default, Clone, DeserializeIndexed)]
+#[non_exhaustive]
 pub struct Ctap2BioEnrollmentResponse {
     // modality (0x01) 	Unsigned Integer 	Optional 	The user verification modality.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -145,12 +146,14 @@ pub enum Ctap2LastEnrollmentSampleStatus {
 
 #[repr(u64)]
 #[derive(Debug, Clone, FromPrimitive, PartialEq, Serialize_repr, Deserialize_repr)]
+#[non_exhaustive]
 pub enum Ctap2BioEnrollmentModality {
     Fingerprint = 0x01, // Fingerprint was too high.
 }
 
 #[repr(u64)]
 #[derive(Debug, Clone, FromPrimitive, PartialEq, Serialize_repr, Deserialize_repr)]
+#[non_exhaustive]
 pub enum Ctap2BioEnrollmentFingerprintKind {
     Touch = 0x01,
     Swipe = 0x02,

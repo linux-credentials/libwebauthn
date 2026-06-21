@@ -89,6 +89,7 @@ pub struct Ctap2CredentialManagementParams {
 }
 
 #[derive(Debug, Default, Clone, DeserializeIndexed)]
+#[non_exhaustive]
 pub struct Ctap2CredentialManagementResponse {
     // existingResidentCredentialsCount (0x01) 	Unsigned Integer 	Number of existing discoverable credentials present on the authenticator.
     #[serde(skip_serializing_if = "Option::is_none")]
