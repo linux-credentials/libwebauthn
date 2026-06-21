@@ -105,7 +105,9 @@ async fn preflight_no_exclude_list() {
 
     let state_recv = channel.get_ux_update_receiver();
     let hash: [u8; 32] = thread_rng().gen();
-    let filtered_list = ctap2_preflight(&mut channel, &[], &hash, "example.org").await;
+    let filtered_list = ctap2_preflight(&mut channel, &[], &hash, "example.org")
+        .await
+        .expect("preflight failed");
     assert!(filtered_list.is_empty());
 
     let res = make_credential_call(&mut channel, &user_id, None).await;
@@ -133,7 +135,9 @@ async fn preflight_nonsense_exclude_list() {
     ];
 
     let hash: [u8; 32] = thread_rng().gen();
-    let filtered_list = ctap2_preflight(&mut channel, &exclude_list, &hash, "example.org").await;
+    let filtered_list = ctap2_preflight(&mut channel, &exclude_list, &hash, "example.org")
+        .await
+        .expect("preflight failed");
     assert!(filtered_list.is_empty());
 
     let res = make_credential_call(&mut channel, &user_id, Some(exclude_list)).await;
@@ -168,7 +172,9 @@ async fn preflight_mixed_exclude_list() {
         create_credential(&[7, 6, 5, 4, 3, 2, 1, 9, 8]),
     ];
 
-    let filtered_list = ctap2_preflight(&mut channel, &exclude_list, &hash, "example.org").await;
+    let filtered_list = ctap2_preflight(&mut channel, &exclude_list, &hash, "example.org")
+        .await
+        .expect("preflight failed");
     assert_eq!(filtered_list.len(), 2);
     assert_eq!(filtered_list[0].id, first_credential.id);
     assert_eq!(filtered_list[1].id, second_credential.id);
@@ -203,7 +209,9 @@ async fn preflight_no_allow_list() {
     let res = make_credential_call(&mut channel, &user_id, None).await;
     let (_credential, hash) = res.expect("Failed to register first credential");
 
-    let filtered_list = ctap2_preflight(&mut channel, &[], &hash, "example.org").await;
+    let filtered_list = ctap2_preflight(&mut channel, &[], &hash, "example.org")
+        .await
+        .expect("preflight failed");
     assert!(filtered_list.is_empty());
 
     let allow_list = Vec::new();
@@ -236,7 +244,9 @@ async fn preflight_nonsense_allow_list() {
         create_credential(&[7, 6, 5, 4, 3, 2, 1, 9, 8]),
     ];
 
-    let filtered_list = ctap2_preflight(&mut channel, &allow_list, &hash, "example.org").await;
+    let filtered_list = ctap2_preflight(&mut channel, &allow_list, &hash, "example.org")
+        .await
+        .expect("preflight failed");
     assert!(filtered_list.is_empty());
 
     let res = get_assertion_call(&mut channel, allow_list).await;
@@ -277,7 +287,8 @@ async fn preflight_with_appid_exclude_finds_legacy_credential() {
         "example.org",
         None,
     )
-    .await;
+    .await
+    .expect("preflight failed");
     assert!(
         filtered_no_appid.is_empty(),
         "Without appid_exclude, the legacy credential should not be detected"
@@ -292,7 +303,8 @@ async fn preflight_with_appid_exclude_finds_legacy_credential() {
         "example.org",
         Some("legacy.example.org"),
     )
-    .await;
+    .await
+    .expect("preflight failed");
     assert_eq!(
         filtered_with_appid.len(),
         1,
@@ -325,7 +337,9 @@ async fn preflight_mixed_allow_list() {
         second_credential.clone(),
     ];
 
-    let filtered_list = ctap2_preflight(&mut channel, &allow_list, &hash, "example.org").await;
+    let filtered_list = ctap2_preflight(&mut channel, &allow_list, &hash, "example.org")
+        .await
+        .expect("preflight failed");
     assert_eq!(filtered_list.len(), 2);
     assert_eq!(filtered_list[0].id, first_credential.id);
     assert_eq!(filtered_list[1].id, second_credential.id);
