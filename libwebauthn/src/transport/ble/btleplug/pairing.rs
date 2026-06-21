@@ -16,8 +16,7 @@ use super::Error;
 pub(crate) enum BondingState {
     Bonded,
     NotBonded,
-    /// Bonding state could not be determined (non-bluez backend or DBus
-    /// unreachable); the caller decides whether to proceed.
+    /// State could not be determined; treated as not bonded.
     Unknown,
 }
 
@@ -48,27 +47,22 @@ pub(crate) async fn check_bonded(peripheral: &Peripheral) -> BondingState {
     }
 }
 
-/// Returns `Err(ConnectionFailed)` when the device is reachable but
-/// explicitly not bonded; falls through on `Unknown`.
+/// Refuses the link unless bluez confirms it is bonded.
 pub(crate) async fn enforce_bonded(peripheral: &Peripheral) -> Result<(), Error> {
-    match check_bonded(peripheral).await {
-        BondingState::Bonded => Ok(()),
-        BondingState::Unknown => {
-            warn!(
-                "Could not verify LE Secure Connections bonding via bluez; \
-                 proceeding under OS pairing enforcement"
-            );
-            Ok(())
-        }
-        BondingState::NotBonded => {
-            warn!(
-                "BLE FIDO authenticator is not bonded with LE Secure Connections; \
-                 CTAP 2.2 §11.4 requires bonding. Pair the device via the OS \
-                 (e.g. `bluetoothctl pair <ADDR>`) before retrying."
-            );
-            Err(Error::ConnectionFailed)
-        }
+    bonded_or_refused(check_bonded(peripheral).await)
+}
+
+fn bonded_or_refused(state: BondingState) -> Result<(), Error> {
+    if state == BondingState::Bonded {
+        return Ok(());
     }
+    warn!(
+        ?state,
+        "BLE FIDO authenticator link is not confirmed bonded with LE Secure \
+         Connections; CTAP 2.2 §11.4 requires bonding. Pair the device via the OS \
+         (e.g. `bluetoothctl pair <ADDR>`) before retrying."
+    );
+    Err(Error::ConnectionFailed)
 }
 
 /// btleplug doesn't expose the adapter index, so we walk the bluez
@@ -108,4 +102,16 @@ fn query_bluez_bonded(address: BDAddr) -> Result<(bool, bool), String> {
     }
 
     Err(format!("device {address} not found in bluez ObjectManager"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_confirmed_bonded_proceeds() {
+        assert!(bonded_or_refused(BondingState::Bonded).is_ok());
+        assert!(bonded_or_refused(BondingState::NotBonded).is_err());
+        assert!(bonded_or_refused(BondingState::Unknown).is_err());
+    }
 }
