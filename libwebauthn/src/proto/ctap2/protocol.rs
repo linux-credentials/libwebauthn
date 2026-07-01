@@ -65,6 +65,10 @@ pub trait Ctap2: Channel {
         &mut self,
         timeout: Duration,
     ) -> Result<(), WebAuthnError<Self::TransportError>>;
+    async fn ctap2_authenticator_reset(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<(), WebAuthnError<Self::TransportError>>;
     async fn ctap2_authenticator_config(
         &mut self,
         request: &Ctap2AuthenticatorConfigRequest,
@@ -214,6 +218,32 @@ where
             error => {
                 warn!(?error, "Selection request failed with status code");
                 return Err(WebAuthnError::Ctap(error));
+            }
+        }
+    }
+
+    #[instrument(skip_all)]
+    async fn ctap2_authenticator_reset(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<(), WebAuthnError<Self::TransportError>> {
+        debug!("CTAP2 Authenticator Reset request");
+        let cbor_request = CborRequest::new(Ctap2CommandCode::AuthenticatorReset);
+        self.cbor_send(&cbor_request, timeout)
+            .await
+            .map_err(WebAuthnError::Transport)?;
+        let cbor_response = self
+            .cbor_recv(timeout)
+            .await
+            .map_err(WebAuthnError::Transport)?;
+        match cbor_response.status_code {
+            CtapError::Ok => Ok(()),
+            error => {
+                warn!(
+                    ?error,
+                    "Authenticator reset request failed with status code"
+                );
+                Err(WebAuthnError::Ctap(error))
             }
         }
     }
