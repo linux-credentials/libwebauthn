@@ -11,7 +11,7 @@ use crate::{
     transport::Channel,
     unwrap_field,
     webauthn::{
-        error::{CtapError, Error, PlatformError},
+        error::{CtapError, PlatformError, WebAuthnError},
         handle_errors,
         pin_uv_auth_token::{user_verification, UsedPinUvAuthToken},
     },
@@ -23,34 +23,39 @@ use std::time::Duration;
 use tracing::info;
 
 #[async_trait]
-pub trait CredentialManagement {
+pub trait CredentialManagement: Channel {
     async fn get_credential_metadata(
         &mut self,
         timeout: Duration,
-    ) -> Result<Ctap2CredentialManagementMetadata, Error>;
-    async fn enumerate_rps_begin(&mut self, timeout: Duration)
-        -> Result<(Ctap2RPData, u64), Error>;
-    async fn enumerate_rps_next_rp(&mut self, timeout: Duration) -> Result<Ctap2RPData, Error>;
+    ) -> Result<Ctap2CredentialManagementMetadata, WebAuthnError<Self::TransportError>>;
+    async fn enumerate_rps_begin(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<(Ctap2RPData, u64), WebAuthnError<Self::TransportError>>;
+    async fn enumerate_rps_next_rp(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<Ctap2RPData, WebAuthnError<Self::TransportError>>;
     async fn enumerate_credentials_begin(
         &mut self,
         rpid_hash: &[u8],
         timeout: Duration,
-    ) -> Result<(Ctap2CredentialData, u64), Error>;
+    ) -> Result<(Ctap2CredentialData, u64), WebAuthnError<Self::TransportError>>;
     async fn enumerate_credentials_next(
         &mut self,
         timeout: Duration,
-    ) -> Result<Ctap2CredentialData, Error>;
+    ) -> Result<Ctap2CredentialData, WebAuthnError<Self::TransportError>>;
     async fn delete_credential(
         &mut self,
         credential_id: &Ctap2PublicKeyCredentialDescriptor,
         timeout: Duration,
-    ) -> Result<(), Error>;
+    ) -> Result<(), WebAuthnError<Self::TransportError>>;
     async fn update_user_info(
         &mut self,
         credential_id: &Ctap2PublicKeyCredentialDescriptor,
         user: &Ctap2PublicKeyCredentialUserEntity,
         timeout: Duration,
-    ) -> Result<(), Error>;
+    ) -> Result<(), WebAuthnError<Self::TransportError>>;
 }
 
 #[async_trait]
@@ -61,7 +66,7 @@ where
     async fn get_credential_metadata(
         &mut self,
         timeout: Duration,
-    ) -> Result<Ctap2CredentialManagementMetadata, Error> {
+    ) -> Result<Ctap2CredentialManagementMetadata, WebAuthnError<Self::TransportError>> {
         let mut req = Ctap2CredentialManagementRequest::new_get_credential_metadata();
         let resp = loop {
             let uv_auth_used = user_verification(
@@ -91,7 +96,7 @@ where
     async fn enumerate_rps_begin(
         &mut self,
         timeout: Duration,
-    ) -> Result<(Ctap2RPData, u64), Error> {
+    ) -> Result<(Ctap2RPData, u64), WebAuthnError<Self::TransportError>> {
         let mut req = Ctap2CredentialManagementRequest::new_enumerate_rps_begin();
         let resp = loop {
             let uv_auth_used = user_verification(
@@ -121,7 +126,10 @@ where
         ))
     }
 
-    async fn enumerate_rps_next_rp(&mut self, timeout: Duration) -> Result<Ctap2RPData, Error> {
+    async fn enumerate_rps_next_rp(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<Ctap2RPData, WebAuthnError<Self::TransportError>> {
         let mut req = Ctap2CredentialManagementRequest::new_enumerate_rps_next_rp();
         req.use_legacy_preview = self.cred_mgmt_preview();
         let resp = self.ctap2_credential_management(&req, timeout).await?;
@@ -135,7 +143,7 @@ where
         &mut self,
         rpid_hash: &[u8],
         timeout: Duration,
-    ) -> Result<(Ctap2CredentialData, u64), Error> {
+    ) -> Result<(Ctap2CredentialData, u64), WebAuthnError<Self::TransportError>> {
         let mut req = Ctap2CredentialManagementRequest::new_enumerate_credentials_begin(rpid_hash);
         let resp = loop {
             let uv_auth_used = user_verification(
@@ -170,7 +178,7 @@ where
     async fn enumerate_credentials_next(
         &mut self,
         timeout: Duration,
-    ) -> Result<Ctap2CredentialData, Error> {
+    ) -> Result<Ctap2CredentialData, WebAuthnError<Self::TransportError>> {
         let mut req = Ctap2CredentialManagementRequest::new_enumerate_credentials_next();
         req.use_legacy_preview = self.cred_mgmt_preview();
         let resp = self.ctap2_credential_management(&req, timeout).await?;
@@ -188,7 +196,7 @@ where
         &mut self,
         credential_id: &Ctap2PublicKeyCredentialDescriptor,
         timeout: Duration,
-    ) -> Result<(), Error> {
+    ) -> Result<(), WebAuthnError<Self::TransportError>> {
         let mut req = Ctap2CredentialManagementRequest::new_delete_credential(credential_id);
         loop {
             let uv_auth_used = user_verification(
@@ -216,7 +224,7 @@ where
         credential_id: &Ctap2PublicKeyCredentialDescriptor,
         user: &Ctap2PublicKeyCredentialUserEntity,
         timeout: Duration,
-    ) -> Result<(), Error> {
+    ) -> Result<(), WebAuthnError<Self::TransportError>> {
         let mut req =
             Ctap2CredentialManagementRequest::new_update_user_information(credential_id, user);
         loop {
@@ -230,7 +238,7 @@ where
 
             // Preview mode does not support "updateUserInfo" subcommand
             if req.use_legacy_preview {
-                return Err(Error::Ctap(CtapError::InvalidCommand));
+                return Err(WebAuthnError::Ctap(CtapError::InvalidCommand));
             }
 
             // On success, this is an all-empty Ctap2AuthenticatorConfigResponse
@@ -255,10 +263,10 @@ impl Ctap2UserVerifiableRequest for Ctap2CredentialManagementRequest {
         &mut self,
         uv_proto: &dyn PinUvAuthProtocol,
         uv_auth_token: &[u8],
-    ) -> Result<(), Error> {
+    ) -> Result<(), PlatformError> {
         let subcommand = self
             .subcommand
-            .ok_or(Error::Platform(PlatformError::InvalidDeviceResponse))?;
+            .ok_or(PlatformError::InvalidDeviceResponse)?;
         let mut data = vec![subcommand as u8];
 
         // e.g. pinUvAuthParam (0x04): authenticate(pinUvAuthToken, enumerateCredentialsBegin (0x04) || subCommandParams).

@@ -10,7 +10,7 @@
 //! User verification is handled internally by the [`pin_uv_auth_token`] module,
 //! which manages PIN and biometric UV, reuse of a cached pinUvAuthToken, shared
 //! secret establishment, and the fallback from biometric to PIN. Failures are
-//! reported as [`Error`], which distinguishes CTAP protocol errors
+//! reported as [`WebAuthnError`], which distinguishes CTAP protocol errors
 //! ([`CtapError`]), transport errors, and platform errors.
 
 pub mod error;
@@ -36,9 +36,8 @@ use crate::proto::ctap2::{
     Ctap2GetInfoResponse, Ctap2MakeCredentialRequest, Ctap2PublicKeyCredentialDescriptor,
     Ctap2UserVerificationOperation,
 };
-pub use crate::transport::error::TransportError;
 use crate::transport::{AuthTokenData, Channel};
-pub use crate::webauthn::error::{CtapError, Error, PlatformError};
+pub use crate::webauthn::error::{CtapError, PlatformError, WebAuthnError};
 use crate::UvUpdate;
 
 use pin_uv_auth_token::{user_verification, UsedPinUvAuthToken};
@@ -58,25 +57,28 @@ fn filter_oversized_credentials(
     }
 }
 
-fn ensure_credential_count(count: usize, info: &Ctap2GetInfoResponse) -> Result<(), Error> {
+fn ensure_credential_count(count: usize, info: &Ctap2GetInfoResponse) -> Result<(), PlatformError> {
     if let Some(max) = info.max_credential_count_in_list() {
         if count > max {
             warn!(
                 count,
                 max, "credential list exceeds maxCredentialCountInList"
             );
-            return Err(Error::Platform(PlatformError::RequestTooLarge));
+            return Err(PlatformError::RequestTooLarge);
         }
     }
     Ok(())
 }
 
-fn ensure_msg_size(request: &CborRequest, info: &Ctap2GetInfoResponse) -> Result<(), Error> {
+fn ensure_msg_size(
+    request: &CborRequest,
+    info: &Ctap2GetInfoResponse,
+) -> Result<(), PlatformError> {
     let size = request.ctap_hid_data().len();
     let max = info.max_msg_size();
     if size > max {
         warn!(size, max, "serialized request exceeds maxMsgSize");
-        return Err(Error::Platform(PlatformError::RequestTooLarge));
+        return Err(PlatformError::RequestTooLarge);
     }
     Ok(())
 }
@@ -84,7 +86,7 @@ fn ensure_msg_size(request: &CborRequest, info: &Ctap2GetInfoResponse) -> Result
 fn enforce_get_assertion_limits(
     request: &Ctap2GetAssertionRequest,
     info: &Ctap2GetInfoResponse,
-) -> Result<(), Error> {
+) -> Result<(), PlatformError> {
     ensure_credential_count(request.allow.len(), info)?;
     ensure_msg_size(&request.try_into()?, info)
 }
@@ -92,7 +94,7 @@ fn enforce_get_assertion_limits(
 fn enforce_make_credential_limits(
     request: &Ctap2MakeCredentialRequest,
     info: &Ctap2GetInfoResponse,
-) -> Result<(), Error> {
+) -> Result<(), PlatformError> {
     let exclude_count = request.exclude.as_ref().map_or(0, Vec::len);
     ensure_credential_count(exclude_count, info)?;
     ensure_msg_size(&request.try_into()?, info)
@@ -114,14 +116,14 @@ macro_rules! handle_errors {
     };
     (@inner $channel: expr, $resp: expr, $uv_auth_used: expr, $timeout: expr, $on_persistent_reject: block) => {
         match $resp {
-            Err(Error::Ctap(CtapError::PINAuthInvalid))
+            Err(WebAuthnError::Ctap(CtapError::PINAuthInvalid))
                 if $uv_auth_used == UsedPinUvAuthToken::FromEphemeralStorage =>
             {
                 info!("PINAuthInvalid: Clearing auth token storage and trying again.");
                 $channel.clear_uv_auth_token_store();
                 continue;
             }
-            Err(Error::Ctap(CtapError::PINAuthInvalid))
+            Err(WebAuthnError::Ctap(CtapError::PINAuthInvalid))
                 if matches!($uv_auth_used, UsedPinUvAuthToken::FromPersistentStorage(_)) =>
             {
                 info!("PINAuthInvalid on a persistent token: evicting the record and retrying.");
@@ -133,7 +135,7 @@ macro_rules! handle_errors {
                 $on_persistent_reject
                 continue;
             }
-            Err(Error::Ctap(CtapError::UVInvalid)) => {
+            Err(WebAuthnError::Ctap(CtapError::UVInvalid)) => {
                 let attempts_left = $channel
                     .ctap2_client_pin(&Ctap2ClientPinRequest::new_get_uv_retries(), $timeout)
                     .await
@@ -143,7 +145,7 @@ macro_rules! handle_errors {
                 $channel
                     .send_ux_update(UvUpdate::UvRetry { attempts_left }.into())
                     .await;
-                break Err(Error::Ctap(CtapError::UVInvalid));
+                break Err(WebAuthnError::Ctap(CtapError::UVInvalid));
             }
             x => {
                 break x;
@@ -154,15 +156,15 @@ macro_rules! handle_errors {
 pub(crate) use handle_errors;
 
 #[async_trait]
-pub trait WebAuthn {
+pub trait WebAuthn: Channel {
     async fn webauthn_make_credential(
         &mut self,
         op: &MakeCredentialRequest,
-    ) -> Result<MakeCredentialResponse, Error>;
+    ) -> Result<MakeCredentialResponse, WebAuthnError<Self::TransportError>>;
     async fn webauthn_get_assertion(
         &mut self,
         op: &GetAssertionRequest,
-    ) -> Result<GetAssertionResponse, Error>;
+    ) -> Result<GetAssertionResponse, WebAuthnError<Self::TransportError>>;
 }
 
 #[async_trait]
@@ -174,7 +176,7 @@ where
     async fn webauthn_make_credential(
         &mut self,
         op: &MakeCredentialRequest,
-    ) -> Result<MakeCredentialResponse, Error> {
+    ) -> Result<MakeCredentialResponse, WebAuthnError<C::TransportError>> {
         let upgraded;
         let prf_present = op.extensions.as_ref().is_some_and(|e| e.prf.is_some());
         let op = if prf_forces_uv_upgrade(prf_present, op.user_verification) {
@@ -201,7 +203,7 @@ where
     async fn webauthn_get_assertion(
         &mut self,
         op: &GetAssertionRequest,
-    ) -> Result<GetAssertionResponse, Error> {
+    ) -> Result<GetAssertionResponse, WebAuthnError<C::TransportError>> {
         let upgraded;
         let prf_present = op.extensions.as_ref().is_some_and(|e| e.prf.is_some());
         let op = if prf_forces_uv_upgrade(prf_present, op.user_verification) {
@@ -226,7 +228,7 @@ where
 async fn make_credential_fido2<C: Channel>(
     channel: &mut C,
     op: &MakeCredentialRequest,
-) -> Result<MakeCredentialResponse, Error> {
+) -> Result<MakeCredentialResponse, WebAuthnError<C::TransportError>> {
     let get_info_response = channel.ctap2_get_info().await?;
     let mut ctap2_request =
         Ctap2MakeCredentialRequest::from_webauthn_request(op, &get_info_response)?;
@@ -300,7 +302,7 @@ async fn make_credential_fido2<C: Channel>(
 async fn make_credential_u2f<C: Channel>(
     channel: &mut C,
     op: &MakeCredentialRequest,
-) -> Result<MakeCredentialResponse, Error> {
+) -> Result<MakeCredentialResponse, WebAuthnError<C::TransportError>> {
     let register_request: RegisterRequest = op.try_downgrade()?;
 
     channel
@@ -312,7 +314,7 @@ async fn make_credential_u2f<C: Channel>(
 async fn get_assertion_fido2<C: Channel>(
     channel: &mut C,
     op: &GetAssertionRequest,
-) -> Result<GetAssertionResponse, Error> {
+) -> Result<GetAssertionResponse, WebAuthnError<C::TransportError>> {
     // WebAuthn L3 §10.1.5: largeBlob.write/delete requires exactly one allowCredentials entry.
     let large_blob_ext = op.extensions.as_ref().and_then(|e| e.large_blob.as_ref());
     if matches!(
@@ -325,7 +327,7 @@ async fn get_assertion_fido2<C: Channel>(
             count = op.allow.len(),
             "largeBlob.write/delete requires exactly one allowCredentials entry"
         );
-        return Err(Error::Platform(PlatformError::NotSupported));
+        return Err(WebAuthnError::Platform(PlatformError::NotSupported));
     }
 
     let get_info_response = channel.ctap2_get_info().await?;
@@ -354,12 +356,12 @@ async fn get_assertion_fido2<C: Channel>(
             let _ = channel
                 .ctap2_make_credential(&dummy_request, op.timeout)
                 .await;
-            return Err(Error::Ctap(CtapError::NoCredentials));
+            return Err(WebAuthnError::Ctap(CtapError::NoCredentials));
         }
         ctap2_request.allow = filtered_allow_list;
     } else if ctap2_request.allow.is_empty() && !op.allow.is_empty() {
         // No preflight (cable): all entries were oversized, so don't fall through to an empty allowList.
-        return Err(Error::Ctap(CtapError::NoCredentials));
+        return Err(WebAuthnError::Ctap(CtapError::NoCredentials));
     }
 
     enforce_get_assertion_limits(&ctap2_request, &get_info_response)?;
@@ -408,13 +410,16 @@ async fn get_assertion_fido2<C: Channel>(
         hasher.update(op.relying_party_id.as_bytes());
         hasher.finalize()
     };
-    let validate_rp_id_hash = |resp: &Ctap2GetAssertionResponse| -> Result<(), Error> {
-        if resp.authenticator_data.rp_id_hash.as_slice() != expected_rp_id_hash.as_slice() {
-            warn!("getAssertion rpIdHash does not match the requested RP ID");
-            return Err(Error::Platform(PlatformError::InvalidDeviceResponse));
-        }
-        Ok(())
-    };
+    let validate_rp_id_hash =
+        |resp: &Ctap2GetAssertionResponse| -> Result<(), WebAuthnError<C::TransportError>> {
+            if resp.authenticator_data.rp_id_hash.as_slice() != expected_rp_id_hash.as_slice() {
+                warn!("getAssertion rpIdHash does not match the requested RP ID");
+                return Err(WebAuthnError::Platform(
+                    PlatformError::InvalidDeviceResponse,
+                ));
+            }
+            Ok(())
+        };
 
     validate_rp_id_hash(&response)?;
     // Cap iteration so a hostile numberOfCredentials cannot force an unbounded loop.
@@ -458,13 +463,15 @@ async fn get_assertion_fido2<C: Channel>(
                 .iter()
                 .map(|resp| {
                     let blob = match (entries.as_ref(), extract_large_blob_key(resp)) {
-                        (Some(entries), Some(key)) => match decrypt_first_matching(entries, &key) {
-                            Ok(blob) => blob,
-                            Err(e) => {
-                                warn!(?e, "largeBlob decrypt failed; no blob returned");
-                                None
+                        (Some(entries), Some(key)) => {
+                            match decrypt_first_matching::<C::TransportError>(entries, &key) {
+                                Ok(blob) => blob,
+                                Err(e) => {
+                                    warn!(?e, "largeBlob decrypt failed; no blob returned");
+                                    None
+                                }
                             }
-                        },
+                        }
                         _ => None,
                     };
                     GetAssertionLargeBlobExtensionOutput {
@@ -629,7 +636,7 @@ async fn write_or_delete_for_first<C: Channel>(
 async fn get_assertion_u2f<C: Channel>(
     channel: &mut C,
     op: &GetAssertionRequest,
-) -> Result<GetAssertionResponse, Error> {
+) -> Result<GetAssertionResponse, WebAuthnError<C::TransportError>> {
     use sha2::{Digest, Sha256};
 
     let sign_requests: Vec<SignRequest> = op.try_downgrade()?;
@@ -666,7 +673,7 @@ async fn get_assertion_u2f<C: Channel>(
                 }
                 return Ok(upgraded);
             }
-            Err(Error::Ctap(CtapError::NoCredentials)) => {
+            Err(WebAuthnError::Ctap(CtapError::NoCredentials)) => {
                 debug!("No credentials found, trying with the next.");
             }
             Err(err) => {
@@ -679,21 +686,21 @@ async fn get_assertion_u2f<C: Channel>(
         }
     }
     warn!("None of the credentials in the original request's allowList were found.");
-    Err(Error::Ctap(CtapError::NoCredentials))
+    Err(WebAuthnError::Ctap(CtapError::NoCredentials))
 }
 
 #[instrument(skip_all)]
 async fn negotiate_protocol<C: Channel>(
     channel: &mut C,
     allow_u2f: bool,
-) -> Result<FidoProtocol, Error> {
+) -> Result<FidoProtocol, WebAuthnError<C::TransportError>> {
     let supported = channel.supported_protocols().await?;
     if !supported.u2f && !supported.fido2 {
-        return Err(Error::Transport(TransportError::NegotiationFailed));
+        return Err(WebAuthnError::Platform(PlatformError::NotSupported));
     }
 
     if !allow_u2f && !supported.fido2 {
-        return Err(Error::Transport(TransportError::NegotiationFailed));
+        return Err(WebAuthnError::Platform(PlatformError::NotSupported));
     }
 
     let fido_protocol = if supported.fido2 {
@@ -816,11 +823,14 @@ mod tests {
         #[async_trait]
         impl Channel for NoPreflightChannel {
             type UxUpdate = UvUpdate;
+            type TransportError = std::convert::Infallible;
 
             fn get_ux_update_sender(&self) -> &broadcast::Sender<Self::UxUpdate> {
                 self.inner.get_ux_update_sender()
             }
-            async fn supported_protocols(&self) -> Result<SupportedProtocols, Error> {
+            async fn supported_protocols(
+                &self,
+            ) -> Result<SupportedProtocols, WebAuthnError<Self::TransportError>> {
                 self.inner.supported_protocols().await
             }
             async fn status(&self) -> ChannelStatus {
@@ -831,20 +841,26 @@ mod tests {
                 &mut self,
                 request: &ApduRequest,
                 timeout: Duration,
-            ) -> Result<(), Error> {
+            ) -> Result<(), Self::TransportError> {
                 self.inner.apdu_send(request, timeout).await
             }
-            async fn apdu_recv(&mut self, timeout: Duration) -> Result<ApduResponse, Error> {
+            async fn apdu_recv(
+                &mut self,
+                timeout: Duration,
+            ) -> Result<ApduResponse, Self::TransportError> {
                 self.inner.apdu_recv(timeout).await
             }
             async fn cbor_send(
                 &mut self,
                 request: &CborRequest,
                 timeout: Duration,
-            ) -> Result<(), Error> {
+            ) -> Result<(), Self::TransportError> {
                 self.inner.cbor_send(request, timeout).await
             }
-            async fn cbor_recv(&mut self, timeout: Duration) -> Result<CborResponse, Error> {
+            async fn cbor_recv(
+                &mut self,
+                timeout: Duration,
+            ) -> Result<CborResponse, Self::TransportError> {
                 self.inner.cbor_recv(timeout).await
             }
             fn supports_preflight() -> bool {
@@ -971,7 +987,7 @@ mod tests {
                 ctap2_get_assertion(vec![descriptor(b"a"), descriptor(b"b"), descriptor(b"c")]);
             assert_eq!(
                 enforce_get_assertion_limits(&request, &info),
-                Err(Error::Platform(PlatformError::RequestTooLarge))
+                Err(PlatformError::RequestTooLarge)
             );
         }
 
@@ -995,7 +1011,7 @@ mod tests {
             request.exclude = Some(vec![descriptor(b"a"), descriptor(b"b")]);
             assert_eq!(
                 enforce_make_credential_limits(&request, &info),
-                Err(Error::Platform(PlatformError::RequestTooLarge))
+                Err(PlatformError::RequestTooLarge)
             );
         }
 
@@ -1008,7 +1024,7 @@ mod tests {
             let request = ctap2_get_assertion(vec![descriptor(&[0u8; 2000])]);
             assert_eq!(
                 enforce_get_assertion_limits(&request, &info),
-                Err(Error::Platform(PlatformError::RequestTooLarge))
+                Err(PlatformError::RequestTooLarge)
             );
         }
 
@@ -1065,10 +1081,12 @@ mod tests {
             );
 
             let result = get_assertion_fido2(&mut channel, &op).await;
-            assert_eq!(
+            assert!(matches!(
                 result.err(),
-                Some(Error::Platform(PlatformError::InvalidDeviceResponse))
-            );
+                Some(WebAuthnError::Platform(
+                    PlatformError::InvalidDeviceResponse
+                ))
+            ));
         }
     }
 }

@@ -25,10 +25,10 @@ use super::tunnel::KNOWN_TUNNEL_DOMAINS;
 use super::{channel::CableChannel, channel::ConnectionState, Cable};
 use crate::proto::ctap2::cbor;
 use crate::transport::cable::digit_encode;
+use crate::transport::cable::error::CableError;
 use crate::transport::ChannelSettings;
 use crate::transport::Device;
-use crate::webauthn::error::Error;
-use crate::webauthn::TransportError;
+use crate::webauthn::error::WebAuthnError;
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq)]
 pub enum QrCodeOperationHint {
@@ -153,7 +153,7 @@ impl CableQrCodeDevice {
         hint: QrCodeOperationHint,
         store: Arc<dyn CableKnownDeviceInfoStore>,
         transports: CableTransports,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, CableError> {
         Self::new(hint, true, Some(store), transports)
     }
 
@@ -162,7 +162,7 @@ impl CableQrCodeDevice {
         state_assisted: bool,
         store: Option<Arc<dyn CableKnownDeviceInfoStore>>,
         transports: CableTransports,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, CableError> {
         let private_key_scalar = NonZeroScalar::random(&mut OsRng);
         let private_key = SecretKey::from(private_key_scalar);
         let public_key: [u8; 33] = private_key
@@ -171,7 +171,7 @@ impl CableQrCodeDevice {
             .to_encoded_point(true)
             .as_bytes()
             .try_into()
-            .map_err(|_| Error::Transport(TransportError::InvalidKey))?;
+            .map_err(|_| CableError::InvalidKey)?;
         let mut qr_secret = [0u8; 16];
         OsRng.fill_bytes(&mut qr_secret);
 
@@ -206,7 +206,7 @@ impl CableQrCodeDevice {
     pub fn new_transient(
         hint: QrCodeOperationHint,
         transports: CableTransports,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, CableError> {
         Self::new(hint, false, None, transports)
     }
 
@@ -214,7 +214,7 @@ impl CableQrCodeDevice {
     async fn connection(
         qr_device: &CableQrCodeDevice,
         ux_sender: &MpscUxUpdateSender,
-    ) -> Result<super::connection_stages::HandshakeOutput, Error> {
+    ) -> Result<super::connection_stages::HandshakeOutput, CableError> {
         // Stage 1: Proximity check
         let proximity_input = ProximityCheckInput::new_for_qr_code(qr_device)?;
         let proximity_output = proximity_check_stage(proximity_input, ux_sender).await?;
@@ -240,7 +240,10 @@ impl Display for CableQrCodeDevice {
 
 #[async_trait]
 impl<'d> Device<'d, Cable, CableChannel> for CableQrCodeDevice {
-    async fn channel(&'d mut self, settings: ChannelSettings) -> Result<CableChannel, Error> {
+    async fn channel(
+        &'d mut self,
+        settings: ChannelSettings,
+    ) -> Result<CableChannel, WebAuthnError<CableError>> {
         let (ux_update_sender, _) = broadcast::channel(16);
         let (cbor_tx_send, cbor_tx_recv) = mpsc::channel(16);
         let (cbor_rx_send, cbor_rx_recv) = mpsc::channel(16);
@@ -257,11 +260,7 @@ impl<'d> Device<'d, Cable, CableChannel> for CableQrCodeDevice {
             let handshake_output = match Self::connection(&qr_device, &ux_sender).await {
                 Ok(handshake_output) => handshake_output,
                 Err(e) => {
-                    let transport_err = match e {
-                        Error::Transport(t) => t,
-                        _ => TransportError::ConnectionFailed,
-                    };
-                    ux_sender.send_error(transport_err).await;
+                    ux_sender.send_error(e).await;
                     return;
                 }
             };

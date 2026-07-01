@@ -14,8 +14,7 @@ use tracing::{debug, error, trace, warn};
 use zeroize::ZeroizeOnDrop;
 
 use crate::proto::ctap2::{Ctap2GetInfoResponse, Ctap2PinUvAuthProtocol};
-use crate::proto::CtapError;
-use crate::webauthn::error::{Error, PlatformError};
+use crate::webauthn::error::PlatformError;
 
 type Aes128CbcDecryptor = cbc::Decryptor<aes::Aes128>;
 
@@ -126,15 +125,13 @@ impl PersistentTokenStore for MemoryPersistentTokenStore {
 
 /// Derive the 16-byte AES-128 key for `encIdentifier` from a persistent token, per
 /// CTAP 2.3-PS 6.4: `HKDF-SHA-256(salt = 32 zero bytes, IKM = token, L = 16, info = "encIdentifier")`.
-fn enc_identifier_key(token: &[u8]) -> Result<[u8; 16], Error> {
+fn enc_identifier_key(token: &[u8]) -> Result<[u8; 16], PlatformError> {
     let hkdf = Hkdf::<Sha256>::new(Some(&ENC_IDENTIFIER_HKDF_SALT), token);
     let mut key = [0u8; 16];
     hkdf.expand(ENC_IDENTIFIER_HKDF_INFO, &mut key)
         .map_err(|e| {
             error!("HKDF expand error deriving encIdentifier key: {e}");
-            Error::Platform(PlatformError::CryptoError(format!(
-                "HKDF expand error: {e}"
-            )))
+            PlatformError::CryptoError(format!("HKDF expand error: {e}"))
         })?;
     Ok(key)
 }
@@ -144,27 +141,27 @@ fn enc_identifier_key(token: &[u8]) -> Result<[u8; 16], Error> {
 pub(crate) fn decrypt_enc_identifier(
     token: &[u8],
     enc_identifier: &[u8],
-) -> Result<[u8; 16], Error> {
+) -> Result<[u8; 16], PlatformError> {
     if enc_identifier.len() != 32 {
         error!(
             len = enc_identifier.len(),
             "encIdentifier is not a 16-byte IV followed by one 16-byte ciphertext block"
         );
-        return Err(Error::Ctap(CtapError::Other));
+        return Err(PlatformError::InvalidDeviceResponse);
     }
     let (iv, ciphertext) = enc_identifier.split_at(16);
     let key = enc_identifier_key(token)?;
     let Ok(decryptor) = Aes128CbcDecryptor::new_from_slices(&key, iv) else {
         error!("Invalid key or IV for AES-128-CBC encIdentifier decryption");
-        return Err(Error::Ctap(CtapError::Other));
+        return Err(PlatformError::InvalidDeviceResponse);
     };
     let Ok(plaintext) = decryptor.decrypt_padded_vec_mut::<NoPadding>(ciphertext) else {
         error!("Decrypt error while recovering device identifier");
-        return Err(Error::Ctap(CtapError::Other));
+        return Err(PlatformError::InvalidDeviceResponse);
     };
     plaintext.try_into().map_err(|_| {
         error!("Recovered device identifier was not 16 bytes");
-        Error::Ctap(CtapError::Other)
+        PlatformError::InvalidDeviceResponse
     })
 }
 
@@ -206,15 +203,15 @@ pub(crate) async fn store_minted_token(
     info: &Ctap2GetInfoResponse,
     token: &[u8],
     pin_uv_auth_protocol: Ctap2PinUvAuthProtocol,
-) -> Result<PersistentTokenRecordId, Error> {
+) -> Result<PersistentTokenRecordId, PlatformError> {
     let Some(enc_identifier) = info.enc_identifier.as_ref() else {
         warn!("perCredMgmtRO advertised but no encIdentifier returned; cannot persist token");
-        return Err(Error::Ctap(CtapError::Other));
+        return Err(PlatformError::InvalidDeviceResponse);
     };
     let device_identifier = decrypt_enc_identifier(token, enc_identifier)?;
     let aaguid: [u8; 16] = info.aaguid[..].try_into().map_err(|_| {
         error!(len = info.aaguid.len(), "AAGUID was not 16 bytes");
-        Error::Ctap(CtapError::Other)
+        PlatformError::InvalidDeviceResponse
     })?;
     reap_superseded_records(store, &device_identifier).await;
     let id = new_record_id();

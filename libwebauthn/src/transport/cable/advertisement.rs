@@ -10,7 +10,7 @@ use uuid::Uuid;
 use crate::proto::ctap2::cbor::Value;
 use crate::transport::ble::btleplug::{self, FidoDevice};
 use crate::transport::cable::crypto::trial_decrypt_advert;
-use crate::transport::error::TransportError;
+use crate::transport::cable::error::CableError;
 
 const CABLE_UUID_FIDO: &str = "0000fff9-0000-1000-8000-00805f9b34fb";
 const CABLE_UUID_GOOGLE: &str = "0000fde2-0000-1000-8000-00805f9b34fb";
@@ -72,14 +72,14 @@ impl From<[u8; 16]> for DecryptedAdvert {
 #[instrument(skip_all, err)]
 pub(crate) async fn await_advertisement(
     eid_key: &[u8],
-) -> Result<(FidoDevice, DecryptedAdvert), TransportError> {
+) -> Result<(FidoDevice, DecryptedAdvert), CableError> {
     let uuids = &[
-        Uuid::parse_str(CABLE_UUID_FIDO).or(Err(TransportError::InvalidEndpoint))?,
-        Uuid::parse_str(CABLE_UUID_GOOGLE).or(Err(TransportError::InvalidEndpoint))?, // Deprecated, but may still be in use.
+        Uuid::parse_str(CABLE_UUID_FIDO)?,
+        Uuid::parse_str(CABLE_UUID_GOOGLE)?, // Deprecated, but may still be in use.
     ];
     let stream = btleplug::manager::start_discovery_for_service_data(uuids)
         .await
-        .or(Err(TransportError::TransportUnavailable))?;
+        .or(Err(CableError::TransportUnavailable))?;
 
     let mut stream = pin!(stream);
     while let Some((adapter, peripheral, data)) = stream.as_mut().next().await {
@@ -87,7 +87,7 @@ pub(crate) async fn await_advertisement(
 
         let Some(device) = btleplug::manager::get_device(peripheral.clone())
             .await
-            .or(Err(TransportError::TransportUnavailable))?
+            .or(Err(CableError::TransportUnavailable))?
         else {
             warn!(
                 ?peripheral,
@@ -126,13 +126,13 @@ pub(crate) async fn await_advertisement(
         adapter
             .stop_scan()
             .await
-            .or(Err(TransportError::TransportUnavailable))?;
+            .or(Err(CableError::TransportUnavailable))?;
 
         return Ok((device, advert));
     }
 
     warn!("BLE advertisement discovery stream terminated");
-    Err(TransportError::TransportUnavailable)
+    Err(CableError::TransportUnavailable)
 }
 
 #[cfg(test)]

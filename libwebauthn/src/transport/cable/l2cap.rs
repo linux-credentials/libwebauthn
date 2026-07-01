@@ -9,7 +9,7 @@ use tokio::time::Instant;
 use tracing::{debug, error, warn};
 
 use super::data_channel::CableDataChannel;
-use crate::transport::error::TransportError;
+use crate::transport::cable::error::CableError;
 
 /// End-of-Message sequence terminating every L2CAP message (CRLF).
 const EOM: [u8; 2] = [0x0D, 0x0A];
@@ -40,7 +40,7 @@ impl L2capDataChannel {
         addr: BDAddr,
         addr_type: Option<AddressType>,
         psm: u16,
-    ) -> Result<Self, TransportError> {
+    ) -> Result<Self, CableError> {
         let (addr, addr_type) = bdaddr_to_bluer(addr, addr_type)?;
 
         let stream =
@@ -48,7 +48,7 @@ impl L2capDataChannel {
                 .await
                 .map_err(|e| {
                     error!(?e, %addr, psm, "Failed to connect L2CAP CoC");
-                    TransportError::ConnectionFailed
+                    CableError::from(e)
                 })?;
 
         await_send_mtu(&stream).await;
@@ -86,19 +86,19 @@ async fn await_send_mtu(stream: &bluer::l2cap::Stream) {
 
 #[async_trait]
 impl CableDataChannel for L2capDataChannel {
-    async fn send(&mut self, message: &[u8]) -> Result<(), TransportError> {
+    async fn send(&mut self, message: &[u8]) -> Result<(), CableError> {
         self.stream.write_all(message).await.map_err(|e| {
             error!(?e, "Failed to write L2CAP message");
-            TransportError::IoError(e.kind())
+            CableError::from(e)
         })?;
         self.stream.write_all(&EOM).await.map_err(|e| {
             error!(?e, "Failed to write L2CAP EOM");
-            TransportError::IoError(e.kind())
+            CableError::from(e)
         })?;
         Ok(())
     }
 
-    async fn recv(&mut self) -> Result<Option<Vec<u8>>, TransportError> {
+    async fn recv(&mut self) -> Result<Option<Vec<u8>>, CableError> {
         loop {
             if let Some(message) = split_next_message(&mut self.read_buf) {
                 return Ok(Some(message));
@@ -121,7 +121,7 @@ impl CableDataChannel for L2capDataChannel {
                 }
                 Err(e) => {
                     error!(?e, "Failed to read L2CAP message");
-                    return Err(TransportError::IoError(e.kind()));
+                    return Err(CableError::from(e));
                 }
             };
             if n == 0 {
@@ -130,7 +130,7 @@ impl CableDataChannel for L2capDataChannel {
                     return Ok(None);
                 }
                 error!(buffered = self.read_buf.len(), "L2CAP closed mid-message");
-                return Err(TransportError::ConnectionLost);
+                return Err(CableError::ConnectionLost);
             }
             self.read_buf
                 .extend_from_slice(chunk.get(..n).unwrap_or(&[]));
@@ -152,10 +152,10 @@ fn split_next_message(buf: &mut Vec<u8>) -> Option<Vec<u8>> {
 fn bdaddr_to_bluer(
     addr: BDAddr,
     addr_type: Option<AddressType>,
-) -> Result<(bluer::Address, bluer::AddressType), TransportError> {
+) -> Result<(bluer::Address, bluer::AddressType), CableError> {
     let addr = bluer::Address::from_str(&addr.to_string()).map_err(|e| {
         error!(?e, "Failed to parse Bluetooth address");
-        TransportError::InvalidEndpoint
+        CableError::InvalidEndpoint
     })?;
     let addr_type = match addr_type {
         Some(AddressType::Public) => bluer::AddressType::LePublic,

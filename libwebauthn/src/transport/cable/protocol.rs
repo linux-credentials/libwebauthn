@@ -21,8 +21,8 @@ use super::known_devices::{CableKnownDeviceInfo, CableKnownDeviceInfoStore};
 use crate::proto::ctap2::cbor::{self, CborRequest, CborResponse, Value};
 use crate::proto::ctap2::{Ctap2CommandCode, Ctap2GetInfoResponse};
 use crate::transport::cable::connection_stages::TunnelConnectionInput;
+use crate::transport::cable::error::CableError;
 use crate::transport::cable::known_devices::CableKnownDeviceId;
-use crate::transport::error::TransportError;
 
 const P256_X962_LENGTH: usize = 65;
 const MAX_CBOR_SIZE: usize = 1024 * 1024;
@@ -44,10 +44,10 @@ impl CableTunnelMessage {
             payload: ByteBuf::from(payload.to_vec()),
         }
     }
-    pub fn from_slice(slice: &[u8]) -> Result<Self, TransportError> {
-        let (type_byte, payload) = slice.split_first().ok_or(TransportError::InvalidFraming)?;
+    pub fn from_slice(slice: &[u8]) -> Result<Self, CableError> {
+        let (type_byte, payload) = slice.split_first().ok_or(CableError::InvalidFraming)?;
         if payload.is_empty() {
-            return Err(TransportError::InvalidFraming);
+            return Err(CableError::InvalidFraming);
         }
 
         let message_type = match *type_byte {
@@ -55,7 +55,7 @@ impl CableTunnelMessage {
             1 => CableTunnelMessageType::Ctap,
             2 => CableTunnelMessageType::Update,
             _ => {
-                return Err(TransportError::InvalidFraming);
+                return Err(CableError::InvalidFraming);
             }
         };
 
@@ -173,7 +173,7 @@ pub(crate) async fn do_handshake(
     data_channel: &mut dyn CableDataChannel,
     psk: [u8; 32],
     connection_type: &CableTunnelConnectionType,
-) -> Result<TunnelNoiseState, TransportError> {
+) -> Result<TunnelNoiseState, CableError> {
     let noise_handshake = match connection_type {
         CableTunnelConnectionType::QrCode { private_key, .. } => {
             let local_private_key = private_key.to_owned().to_bytes();
@@ -198,7 +198,7 @@ pub(crate) async fn do_handshake(
         Ok(handshake) => handshake,
         Err(e) => {
             error!(?e, "Failed to build Noise handshake");
-            return Err(TransportError::ConnectionFailed);
+            return Err(CableError::ConnectionFailed);
         }
     };
 
@@ -207,14 +207,14 @@ pub(crate) async fn do_handshake(
         Ok(msg_len) => msg_len,
         Err(e) => {
             error!(?e, "Failed to write initial handshake message");
-            return Err(TransportError::ConnectionFailed);
+            return Err(CableError::ConnectionFailed);
         }
     };
 
     let initial_msg: Vec<u8> = initial_msg_buffer
         .get(..initial_msg_len)
         .map(<[u8]>::to_vec)
-        .ok_or(TransportError::ConnectionFailed)?;
+        .ok_or(CableError::ConnectionFailed)?;
     trace!(
         { handshake = ?initial_msg },
         "Sending initial handshake message"
@@ -232,7 +232,7 @@ pub(crate) async fn do_handshake(
         }
         Ok(None) => {
             error!("Connection was closed before handshake was complete");
-            return Err(TransportError::ConnectionFailed);
+            return Err(CableError::ConnectionFailed);
         }
         Err(e) => {
             error!(?e, "Failed to read handshake response");
@@ -245,7 +245,7 @@ pub(crate) async fn do_handshake(
             { len = response.len() },
             "Peer handshake message is too short"
         );
-        return Err(TransportError::ConnectionFailed);
+        return Err(CableError::ConnectionFailed);
     }
 
     let mut payload = [0u8; 1024];
@@ -253,7 +253,7 @@ pub(crate) async fn do_handshake(
         Ok(len) => len,
         Err(e) => {
             error!(?e, "Failed to read handshake response message");
-            return Err(TransportError::ConnectionFailed);
+            return Err(CableError::ConnectionFailed);
         }
     };
 
@@ -264,7 +264,7 @@ pub(crate) async fn do_handshake(
 
     if !noise_handshake.is_handshake_finished() {
         error!("Handshake did not complete");
-        return Err(TransportError::ConnectionFailed);
+        return Err(CableError::ConnectionFailed);
     }
 
     Ok(TunnelNoiseState {
@@ -275,7 +275,7 @@ pub(crate) async fn do_handshake(
 
 /// Returns `Ok(())` on a clean close and `Err(_)` on any fault that leaves
 /// the encrypted channel unusable; callers surface `Err(_)` via `send_error`.
-pub(crate) async fn connection(mut input: TunnelConnectionInput) -> Result<(), TransportError> {
+pub(crate) async fn connection(mut input: TunnelConnectionInput) -> Result<(), CableError> {
     let get_info_response_serialized: Vec<u8> = match input.data_channel.recv().await {
         Ok(Some(message)) => match connection_recv_initial(message, &mut input.noise_state).await {
             Ok(initial) => initial,
@@ -286,7 +286,7 @@ pub(crate) async fn connection(mut input: TunnelConnectionInput) -> Result<(), T
         },
         Ok(None) => {
             error!("Connection closed before initial message was received");
-            return Err(TransportError::ConnectionLost);
+            return Err(CableError::ConnectionLost);
         }
         Err(e) => {
             error!(?e, "Failed to read initial message");
@@ -338,7 +338,7 @@ pub(crate) async fn connection(mut input: TunnelConnectionInput) -> Result<(), T
                         let response = CborResponse::new_success_from_slice(&get_info_response_serialized);
                         if let Err(e) = input.cbor_rx_send.send(response).await {
                             error!(?e, "CBOR response receiver dropped");
-                            return Err(TransportError::ConnectionFailed);
+                            return Err(CableError::ConnectionFailed);
                         }
                     }
                     _ => {
@@ -364,19 +364,17 @@ async fn connection_send(
     request: CborRequest,
     data_channel: &mut dyn CableDataChannel,
     noise_state: &mut TunnelNoiseState,
-) -> Result<(), TransportError> {
+) -> Result<(), CableError> {
     debug!("Sending CBOR request");
     trace!(?request);
 
-    let cbor_request = request
-        .raw_long()
-        .map_err(|e| TransportError::IoError(e.kind()))?;
+    let cbor_request = request.raw_long().map_err(CableError::from)?;
     if cbor_request.len() > MAX_CBOR_SIZE {
         error!(
             cbor_request_len = cbor_request.len(),
             "CBOR request too large"
         );
-        return Err(TransportError::InvalidFraming);
+        return Err(CableError::InvalidFraming);
     }
     trace!(?cbor_request, cbor_request_len = cbor_request.len());
 
@@ -403,7 +401,7 @@ async fn connection_send(
         }
         Err(e) => {
             error!(?e, "Failed to encrypt frame");
-            return Err(TransportError::EncryptionFailed);
+            return Err(CableError::EncryptionFailed);
         }
     }
 
@@ -417,12 +415,12 @@ async fn connection_send(
 /// Strip the trailing padding-length byte and `padding_len` bytes of padding
 /// from a decrypted Noise transport frame, returning `InvalidFraming` on an
 /// empty plaintext or a declared padding length that exceeds the frame.
-fn strip_frame_padding(mut decrypted_frame: Vec<u8>) -> Result<Vec<u8>, TransportError> {
+fn strip_frame_padding(mut decrypted_frame: Vec<u8>) -> Result<Vec<u8>, CableError> {
     let padding_len = match decrypted_frame.last() {
         Some(&b) => b as usize,
         None => {
             error!("Decrypted frame is empty; cannot read padding length");
-            return Err(TransportError::InvalidFraming);
+            return Err(CableError::InvalidFraming);
         }
     };
     let new_len = decrypted_frame
@@ -433,7 +431,7 @@ fn strip_frame_padding(mut decrypted_frame: Vec<u8>) -> Result<Vec<u8>, Transpor
                 frame_len = decrypted_frame.len(),
                 padding_len, "Padding length exceeds frame length"
             );
-            TransportError::InvalidFraming
+            CableError::InvalidFraming
         })?;
     decrypted_frame.truncate(new_len);
     Ok(decrypted_frame)
@@ -442,7 +440,7 @@ fn strip_frame_padding(mut decrypted_frame: Vec<u8>) -> Result<Vec<u8>, Transpor
 async fn decrypt_frame(
     encrypted_frame: Vec<u8>,
     noise_state: &mut TunnelNoiseState,
-) -> Result<Vec<u8>, TransportError> {
+) -> Result<Vec<u8>, CableError> {
     let mut decrypted_frame = vec![0u8; MAX_CBOR_SIZE];
     match noise_state
         .transport_state
@@ -455,7 +453,7 @@ async fn decrypt_frame(
         }
         Err(e) => {
             error!(?e, "Failed to decrypt CBOR response");
-            return Err(TransportError::EncryptionFailed);
+            return Err(CableError::EncryptionFailed);
         }
     }
 
@@ -472,14 +470,14 @@ async fn decrypt_frame(
 async fn connection_recv_initial(
     encrypted_frame: Vec<u8>,
     noise_state: &mut TunnelNoiseState,
-) -> Result<Vec<u8>, TransportError> {
+) -> Result<Vec<u8>, CableError> {
     let decrypted_frame = decrypt_frame(encrypted_frame, noise_state).await?;
 
     let initial_message: CableInitialMessage = match cbor::from_slice(&decrypted_frame) {
         Ok(initial_message) => initial_message,
         Err(e) => {
             error!(?e, "Failed to decode initial message");
-            return Err(TransportError::InvalidFraming);
+            return Err(CableError::InvalidFraming);
         }
     };
 
@@ -487,16 +485,14 @@ async fn connection_recv_initial(
         Ok(get_info_response) => get_info_response,
         Err(e) => {
             error!(?e, "Failed to decode GetInfo response");
-            return Err(TransportError::InvalidFraming);
+            return Err(CableError::InvalidFraming);
         }
     };
 
     Ok(initial_message.info.to_vec())
 }
 
-async fn connection_recv_update(
-    message: &[u8],
-) -> Result<Option<CableLinkingInfo>, TransportError> {
+async fn connection_recv_update(message: &[u8]) -> Result<Option<CableLinkingInfo>, CableError> {
     // TODO(#66): Android adds a 999-key to the end the message, which is not part of the standard.
     // For now, we parse the message to a map and manuually import fields.
 
@@ -504,7 +500,7 @@ async fn connection_recv_update(
         Ok(update_message) => update_message,
         Err(e) => {
             error!(?e, "Failed to decode update message");
-            return Err(TransportError::InvalidFraming);
+            return Err(CableError::InvalidFraming);
         }
     };
 
@@ -566,7 +562,7 @@ async fn connection_recv(
     encrypted_frame: Vec<u8>,
     cbor_rx_send: &Sender<CborResponse>,
     noise_state: &mut TunnelNoiseState,
-) -> Result<RecvOutcome, TransportError> {
+) -> Result<RecvOutcome, CableError> {
     let decrypted_frame = decrypt_frame(encrypted_frame, noise_state).await?;
 
     let cable_message: CableTunnelMessage = CableTunnelMessage::from_slice(&decrypted_frame)
@@ -581,14 +577,14 @@ async fn connection_recv(
         CableTunnelMessageType::Ctap => {
             let cbor_response: CborResponse = (&cable_message.payload.to_vec())
                 .try_into()
-                .or(Err(TransportError::InvalidFraming))?;
+                .or(Err(CableError::InvalidFraming))?;
 
             debug!("Received CBOR response");
             trace!(?cbor_response);
             cbor_rx_send
                 .send(cbor_response)
                 .await
-                .or(Err(TransportError::ConnectionFailed))?;
+                .or(Err(CableError::ConnectionFailed))?;
             Ok(RecvOutcome::Continue)
         }
         CableTunnelMessageType::Update => {
@@ -664,7 +660,7 @@ fn parse_known_device(
     tunnel_domain: &str,
     linking_info: &CableLinkingInfo,
     handshake_hash: &[u8],
-) -> Result<CableKnownDeviceInfo, TransportError> {
+) -> Result<CableKnownDeviceInfo, CableError> {
     let known_device = CableKnownDeviceInfo::new(tunnel_domain, linking_info)?;
     let secret_key = SecretKey::from(private_key);
 
@@ -672,7 +668,7 @@ fn parse_known_device(
         PublicKey::from_sec1_bytes(&linking_info.authenticator_public_key)
     else {
         error!("Failed to parse public key.");
-        return Err(TransportError::InvalidKey);
+        return Err(CableError::InvalidKey);
     };
 
     let shared_secret: Vec<u8> = ecdh::diffie_hellman(
@@ -683,14 +679,14 @@ fn parse_known_device(
     .to_vec();
 
     let mut hmac =
-        Hmac::<Sha256>::new_from_slice(&shared_secret).map_err(|_| TransportError::InvalidKey)?;
+        Hmac::<Sha256>::new_from_slice(&shared_secret).map_err(|_| CableError::InvalidKey)?;
     hmac.update(handshake_hash);
     let expected_mac = hmac.finalize().into_bytes().to_vec();
 
     if expected_mac != linking_info.handshake_signature {
         error!("Invalid handshake signature, rejecting update message");
         trace!(?expected_mac, ?linking_info.handshake_signature);
-        return Err(TransportError::InvalidSignature);
+        return Err(CableError::InvalidSignature);
     }
 
     debug!("Parsed known device with valid signature");
@@ -780,7 +776,7 @@ mod tests {
     #[test]
     fn strip_frame_padding_rejects_empty() {
         let result = strip_frame_padding(Vec::new());
-        assert!(matches!(result, Err(TransportError::InvalidFraming)));
+        assert!(matches!(result, Err(CableError::InvalidFraming)));
     }
 
     #[test]
@@ -788,7 +784,7 @@ mod tests {
         // Length 1 + declared padding of 5 -> would require subtracting 6 from 1.
         let frame = vec![0x05u8];
         let result = strip_frame_padding(frame);
-        assert!(matches!(result, Err(TransportError::InvalidFraming)));
+        assert!(matches!(result, Err(CableError::InvalidFraming)));
     }
 
     #[test]

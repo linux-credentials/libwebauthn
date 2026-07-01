@@ -1,11 +1,9 @@
 use super::channel::{HandlerInCtx, NfcBackend, NfcChannel};
 use super::device::NfcDevice;
+use super::error::NfcError;
 use super::Context;
-use crate::transport::error::TransportError;
 use crate::transport::usb::UsbDeviceId;
 use crate::transport::ChannelSettings;
-use crate::webauthn::Error;
-use apdu::core::HandleError;
 use pcsc;
 use std::ffi::{CStr, CString};
 use std::fmt;
@@ -64,18 +62,6 @@ impl fmt::Display for Info {
     }
 }
 
-impl From<pcsc::Error> for Error {
-    fn from(input: pcsc::Error) -> Self {
-        trace!("{:?}", input);
-        let output = match input {
-            pcsc::Error::NoSmartcard => TransportError::ConnectionFailed,
-            _ => TransportError::InvalidFraming,
-        };
-
-        Error::Transport(output)
-    }
-}
-
 impl Info {
     pub fn new(name: &CStr) -> Self {
         let cstring = name.to_owned();
@@ -86,7 +72,7 @@ impl Info {
         }
     }
 
-    pub fn channel(&self, settings: ChannelSettings) -> Result<NfcChannel<Context>, Error> {
+    pub fn channel(&self, settings: ChannelSettings) -> Result<NfcChannel<Context>, NfcError> {
         let context = pcsc::Context::establish(pcsc::Scope::User)?;
         let chan = Channel::new(self, context)?;
 
@@ -124,7 +110,7 @@ pub(crate) fn usb_id_from_reader(name: &CStr) -> Option<UsbDeviceId> {
 }
 
 impl Channel {
-    pub fn new(info: &Info, context: pcsc::Context) -> Result<Self, Error> {
+    pub fn new(info: &Info, context: pcsc::Context) -> Result<Self, NfcError> {
         let card = context.connect(&info.name, pcsc::ShareMode::Shared, pcsc::Protocols::ANY)?;
 
         let chan = Self {
@@ -153,16 +139,11 @@ where
         _ctx: Ctx,
         command: &[u8],
         response: &mut [u8],
-    ) -> apdu_core::Result {
+    ) -> Result<usize, NfcError> {
         trace!("TX: {:?}", command);
 
-        let card = self
-            .card
-            .lock()
-            .map_err(|_| HandleError::Nfc(Box::new(std::io::Error::other("mutex poisoned"))))?;
-        let rapdu = card
-            .transmit(command, response)
-            .map_err(|e| HandleError::Nfc(Box::new(e)))?;
+        let card = self.card.lock().map_err(|_| NfcError::MutexPoisoned)?;
+        let rapdu = card.transmit(command, response).map_err(NfcError::Pcsc)?;
 
         trace!("RX: {:?}", rapdu);
         Ok(rapdu.len())
@@ -179,11 +160,11 @@ pub(crate) fn is_nfc_available() -> bool {
 }
 
 #[instrument]
-pub(crate) fn list_devices() -> Result<Vec<NfcDevice>, Error> {
+pub(crate) fn list_devices() -> Result<Vec<NfcDevice>, NfcError> {
     let ctx = pcsc::Context::establish(pcsc::Scope::User)?;
     let len = ctx.list_readers_len()?;
     if len == 0 {
-        return Err(Error::Transport(TransportError::TransportUnavailable));
+        return Err(NfcError::NoReader);
     }
     let mut readers_buf = vec![0; len];
     let devices = ctx

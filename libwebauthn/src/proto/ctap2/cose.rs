@@ -16,7 +16,7 @@ use spki::{AlgorithmIdentifierOwned, ObjectIdentifier, SubjectPublicKeyInfoOwned
 use tracing::warn;
 
 use crate::proto::ctap2::Ctap2COSEAlgorithmIdentifier;
-use crate::webauthn::{Error, PlatformError};
+use crate::webauthn::PlatformError;
 
 /// COSE Key Common Parameters ([RFC 9052] §7.1).
 const COSE_KEY_LABEL_KTY: i128 = 1;
@@ -72,53 +72,53 @@ impl<'de> Deserialize<'de> for CoseEncodedKey {
 
 type CoseMap = std::collections::BTreeMap<Value, Value>;
 
-fn parse_cose_map(bytes: &[u8]) -> Result<CoseMap, Error> {
+fn parse_cose_map(bytes: &[u8]) -> Result<CoseMap, PlatformError> {
     let value: Value = serde_cbor_2::from_slice(bytes).map_err(|e| {
         warn!(%e, "failed to parse COSE_Key as CBOR");
-        Error::Platform(PlatformError::InvalidDeviceResponse)
+        PlatformError::InvalidDeviceResponse
     })?;
     match value {
         Value::Map(map) => Ok(map),
         _ => {
             warn!("COSE_Key is not a CBOR map");
-            Err(Error::Platform(PlatformError::InvalidDeviceResponse))
+            Err(PlatformError::InvalidDeviceResponse)
         }
     }
 }
 
-fn map_integer(map: &CoseMap, label: i128) -> Result<i128, Error> {
+fn map_integer(map: &CoseMap, label: i128) -> Result<i128, PlatformError> {
     match map.get(&Value::Integer(label)) {
         Some(Value::Integer(i)) => Ok(*i),
         Some(_) => {
             warn!(label, "COSE_Key field is not an integer");
-            Err(Error::Platform(PlatformError::InvalidDeviceResponse))
+            Err(PlatformError::InvalidDeviceResponse)
         }
         None => {
             warn!(label, "COSE_Key missing required field");
-            Err(Error::Platform(PlatformError::InvalidDeviceResponse))
+            Err(PlatformError::InvalidDeviceResponse)
         }
     }
 }
 
-fn map_bytes(map: &CoseMap, label: i128) -> Result<&[u8], Error> {
+fn map_bytes(map: &CoseMap, label: i128) -> Result<&[u8], PlatformError> {
     match map.get(&Value::Integer(label)) {
         Some(Value::Bytes(b)) => Ok(b.as_slice()),
         Some(_) => {
             warn!(label, "COSE_Key field is not a byte string");
-            Err(Error::Platform(PlatformError::InvalidDeviceResponse))
+            Err(PlatformError::InvalidDeviceResponse)
         }
         None => {
             warn!(label, "COSE_Key missing required field");
-            Err(Error::Platform(PlatformError::InvalidDeviceResponse))
+            Err(PlatformError::InvalidDeviceResponse)
         }
     }
 }
 
-fn read_alg_from_map(map: &CoseMap) -> Result<Ctap2COSEAlgorithmIdentifier, Error> {
+fn read_alg_from_map(map: &CoseMap) -> Result<Ctap2COSEAlgorithmIdentifier, PlatformError> {
     let alg_i128 = map_integer(map, COSE_KEY_LABEL_ALG)?;
     let alg_i32 = i32::try_from(alg_i128).map_err(|_| {
         warn!(alg = %alg_i128, "COSE_Key `alg` outside i32 range");
-        Error::Platform(PlatformError::InvalidDeviceResponse)
+        PlatformError::InvalidDeviceResponse
     })?;
     Ok(Ctap2COSEAlgorithmIdentifier(alg_i32))
 }
@@ -128,7 +128,7 @@ fn read_alg_from_map(map: &CoseMap) -> Result<Ctap2COSEAlgorithmIdentifier, Erro
 /// Per WebAuthn L3 §6.5.2, every credential public key MUST include the
 /// `alg` parameter. A missing, non-integer, or out-of-range value is
 /// treated as an invalid device response.
-pub(crate) fn read_alg(bytes: &[u8]) -> Result<Ctap2COSEAlgorithmIdentifier, Error> {
+pub(crate) fn read_alg(bytes: &[u8]) -> Result<Ctap2COSEAlgorithmIdentifier, PlatformError> {
     let map = parse_cose_map(bytes)?;
     read_alg_from_map(&map)
 }
@@ -145,7 +145,7 @@ pub(crate) fn read_alg(bytes: &[u8]) -> Result<Ctap2COSEAlgorithmIdentifier, Err
 ///
 /// The supported set is the WebAuthn L3 floor (ES256, EdDSA, RS256) plus
 /// ESP256 from RFC 9864, which maps to the same SPKI as ES256.
-pub fn to_spki(bytes: &[u8]) -> Result<Option<Vec<u8>>, Error> {
+pub fn to_spki(bytes: &[u8]) -> Result<Option<Vec<u8>>, PlatformError> {
     let map = parse_cose_map(bytes)?;
     let alg = read_alg_from_map(&map)?;
 
@@ -173,32 +173,32 @@ pub fn to_spki(bytes: &[u8]) -> Result<Option<Vec<u8>>, Error> {
     }
 }
 
-fn require_kty(map: &CoseMap, expected: i128) -> Result<(), Error> {
+fn require_kty(map: &CoseMap, expected: i128) -> Result<(), PlatformError> {
     let kty = map_integer(map, COSE_KEY_LABEL_KTY)?;
     if kty != expected {
         warn!(expected, got = kty, "COSE_Key kty mismatch");
-        return Err(Error::Platform(PlatformError::InvalidDeviceResponse));
+        return Err(PlatformError::InvalidDeviceResponse);
     }
     Ok(())
 }
 
-fn require_crv(map: &CoseMap, expected: i128) -> Result<(), Error> {
+fn require_crv(map: &CoseMap, expected: i128) -> Result<(), PlatformError> {
     let crv = map_integer(map, COSE_KEY_LABEL_CRV)?;
     if crv != expected {
         warn!(expected, got = crv, "COSE_Key crv mismatch");
-        return Err(Error::Platform(PlatformError::InvalidDeviceResponse));
+        return Err(PlatformError::InvalidDeviceResponse);
     }
     Ok(())
 }
 
-fn p256_spki(x: &[u8], y: &[u8]) -> Result<Vec<u8>, Error> {
+fn p256_spki(x: &[u8], y: &[u8]) -> Result<Vec<u8>, PlatformError> {
     if x.len() != 32 || y.len() != 32 {
         warn!(
             x_len = x.len(),
             y_len = y.len(),
             "P-256 coordinates wrong size"
         );
-        return Err(Error::Platform(PlatformError::InvalidDeviceResponse));
+        return Err(PlatformError::InvalidDeviceResponse);
     }
     let mut point = Vec::with_capacity(65);
     point.push(0x04); // uncompressed point indicator (SEC1)
@@ -207,9 +207,9 @@ fn p256_spki(x: &[u8], y: &[u8]) -> Result<Vec<u8>, Error> {
 
     let curve_oid_der = OID_SECP256R1
         .to_der()
-        .map_err(|_| Error::Platform(PlatformError::InvalidDeviceResponse))?;
-    let parameters = der::Any::from_der(&curve_oid_der)
-        .map_err(|_| Error::Platform(PlatformError::InvalidDeviceResponse))?;
+        .map_err(|_| PlatformError::InvalidDeviceResponse)?;
+    let parameters =
+        der::Any::from_der(&curve_oid_der).map_err(|_| PlatformError::InvalidDeviceResponse)?;
 
     let spki = SubjectPublicKeyInfoOwned {
         algorithm: AlgorithmIdentifierOwned {
@@ -217,17 +217,17 @@ fn p256_spki(x: &[u8], y: &[u8]) -> Result<Vec<u8>, Error> {
             parameters: Some(parameters),
         },
         subject_public_key: BitString::from_bytes(&point)
-            .map_err(|_| Error::Platform(PlatformError::InvalidDeviceResponse))?,
+            .map_err(|_| PlatformError::InvalidDeviceResponse)?,
     };
 
     spki.to_der()
-        .map_err(|_| Error::Platform(PlatformError::InvalidDeviceResponse))
+        .map_err(|_| PlatformError::InvalidDeviceResponse)
 }
 
-fn ed25519_spki(x: &[u8]) -> Result<Vec<u8>, Error> {
+fn ed25519_spki(x: &[u8]) -> Result<Vec<u8>, PlatformError> {
     if x.len() != 32 {
         warn!(len = x.len(), "Ed25519 public key wrong size");
-        return Err(Error::Platform(PlatformError::InvalidDeviceResponse));
+        return Err(PlatformError::InvalidDeviceResponse);
     }
 
     let spki = SubjectPublicKeyInfoOwned {
@@ -236,11 +236,11 @@ fn ed25519_spki(x: &[u8]) -> Result<Vec<u8>, Error> {
             parameters: None,
         },
         subject_public_key: BitString::from_bytes(x)
-            .map_err(|_| Error::Platform(PlatformError::InvalidDeviceResponse))?,
+            .map_err(|_| PlatformError::InvalidDeviceResponse)?,
     };
 
     spki.to_der()
-        .map_err(|_| Error::Platform(PlatformError::InvalidDeviceResponse))
+        .map_err(|_| PlatformError::InvalidDeviceResponse)
 }
 
 #[derive(Sequence)]
@@ -249,22 +249,21 @@ struct Pkcs1RsaPublicKey<'a> {
     public_exponent: der::asn1::UintRef<'a>,
 }
 
-fn rs256_spki(n: &[u8], e: &[u8]) -> Result<Vec<u8>, Error> {
+fn rs256_spki(n: &[u8], e: &[u8]) -> Result<Vec<u8>, PlatformError> {
     let inner = Pkcs1RsaPublicKey {
-        modulus: der::asn1::UintRef::new(n)
-            .map_err(|_| Error::Platform(PlatformError::InvalidDeviceResponse))?,
+        modulus: der::asn1::UintRef::new(n).map_err(|_| PlatformError::InvalidDeviceResponse)?,
         public_exponent: der::asn1::UintRef::new(e)
-            .map_err(|_| Error::Platform(PlatformError::InvalidDeviceResponse))?,
+            .map_err(|_| PlatformError::InvalidDeviceResponse)?,
     };
     let inner_der = inner
         .to_der()
-        .map_err(|_| Error::Platform(PlatformError::InvalidDeviceResponse))?;
+        .map_err(|_| PlatformError::InvalidDeviceResponse)?;
 
     let null_der = Null
         .to_der()
-        .map_err(|_| Error::Platform(PlatformError::InvalidDeviceResponse))?;
-    let parameters = der::Any::from_der(&null_der)
-        .map_err(|_| Error::Platform(PlatformError::InvalidDeviceResponse))?;
+        .map_err(|_| PlatformError::InvalidDeviceResponse)?;
+    let parameters =
+        der::Any::from_der(&null_der).map_err(|_| PlatformError::InvalidDeviceResponse)?;
 
     let spki = SubjectPublicKeyInfoOwned {
         algorithm: AlgorithmIdentifierOwned {
@@ -272,11 +271,11 @@ fn rs256_spki(n: &[u8], e: &[u8]) -> Result<Vec<u8>, Error> {
             parameters: Some(parameters),
         },
         subject_public_key: BitString::from_bytes(&inner_der)
-            .map_err(|_| Error::Platform(PlatformError::InvalidDeviceResponse))?,
+            .map_err(|_| PlatformError::InvalidDeviceResponse)?,
     };
 
     spki.to_der()
-        .map_err(|_| Error::Platform(PlatformError::InvalidDeviceResponse))
+        .map_err(|_| PlatformError::InvalidDeviceResponse)
 }
 
 #[cfg(test)]

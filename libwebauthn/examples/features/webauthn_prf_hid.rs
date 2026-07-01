@@ -17,7 +17,7 @@ use libwebauthn::proto::ctap2::{
 };
 use libwebauthn::transport::hid::list_devices;
 use libwebauthn::transport::{Channel as _, ChannelSettings, Device};
-use libwebauthn::webauthn::{Error as WebAuthnError, PlatformError, WebAuthn};
+use libwebauthn::webauthn::{PlatformError, WebAuthn, WebAuthnError};
 
 #[path = "../common/mod.rs"]
 mod common;
@@ -274,7 +274,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
                 eval_by_credential,
             },
             "Wrongly encoded credential_id",
-            WebAuthnError::Platform(PlatformError::SyntaxError),
+            PlatformError::SyntaxError,
         )
         .await;
 
@@ -296,7 +296,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
                 eval_by_credential,
             },
             "Empty credential_id",
-            WebAuthnError::Platform(PlatformError::SyntaxError),
+            PlatformError::SyntaxError,
         )
         .await;
 
@@ -318,7 +318,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
                 eval_by_credential,
             },
             "Empty allow_list, set eval_by_credential",
-            WebAuthnError::Platform(PlatformError::NotSupported),
+            PlatformError::NotSupported,
         )
         .await;
     }
@@ -361,7 +361,7 @@ async fn run_failed_test(
     challenge: &[u8; 32],
     prf: PrfInput,
     printoutput: &str,
-    expected_error: WebAuthnError,
+    expected_error: PlatformError,
 ) {
     let get_assertion = GetAssertionRequest {
         relying_party_id: "example.org".to_owned(),
@@ -377,9 +377,12 @@ async fn run_failed_test(
         timeout: TIMEOUT,
     };
 
-    let response = retry_user_errors!(channel.webauthn_get_assertion(&get_assertion))
-        .map(|_| panic!("Success, even though it should have errored out!"));
+    let response = retry_user_errors!(channel.webauthn_get_assertion(&get_assertion));
 
-    assert_eq!(response, Err(expected_error), "{printoutput}:");
+    match response {
+        Ok(_) => panic!("Success, even though it should have errored out!"),
+        Err(WebAuthnError::Platform(got)) => assert_eq!(got, expected_error, "{printoutput}:"),
+        Err(other) => panic!("{printoutput}: expected {expected_error:?}, got {other:?}"),
+    }
     println!("Success for test: {printoutput}")
 }

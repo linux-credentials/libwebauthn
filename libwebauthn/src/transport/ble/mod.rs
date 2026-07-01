@@ -3,11 +3,13 @@ use std::fmt::Display;
 pub mod btleplug;
 pub mod channel;
 pub mod device;
+pub mod error;
 pub mod framing;
 
 pub use device::is_available;
 pub use device::list_devices;
 pub use device::BleDevice;
+pub use error::BleError;
 
 use super::Transport;
 

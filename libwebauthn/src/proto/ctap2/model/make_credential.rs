@@ -15,7 +15,7 @@ use crate::{
     pin::PinUvAuthProtocol,
     proto::{ctap2::cbor::Value, CtapError},
     transport::AuthTokenData,
-    webauthn::{Error, PlatformError},
+    webauthn::{PlatformError, WebAuthnError},
 };
 use ctap_types::ctap2::credential_management::CredentialProtectionPolicy as Ctap2CredentialProtectionPolicy;
 use serde::{Deserialize, Serialize};
@@ -123,10 +123,10 @@ impl Ctap2MakeCredentialRequest {
             .is_none_or(|extensions| extensions.skip_serializing())
     }
 
-    pub(crate) fn from_webauthn_request(
+    pub(crate) fn from_webauthn_request<E>(
         req: &MakeCredentialRequest,
         info: &Ctap2GetInfoResponse,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, WebAuthnError<E>> {
         // Checking if extensions can be fulfilled
         let extensions = match &req.extensions {
             Some(ext) => {
@@ -223,10 +223,10 @@ pub struct Ctap2PrfMakeCredentialInput {
 }
 
 impl Ctap2MakeCredentialsRequestExtensions {
-    fn from_webauthn_request(
+    fn from_webauthn_request<E>(
         requested_extensions: &MakeCredentialsRequestExtensions,
         info: &Ctap2GetInfoResponse,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, WebAuthnError<E>> {
         // CredProtection
         // https://fidoalliance.org/specs/fido-v2.1-ps-20210615/fido-client-to-authenticator-protocol-v2.1-ps-20210615.html#credProtectFeatureDetection
         // When enforceCredentialProtectionPolicy is true, and credentialProtectionPolicy's value
@@ -239,7 +239,7 @@ impl Ctap2MakeCredentialsRequestExtensions {
                 && cred_protection.policy != CredentialProtectionPolicy::UserVerificationOptional
                 && !info.supports_extension("credProtect")
             {
-                return Err(Error::Ctap(CtapError::UnsupportedExtension));
+                return Err(WebAuthnError::Ctap(CtapError::UnsupportedExtension));
             }
         }
 
@@ -254,7 +254,7 @@ impl Ctap2MakeCredentialsRequestExtensions {
             Some(MakeCredentialLargeBlobExtension::Required) => {
                 // Required + unsupported must fail rather than silently degrade.
                 if !info.option_enabled("largeBlobs") {
-                    return Err(Error::Ctap(CtapError::UnsupportedExtension));
+                    return Err(WebAuthnError::Ctap(CtapError::UnsupportedExtension));
                 }
                 Some(true)
             }
@@ -322,7 +322,10 @@ impl Ctap2MakeCredentialsRequestExtensions {
     }
 
     /// Encrypts the buffered PRF input with the channel's shared secret; CTAP 2.2 § 12.8.
-    pub fn calculate_hmac_secret_mc(&mut self, auth_data: &AuthTokenData) -> Result<(), Error> {
+    pub fn calculate_hmac_secret_mc(
+        &mut self,
+        auth_data: &AuthTokenData,
+    ) -> Result<(), PlatformError> {
         let Some(prf_input) = self.prf_input.take() else {
             return Ok(());
         };
@@ -423,10 +426,10 @@ impl Ctap2UserVerifiableRequest for Ctap2MakeCredentialRequest {
         &mut self,
         uv_proto: &dyn PinUvAuthProtocol,
         uv_auth_token: &[u8],
-    ) -> Result<(), Error> {
+    ) -> Result<(), PlatformError> {
         let hash = self
             .client_data_hash()
-            .ok_or(Error::Platform(PlatformError::InvalidDeviceResponse))?;
+            .ok_or(PlatformError::InvalidDeviceResponse)?;
         let uv_auth_param = uv_proto.authenticate(uv_auth_token, hash)?;
         self.pin_auth_proto = Some(uv_proto.version() as u32);
         self.pin_auth_param = Some(ByteBuf::from(uv_auth_param));
@@ -504,6 +507,7 @@ mod tests {
         CredentialProtectionExtension, MakeCredentialPrfInput, MakeCredentialRequest,
     };
     use std::collections::HashMap;
+    use std::convert::Infallible;
     use std::time::Duration;
 
     fn info_with_options(options: &[(&str, bool)]) -> Ctap2GetInfoResponse {
@@ -526,11 +530,12 @@ mod tests {
             ..MakeCredentialsRequestExtensions::default()
         };
 
-        let result =
-            Ctap2MakeCredentialsRequestExtensions::from_webauthn_request(&requested, &info);
+        let result = Ctap2MakeCredentialsRequestExtensions::from_webauthn_request::<Infallible>(
+            &requested, &info,
+        );
         assert!(matches!(
             result,
-            Err(Error::Ctap(CtapError::UnsupportedExtension))
+            Err(WebAuthnError::Ctap(CtapError::UnsupportedExtension))
         ));
     }
 
@@ -545,11 +550,12 @@ mod tests {
             ..MakeCredentialsRequestExtensions::default()
         };
 
-        let result =
-            Ctap2MakeCredentialsRequestExtensions::from_webauthn_request(&requested, &info);
+        let result = Ctap2MakeCredentialsRequestExtensions::from_webauthn_request::<Infallible>(
+            &requested, &info,
+        );
         assert!(matches!(
             result,
-            Err(Error::Ctap(CtapError::UnsupportedExtension))
+            Err(WebAuthnError::Ctap(CtapError::UnsupportedExtension))
         ));
     }
 
@@ -564,8 +570,10 @@ mod tests {
         };
 
         let extensions =
-            Ctap2MakeCredentialsRequestExtensions::from_webauthn_request(&requested, &info)
-                .unwrap();
+            Ctap2MakeCredentialsRequestExtensions::from_webauthn_request::<Infallible>(
+                &requested, &info,
+            )
+            .unwrap();
         assert_eq!(extensions.large_blob_key, Some(true));
     }
 
@@ -580,8 +588,10 @@ mod tests {
         };
 
         let extensions =
-            Ctap2MakeCredentialsRequestExtensions::from_webauthn_request(&requested, &info)
-                .unwrap();
+            Ctap2MakeCredentialsRequestExtensions::from_webauthn_request::<Infallible>(
+                &requested, &info,
+            )
+            .unwrap();
         assert_eq!(extensions.large_blob_key, None);
     }
 
@@ -604,11 +614,12 @@ mod tests {
         let info = info_with_options(&[("clientPin", true)]);
         let requested =
             requested_with_cred_protect(CredentialProtectionPolicy::UserVerificationRequired, true);
-        let result =
-            Ctap2MakeCredentialsRequestExtensions::from_webauthn_request(&requested, &info);
+        let result = Ctap2MakeCredentialsRequestExtensions::from_webauthn_request::<Infallible>(
+            &requested, &info,
+        );
         assert!(matches!(
             result,
-            Err(Error::Ctap(CtapError::UnsupportedExtension))
+            Err(WebAuthnError::Ctap(CtapError::UnsupportedExtension))
         ));
     }
 
@@ -619,8 +630,10 @@ mod tests {
         let requested =
             requested_with_cred_protect(CredentialProtectionPolicy::UserVerificationRequired, true);
         let extensions =
-            Ctap2MakeCredentialsRequestExtensions::from_webauthn_request(&requested, &info)
-                .unwrap();
+            Ctap2MakeCredentialsRequestExtensions::from_webauthn_request::<Infallible>(
+                &requested, &info,
+            )
+            .unwrap();
         assert_eq!(
             extensions.cred_protect,
             Some(Ctap2CredentialProtectionPolicy::Required)
@@ -633,8 +646,10 @@ mod tests {
         let requested =
             requested_with_cred_protect(CredentialProtectionPolicy::UserVerificationOptional, true);
         let extensions =
-            Ctap2MakeCredentialsRequestExtensions::from_webauthn_request(&requested, &info)
-                .unwrap();
+            Ctap2MakeCredentialsRequestExtensions::from_webauthn_request::<Infallible>(
+                &requested, &info,
+            )
+            .unwrap();
         assert_eq!(
             extensions.cred_protect,
             Some(Ctap2CredentialProtectionPolicy::Optional)
@@ -649,8 +664,10 @@ mod tests {
             false,
         );
         let extensions =
-            Ctap2MakeCredentialsRequestExtensions::from_webauthn_request(&requested, &info)
-                .unwrap();
+            Ctap2MakeCredentialsRequestExtensions::from_webauthn_request::<Infallible>(
+                &requested, &info,
+            )
+            .unwrap();
         assert_eq!(
             extensions.cred_protect,
             Some(Ctap2CredentialProtectionPolicy::Required)
@@ -691,7 +708,8 @@ mod tests {
             first: vec![3u8; 32],
             second: None,
         }));
-        let ctap = Ctap2MakeCredentialRequest::from_webauthn_request(&req, &info).unwrap();
+        let ctap =
+            Ctap2MakeCredentialRequest::from_webauthn_request::<Infallible>(&req, &info).unwrap();
         let ext = ctap.extensions.unwrap();
         assert_eq!(ext.hmac_secret, Some(true));
         assert!(ext.prf_input.is_some());
@@ -705,7 +723,8 @@ mod tests {
             first: vec![3u8; 32],
             second: None,
         }));
-        let ctap = Ctap2MakeCredentialRequest::from_webauthn_request(&req, &info).unwrap();
+        let ctap =
+            Ctap2MakeCredentialRequest::from_webauthn_request::<Infallible>(&req, &info).unwrap();
         let ext = ctap.extensions.unwrap();
         assert_eq!(ext.hmac_secret, Some(true));
         assert!(ext.prf_input.is_none());
@@ -716,7 +735,8 @@ mod tests {
     fn prf_without_eval_does_not_buffer_prf_input() {
         let info = info_with_extensions(&["hmac-secret", "hmac-secret-mc"]);
         let req = mc_request_with_prf(None);
-        let ctap = Ctap2MakeCredentialRequest::from_webauthn_request(&req, &info).unwrap();
+        let ctap =
+            Ctap2MakeCredentialRequest::from_webauthn_request::<Infallible>(&req, &info).unwrap();
         let ext = ctap.extensions.unwrap();
         assert_eq!(ext.hmac_secret, Some(true));
         assert!(ext.prf_input.is_none());
@@ -729,7 +749,8 @@ mod tests {
             first: b"create-first".to_vec(),
             second: None,
         }));
-        let ctap = Ctap2MakeCredentialRequest::from_webauthn_request(&req, &info).unwrap();
+        let ctap =
+            Ctap2MakeCredentialRequest::from_webauthn_request::<Infallible>(&req, &info).unwrap();
         let ext = ctap.extensions.as_ref().unwrap();
         assert!(ext.hmac_secret.is_none(), "hmac-secret must not be sent");
         assert!(ext.prf_input.is_none(), "no hmac-secret-mc buffering");
@@ -765,7 +786,8 @@ mod tests {
     fn native_prf_without_eval_sends_empty_map() {
         let info = info_with_extensions(&["prf"]);
         let req = mc_request_with_prf(None);
-        let ctap = Ctap2MakeCredentialRequest::from_webauthn_request(&req, &info).unwrap();
+        let ctap =
+            Ctap2MakeCredentialRequest::from_webauthn_request::<Infallible>(&req, &info).unwrap();
         let ext = ctap.extensions.as_ref().unwrap();
         assert_eq!(ext.prf, Some(Ctap2PrfMakeCredentialInput { eval: None }));
         assert!(!ext.skip_serializing());
@@ -782,7 +804,8 @@ mod tests {
             first: b"x".to_vec(),
             second: None,
         }));
-        let ctap = Ctap2MakeCredentialRequest::from_webauthn_request(&req, &info).unwrap();
+        let ctap =
+            Ctap2MakeCredentialRequest::from_webauthn_request::<Infallible>(&req, &info).unwrap();
         let ext = ctap.extensions.as_ref().unwrap();
         assert!(ext.prf.is_some());
         assert!(ext.hmac_secret.is_none());
@@ -817,7 +840,8 @@ mod tests {
             first: b"input".to_vec(),
             second: None,
         }));
-        let ctap = Ctap2MakeCredentialRequest::from_webauthn_request(&req, &info).unwrap();
+        let ctap =
+            Ctap2MakeCredentialRequest::from_webauthn_request::<Infallible>(&req, &info).unwrap();
 
         let bytes = crate::proto::ctap2::cbor::to_vec(&ctap).unwrap();
         let parsed: BTreeMap<u64, Value> = crate::proto::ctap2::cbor::from_slice(&bytes).unwrap();
@@ -838,7 +862,8 @@ mod tests {
             }),
             ..mc_request_with_prf(None)
         };
-        let ctap = Ctap2MakeCredentialRequest::from_webauthn_request(&req, &info).unwrap();
+        let ctap =
+            Ctap2MakeCredentialRequest::from_webauthn_request::<Infallible>(&req, &info).unwrap();
         let ext = ctap.extensions.unwrap();
         assert!(ext.prf.is_none());
         assert_eq!(ext.hmac_secret, Some(true));
@@ -910,7 +935,7 @@ mod tests {
         let info_mc = info_with_extensions(&["hmac-secret", "hmac-secret-mc"]);
         let info_no_mc = info_with_extensions(&["hmac-secret"]);
 
-        let with = Ctap2MakeCredentialRequest::from_webauthn_request(
+        let with = Ctap2MakeCredentialRequest::from_webauthn_request::<Infallible>(
             &mc_request_with_prf(Some(PrfInputValue::default())),
             &info_mc,
         )
@@ -918,9 +943,11 @@ mod tests {
         assert!(with.needs_shared_secret(&info_mc));
         assert!(!with.needs_shared_secret(&info_no_mc));
 
-        let without =
-            Ctap2MakeCredentialRequest::from_webauthn_request(&mc_request_with_prf(None), &info_mc)
-                .unwrap();
+        let without = Ctap2MakeCredentialRequest::from_webauthn_request::<Infallible>(
+            &mc_request_with_prf(None),
+            &info_mc,
+        )
+        .unwrap();
         assert!(!without.needs_shared_secret(&info_mc));
     }
 
@@ -934,7 +961,8 @@ mod tests {
             first: vec![9u8; 32],
             second: None,
         }));
-        let mut ctap = Ctap2MakeCredentialRequest::from_webauthn_request(&req, &info).unwrap();
+        let mut ctap =
+            Ctap2MakeCredentialRequest::from_webauthn_request::<Infallible>(&req, &info).unwrap();
 
         let pin_proto = Ctap2PinUvAuthProtocol::One;
         let auth = AuthTokenData::new(
@@ -972,7 +1000,7 @@ mod tests {
         use cosey::{Bytes, PublicKey};
 
         let info = info_with_extensions(&["hmac-secret", "hmac-secret-mc"]);
-        let mut ctap = Ctap2MakeCredentialRequest::from_webauthn_request(
+        let mut ctap = Ctap2MakeCredentialRequest::from_webauthn_request::<Infallible>(
             &mc_request_with_prf(Some(PrfInputValue {
                 first: vec![0xAB; 32],
                 second: Some(vec![0xCD; 32]),
@@ -1007,7 +1035,8 @@ mod tests {
 
         let info = Ctap2GetInfoResponse::default();
         let req = mc_request_with_prf(None);
-        let mut ctap2 = Ctap2MakeCredentialRequest::from_webauthn_request(&req, &info).unwrap();
+        let mut ctap2 =
+            Ctap2MakeCredentialRequest::from_webauthn_request::<Infallible>(&req, &info).unwrap();
 
         ctap2.ensure_uv_set();
         assert_eq!(

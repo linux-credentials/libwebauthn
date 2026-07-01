@@ -1,9 +1,7 @@
-use apdu::core::HandleError;
 use apdu::{command, Command, Response};
-use apdu_core;
 use async_trait::async_trait;
 use std::fmt;
-use std::fmt::{Debug, Display, Formatter};
+use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::broadcast;
@@ -19,8 +17,8 @@ use crate::transport::channel::{
     AuthTokenData, Channel, ChannelSettings, ChannelStatus, Ctap2AuthTokenStore,
 };
 use crate::transport::device::SupportedProtocols;
-use crate::transport::error::TransportError;
-use crate::webauthn::Error;
+use crate::transport::nfc::error::NfcError;
+use crate::webauthn::error::WebAuthnError;
 use crate::Transport;
 use crate::UvUpdate;
 
@@ -42,47 +40,16 @@ fn is_fido2_version(version: &[u8]) -> bool {
 
 pub type CancelNfcOperation = ();
 
-#[derive(thiserror::Error)]
-pub enum NfcError {
-    /// APDU error returned by the card.
-    Apdu(#[from] apdu::Error),
-
-    /// Unexpected error occurred on the device.
-    Device(#[from] HandleError),
-}
-
-impl From<NfcError> for Error {
-    fn from(input: NfcError) -> Self {
-        trace!("{:?}", input);
-        let output = match input {
-            NfcError::Apdu(_apdu_error) => TransportError::InvalidFraming,
-            NfcError::Device(_) => TransportError::ConnectionLost,
-        };
-        Error::Transport(output)
-    }
-}
-
-impl Debug for NfcError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        Display::fmt(self, f)
-    }
-}
-
-impl Display for NfcError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            NfcError::Apdu(e) => Display::fmt(e, f),
-            NfcError::Device(e) => Display::fmt(e, f),
-        }
-    }
-}
-
 pub trait HandlerInCtx<Ctx> {
     /// Handles the APDU command in a specific context.
     /// Implementations must transmit the command to the card through a reader,
     /// then receive the response from them, returning length of the data written.
-    fn handle_in_ctx(&mut self, ctx: Ctx, command: &[u8], response: &mut [u8])
-        -> apdu_core::Result;
+    fn handle_in_ctx(
+        &mut self,
+        ctx: Ctx,
+        command: &[u8],
+        response: &mut [u8],
+    ) -> Result<usize, NfcError>;
 }
 
 pub trait NfcBackend<Ctx>: HandlerInCtx<Ctx> + Display {}
@@ -159,15 +126,17 @@ where
     }
 
     #[instrument(skip_all)]
-    pub async fn wink(&mut self, _timeout: Duration) -> Result<bool, Error> {
+    pub async fn wink(&mut self, _timeout: Duration) -> Result<bool, WebAuthnError<NfcError>> {
         warn!("WINK capability is not supported");
         Ok(false)
     }
 
-    pub async fn select_fido2(&mut self) -> Result<(), Error> {
+    pub async fn select_fido2(&mut self) -> Result<(), WebAuthnError<NfcError>> {
         // Given legacy support for CTAP1/U2F, the client MUST determine the capabilities of the device at the selection stage.
         let command = command::select_file(SELECT_P1, SELECT_P2, FIDO2_AID);
-        let response = self.handle(self.ctx, command)?;
+        let response = self
+            .handle(self.ctx, command)
+            .map_err(WebAuthnError::Transport)?;
         let mut u2f = false;
         let mut fido2 = false;
         if is_fido2_version(&response) {
@@ -210,7 +179,7 @@ where
         let mut rapdu = Vec::new();
 
         let len = self.handle_in_ctx(ctx, &command_buf, &mut buf)?;
-        let resp_bytes = buf.get(..len).ok_or(HandleError::NotEnoughBuffer(len))?;
+        let resp_bytes = buf.get(..len).ok_or(NfcError::BufferOverflow(len))?;
         let mut resp = Response::from(resp_bytes);
 
         let (mut sw1, mut sw2) = resp.trailer;
@@ -220,7 +189,7 @@ where
             let get_response_cmd = command_get_response(0x00, 0x00, sw2);
             let get_response_buf = Vec::from(get_response_cmd);
             let len = self.handle_in_ctx(ctx, &get_response_buf, &mut buf)?;
-            let resp_bytes = buf.get(..len).ok_or(HandleError::NotEnoughBuffer(len))?;
+            let resp_bytes = buf.get(..len).ok_or(NfcError::BufferOverflow(len))?;
             resp = Response::from(resp_bytes);
             (sw1, sw2) = resp.trailer;
             rapdu.extend_from_slice(resp.payload);
@@ -248,7 +217,7 @@ where
     pub async fn blink_and_wait_for_user_presence(
         &mut self,
         _timeout: Duration,
-    ) -> Result<bool, Error> {
+    ) -> Result<bool, WebAuthnError<NfcError>> {
         unimplemented!()
     }
 }
@@ -259,12 +228,13 @@ where
     Ctx: Copy + Send + Sync + fmt::Debug + Display,
 {
     type UxUpdate = UvUpdate;
+    type TransportError = NfcError;
 
     fn transport(&self) -> Transport {
         Transport::Nfc
     }
 
-    async fn supported_protocols(&self) -> Result<SupportedProtocols, Error> {
+    async fn supported_protocols(&self) -> Result<SupportedProtocols, WebAuthnError<NfcError>> {
         Ok(self.supported)
     }
 
@@ -275,21 +245,22 @@ where
     async fn close(&mut self) {}
 
     #[instrument(level = Level::DEBUG, skip_all)]
-    async fn apdu_send(&mut self, request: &ApduRequest, _timeout: Duration) -> Result<(), Error> {
+    async fn apdu_send(
+        &mut self,
+        request: &ApduRequest,
+        _timeout: Duration,
+    ) -> Result<(), NfcError> {
         let resp = self.handle_raw(self.ctx, request)?;
         trace!("apdu_send {:?}", resp);
 
-        let apdu_response = ApduResponse::try_from(&resp)
-            .or(Err(Error::Transport(TransportError::InvalidFraming)))?;
+        let apdu_response = ApduResponse::try_from(&resp).map_err(NfcError::ResponseDecode)?;
         self.apdu_response = Some(apdu_response);
         Ok(())
     }
 
     #[instrument(level = Level::DEBUG, skip_all)]
-    async fn apdu_recv(&mut self, _timeout: Duration) -> Result<ApduResponse, Error> {
-        self.apdu_response
-            .take()
-            .ok_or(Error::Transport(TransportError::InvalidFraming))
+    async fn apdu_recv(&mut self, _timeout: Duration) -> Result<ApduResponse, NfcError> {
+        self.apdu_response.take().ok_or(NfcError::NoResponse)
     }
 
     #[instrument(level = Level::DEBUG, skip_all)]
@@ -297,7 +268,7 @@ where
         &mut self,
         request: &CborRequest,
         _timeout: std::time::Duration,
-    ) -> Result<(), Error> {
+    ) -> Result<(), NfcError> {
         let data = &request.ctap_hid_data();
         let mut rest: &[u8] = data;
 
@@ -337,17 +308,14 @@ where
         //         return Err(Error::Transport(TransportError::InvalidFraming));
         //     }
 
-        let cbor_response = CborResponse::try_from(&resp)
-            .or(Err(Error::Transport(TransportError::InvalidFraming)))?;
+        let cbor_response = CborResponse::try_from(&resp).map_err(NfcError::ResponseDecode)?;
         self.cbor_response = Some(cbor_response);
         Ok(())
     }
 
     #[instrument(level = Level::DEBUG, skip_all)]
-    async fn cbor_recv(&mut self, _timeout: std::time::Duration) -> Result<CborResponse, Error> {
-        self.cbor_response
-            .take()
-            .ok_or(Error::Transport(TransportError::InvalidFraming))
+    async fn cbor_recv(&mut self, _timeout: std::time::Duration) -> Result<CborResponse, NfcError> {
+        self.cbor_response.take().ok_or(NfcError::NoResponse)
     }
 
     fn get_ux_update_sender(&self) -> &broadcast::Sender<UvUpdate> {
@@ -393,6 +361,7 @@ mod tests {
     use crate::proto::ctap1::apdu::{ApduRequest, ApduResponseStatus};
     use crate::proto::CtapError;
     use crate::transport::channel::Channel;
+    use crate::transport::nfc::error::NfcError;
 
     #[test]
     fn fido2_versions_are_recognised() {
@@ -436,7 +405,7 @@ mod tests {
             _ctx: u8,
             _command: &[u8],
             response: &mut [u8],
-        ) -> apdu_core::Result {
+        ) -> Result<usize, NfcError> {
             let n = self.response.len();
             response[..n].copy_from_slice(&self.response);
             Ok(n)

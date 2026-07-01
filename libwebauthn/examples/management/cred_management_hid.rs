@@ -7,8 +7,9 @@ use libwebauthn::proto::ctap2::{
 };
 use libwebauthn::proto::CtapError;
 use libwebauthn::transport::hid::list_devices;
+use libwebauthn::transport::hid::HidError;
 use libwebauthn::transport::{Channel as _, ChannelSettings, Device};
-use libwebauthn::webauthn::Error as WebAuthnError;
+use libwebauthn::webauthn::WebAuthnError;
 use std::io::{self, Write};
 use text_io::read;
 
@@ -31,7 +32,7 @@ fn format_credential(cred: &Ctap2CredentialData) -> String {
 
 async fn enumerate_rps<T: CredentialManagement>(
     channel: &mut T,
-) -> Result<Vec<Ctap2RPData>, WebAuthnError> {
+) -> Result<Vec<Ctap2RPData>, WebAuthnError<T::TransportError>> {
     let (rp, total_rps) = retry_user_errors!(channel.enumerate_rps_begin(TIMEOUT))?;
     let mut rps = vec![rp];
     for _ in 1..total_rps {
@@ -44,7 +45,7 @@ async fn enumerate_rps<T: CredentialManagement>(
 async fn enumerate_credentials_for_rp<T: CredentialManagement>(
     channel: &mut T,
     rp_id_hash: &[u8],
-) -> Result<Vec<Ctap2CredentialData>, WebAuthnError> {
+) -> Result<Vec<Ctap2CredentialData>, WebAuthnError<T::TransportError>> {
     let (credential, num_of_creds) =
         retry_user_errors!(channel.enumerate_credentials_begin(rp_id_hash, TIMEOUT))?;
     let mut credentials = vec![credential];
@@ -77,7 +78,7 @@ impl Display for Operation {
 }
 
 #[tokio::main]
-pub async fn main() -> Result<(), WebAuthnError> {
+pub async fn main() -> Result<(), WebAuthnError<HidError>> {
     common::setup_logging();
 
     let devices = list_devices().await.unwrap();
@@ -86,7 +87,10 @@ pub async fn main() -> Result<(), WebAuthnError> {
     for mut device in devices {
         println!("Selected HID authenticator: {}", &device);
         let mut channel = device.channel(ChannelSettings::default()).await?;
-        channel.wink(TIMEOUT).await?;
+        channel
+            .wink(TIMEOUT)
+            .await
+            .map_err(WebAuthnError::Transport)?;
 
         let state_recv = channel.get_ux_update_receiver();
         tokio::spawn(common::handle_uv_updates(state_recv));

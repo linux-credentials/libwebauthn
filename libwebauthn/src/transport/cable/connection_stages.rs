@@ -14,8 +14,7 @@ use super::qr_code_device::CableQrCodeDevice;
 use super::tunnel;
 use crate::proto::ctap2::cbor::{CborRequest, CborResponse};
 use crate::transport::ble::btleplug::FidoDevice;
-use crate::transport::error::TransportError;
-use crate::webauthn::error::Error;
+use crate::transport::cable::error::CableError;
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -24,7 +23,7 @@ pub(crate) struct ProximityCheckInput {
 }
 
 impl ProximityCheckInput {
-    pub fn new_for_qr_code(qr_device: &CableQrCodeDevice) -> Result<Self, Error> {
+    pub fn new_for_qr_code(qr_device: &CableQrCodeDevice) -> Result<Self, CableError> {
         let eid_key: [u8; 64] = derive(
             qr_device.qr_code.qr_secret.as_ref(),
             None,
@@ -36,7 +35,7 @@ impl ProximityCheckInput {
     pub fn new_for_known_device(
         known_device: &CableKnownDevice,
         client_nonce: &ClientNonce,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, CableError> {
         let eid_key: [u8; 64] = derive(
             &known_device.device_info.link_secret,
             Some(client_nonce),
@@ -75,7 +74,7 @@ impl ConnectionInput {
     pub fn new_for_qr_code(
         qr_device: &CableQrCodeDevice,
         proximity_output: &ProximityCheckOutput,
-    ) -> Result<Self, TransportError> {
+    ) -> Result<Self, CableError> {
         let tunnel_domain = decode_tunnel_domain_from_advert(&proximity_output.advert)?;
 
         let routing_id_str = hex::encode(proximity_output.advert.routing_id);
@@ -84,8 +83,8 @@ impl ConnectionInput {
             None,
             KeyPurpose::TunnelID,
         )
-        .map_err(|_| TransportError::InvalidKey)?;
-        let tunnel_id = tunnel_id_full.get(..16).ok_or(TransportError::InvalidKey)?;
+        .map_err(|_| CableError::InvalidKey)?;
+        let tunnel_id = tunnel_id_full.get(..16).ok_or(CableError::InvalidKey)?;
         let tunnel_id_str = hex::encode(tunnel_id);
 
         let connection_type = CableTunnelConnectionType::QrCode {
@@ -159,7 +158,7 @@ impl HandshakeInput {
         qr_device: &CableQrCodeDevice,
         connection_output: ConnectionOutput,
         proximity_output: ProximityCheckOutput,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, CableError> {
         let advert_plaintext = &proximity_output.advert.plaintext;
         let psk = derive_psk(qr_device.qr_code.qr_secret.as_ref(), advert_plaintext)?;
         Ok(Self {
@@ -174,7 +173,7 @@ impl HandshakeInput {
         known_device: &CableKnownDevice,
         connection_output: ConnectionOutput,
         proximity_output: ProximityCheckOutput,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, CableError> {
         let link_secret = known_device.device_info.link_secret;
         let advert_plaintext = proximity_output.advert.plaintext;
         let psk = derive_psk(&link_secret, &advert_plaintext)?;
@@ -226,7 +225,7 @@ impl TunnelConnectionInput {
 #[async_trait]
 pub(crate) trait UxUpdateSender: Send + Sync {
     async fn send_update(&self, update: CableUxUpdate);
-    async fn send_error(&self, error: TransportError);
+    async fn send_error(&self, error: CableError);
     async fn set_connection_state(&self, state: ConnectionState);
 }
 
@@ -257,7 +256,7 @@ impl UxUpdateSender for MpscUxUpdateSender {
         }
     }
 
-    async fn send_error(&self, error: TransportError) {
+    async fn send_error(&self, error: CableError) {
         self.send_update(CableUxUpdate::CableUpdate(CableUpdate::Error(error)))
             .await;
         let _ = self.connection_state_tx.send(ConnectionState::Terminated);
@@ -272,7 +271,7 @@ impl UxUpdateSender for MpscUxUpdateSender {
 pub(crate) async fn proximity_check_stage(
     input: ProximityCheckInput,
     ux_sender: &dyn UxUpdateSender,
-) -> Result<ProximityCheckOutput, TransportError> {
+) -> Result<ProximityCheckOutput, CableError> {
     debug!("Starting proximity check stage");
 
     ux_sender
@@ -289,7 +288,7 @@ pub(crate) async fn proximity_check_stage(
 pub(crate) async fn connection_stage(
     input: ConnectionInput,
     ux_sender: &dyn UxUpdateSender,
-) -> Result<ConnectionOutput, TransportError> {
+) -> Result<ConnectionOutput, CableError> {
     debug!(?input.tunnel_domain, "Starting connection stage");
 
     ux_sender
@@ -311,7 +310,7 @@ pub(crate) async fn connection_stage(
 /// back to the tunnel, whose routing details are always present in the advert.
 async fn connect_data_channel(
     input: &ConnectionInput,
-) -> Result<Box<dyn CableDataChannel>, TransportError> {
+) -> Result<Box<dyn CableDataChannel>, CableError> {
     if let Some(ble) = input.ble {
         match L2capDataChannel::connect(ble.address, ble.address_type, ble.psm).await {
             Ok(channel) => {
@@ -352,7 +351,7 @@ async fn connect_data_channel(
 pub(crate) async fn handshake_stage(
     input: HandshakeInput,
     ux_sender: &dyn UxUpdateSender,
-) -> Result<HandshakeOutput, TransportError> {
+) -> Result<HandshakeOutput, CableError> {
     debug!("Starting handshake stage");
 
     ux_sender
@@ -380,23 +379,19 @@ pub(crate) async fn handshake_stage(
     })
 }
 
-fn derive_psk(secret: &[u8], advert_plaintext: &[u8]) -> Result<[u8; 32], Error> {
+fn derive_psk(secret: &[u8], advert_plaintext: &[u8]) -> Result<[u8; 32], CableError> {
     let derived = derive(secret, Some(advert_plaintext), KeyPurpose::Psk)?;
     let mut psk: [u8; 32] = [0u8; 32];
-    psk.copy_from_slice(
-        derived
-            .get(..32)
-            .ok_or(Error::Transport(TransportError::InvalidKey))?,
-    );
+    psk.copy_from_slice(derived.get(..32).ok_or(CableError::InvalidKey)?);
     Ok(psk)
 }
 
 pub(crate) fn decode_tunnel_domain_from_advert(
     advert: &DecryptedAdvert,
-) -> Result<String, TransportError> {
+) -> Result<String, CableError> {
     tunnel::decode_tunnel_server_domain(advert.encoded_tunnel_server_domain)
         .ok_or_else(|| {
             error!({ encoded = %advert.encoded_tunnel_server_domain }, "Failed to decode tunnel server domain");
-            TransportError::InvalidFraming
+            CableError::InvalidFraming
         })
 }

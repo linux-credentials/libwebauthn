@@ -31,7 +31,7 @@ use crate::{
         ctap2::{Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialType},
         CtapError,
     },
-    webauthn::{Error, PlatformError},
+    webauthn::PlatformError,
 };
 
 #[derive(Debug, PartialEq, Eq)]
@@ -124,7 +124,7 @@ impl<T> AuthenticatorData<T>
 where
     T: Clone + Serialize,
 {
-    pub fn to_response_bytes(&self) -> Result<Vec<u8>, Error> {
+    pub fn to_response_bytes(&self) -> Result<Vec<u8>, PlatformError> {
         // Return the device's authData verbatim. Re-encoding from the parsed
         // fields would reorder or drop unmodeled extensions, invalidating the
         // authenticator's signature over these exact bytes.
@@ -143,7 +143,7 @@ where
         res.write_u32::<BigEndian>(self.signature_count)
             .map_err(|e| {
                 error!("Failed to create AuthenticatorData output vec at signature_count: {e:?}");
-                Error::Platform(PlatformError::InvalidDeviceResponse)
+                PlatformError::InvalidDeviceResponse
             })?;
 
         if let Some(att_data) = &self.attested_credential {
@@ -159,7 +159,7 @@ where
                 error!(
                     "Failed to create AuthenticatorData output vec at attested_credential.credential_id: {e:?}"
                 );
-                Error::Platform(PlatformError::InvalidDeviceResponse)
+                PlatformError::InvalidDeviceResponse
             })?;
             res.extend(&att_data.credential_id);
             res.extend(&att_data.credential_public_key);
@@ -169,7 +169,7 @@ where
         {
             res.extend(cbor::to_vec(&self.extensions).map_err(|e| {
                 error!(%e, "Failed to create AuthenticatorData output vec at extensions");
-                Error::Platform(PlatformError::InvalidDeviceResponse)
+                PlatformError::InvalidDeviceResponse
             })?);
         }
         Ok(res)

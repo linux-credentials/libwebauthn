@@ -3,6 +3,8 @@ use std::fmt::{Display, Formatter};
 pub mod channel;
 pub mod commands;
 pub mod device;
+pub mod error;
+pub use error::NfcError;
 #[cfg(feature = "nfc-backend-libnfc")]
 pub mod libnfc;
 #[cfg(feature = "nfc-backend-pcsc")]

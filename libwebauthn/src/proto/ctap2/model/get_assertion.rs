@@ -9,7 +9,7 @@ use crate::{
     pin::PinUvAuthProtocol,
     proto::ctap2::cbor::{map_to_json_object, Value},
     transport::AuthTokenData,
-    webauthn::{Error, PlatformError},
+    webauthn::PlatformError,
 };
 
 use super::{
@@ -150,7 +150,7 @@ impl Ctap2GetAssertionRequest {
     pub(crate) fn from_webauthn_request(
         req: &GetAssertionRequest,
         info: &Ctap2GetInfoResponse,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, PlatformError> {
         // Cloning it, so we can modify it
         let mut req = req.clone();
         // LargeBlob (NOTE: Not to be confused with LargeBlobKey)
@@ -260,23 +260,23 @@ impl Ctap2GetAssertionRequestExtensions {
     fn convert_prf_to_native(
         &mut self,
         allow_list: &[Ctap2PublicKeyCredentialDescriptor],
-    ) -> Result<(), Error> {
+    ) -> Result<(), PlatformError> {
         let Some(GetAssertionHmacOrPrfInput::Prf(prf_input)) = &self.hmac_or_prf else {
             return Ok(());
         };
 
         // Same WebAuthn L3 §10.1.4 client checks as prf_to_hmac_input below.
         if !prf_input.eval_by_credential.is_empty() && allow_list.is_empty() {
-            return Err(Error::Platform(PlatformError::NotSupported));
+            return Err(PlatformError::NotSupported);
         }
 
         let mut eval_by_credential = BTreeMap::new();
         for (enc_cred_id, value) in &prf_input.eval_by_credential {
             if enc_cred_id.is_empty() {
-                return Err(Error::Platform(PlatformError::SyntaxError));
+                return Err(PlatformError::SyntaxError);
             }
-            let cred_id = base64_url::decode(enc_cred_id)
-                .map_err(|_| Error::Platform(PlatformError::SyntaxError))?;
+            let cred_id =
+                base64_url::decode(enc_cred_id).map_err(|_| PlatformError::SyntaxError)?;
             // Entries not matching the allow list are skipped, mirroring prf_to_hmac_input.
             if allow_list.iter().any(|cred| cred.id == cred_id) {
                 eval_by_credential.insert(ByteBuf::from(cred_id), Ctap2PrfSalts::from(value));
@@ -303,7 +303,7 @@ impl Ctap2GetAssertionRequestExtensions {
         &mut self,
         allow_list: &[Ctap2PublicKeyCredentialDescriptor],
         auth_data: &AuthTokenData,
-    ) -> Result<(), Error> {
+    ) -> Result<(), PlatformError> {
         let input = match &self.hmac_or_prf {
             None => None,
             Some(GetAssertionHmacOrPrfInput::HmacGetSecret(hmac_get_secret_input)) => {
@@ -361,12 +361,12 @@ impl Ctap2GetAssertionRequestExtensions {
         eval: &Option<PrfInputValue>,
         eval_by_credential: &HashMap<String, PrfInputValue>,
         allow_list: &[Ctap2PublicKeyCredentialDescriptor],
-    ) -> Result<Option<HMACGetSecretInput>, Error> {
+    ) -> Result<Option<HMACGetSecretInput>, PlatformError> {
         // https://w3c.github.io/webauthn/#prf
         //
         // 1. If evalByCredential is not empty but allowCredentials is empty, return a DOMException whose name is “NotSupportedError”.
         if !eval_by_credential.is_empty() && allow_list.is_empty() {
-            return Err(Error::Platform(PlatformError::NotSupported));
+            return Err(PlatformError::NotSupported);
         }
 
         // 4.0 Let ev be null, and try to find any applicable PRF input(s):
@@ -374,10 +374,10 @@ impl Ctap2GetAssertionRequestExtensions {
         for (enc_cred_id, prf_value) in eval_by_credential {
             // 2. If any key in evalByCredential is the empty string, or is not a valid base64url encoding, or does not equal the id of some element of allowCredentials after performing base64url decoding, then return a DOMException whose name is “SyntaxError”.
             if enc_cred_id.is_empty() {
-                return Err(Error::Platform(PlatformError::SyntaxError));
+                return Err(PlatformError::SyntaxError);
             }
-            let cred_id = base64_url::decode(enc_cred_id)
-                .map_err(|_| Error::Platform(PlatformError::SyntaxError))?;
+            let cred_id =
+                base64_url::decode(enc_cred_id).map_err(|_| PlatformError::SyntaxError)?;
 
             // 4.1 If evalByCredential is present and contains an entry whose key is the base64url encoding of the credential ID that will be returned, let ev be the value of that entry.
             let found_cred_id = allow_list.iter().find(|x| x.id == cred_id);
@@ -558,10 +558,10 @@ impl Ctap2UserVerifiableRequest for Ctap2GetAssertionRequest {
         &mut self,
         uv_proto: &dyn PinUvAuthProtocol,
         uv_auth_token: &[u8],
-    ) -> Result<(), Error> {
+    ) -> Result<(), PlatformError> {
         let hash = self
             .client_data_hash()
-            .ok_or(Error::Platform(PlatformError::InvalidDeviceResponse))?;
+            .ok_or(PlatformError::InvalidDeviceResponse)?;
         let uv_auth_param = uv_proto.authenticate(uv_auth_token, hash)?;
         self.pin_auth_proto = Some(uv_proto.version() as u32);
         self.pin_auth_param = Some(ByteBuf::from(uv_auth_param));
@@ -1160,7 +1160,7 @@ mod tests {
             let request = prf_request(vec![cred.clone()], None, by_cred);
             let result = Ctap2GetAssertionRequest::from_webauthn_request(&request, &info);
             assert!(
-                matches!(result, Err(Error::Platform(PlatformError::SyntaxError))),
+                matches!(result, Err(PlatformError::SyntaxError)),
                 "key {bad_key:?}"
             );
         }
@@ -1180,10 +1180,7 @@ mod tests {
         let info = info_with_extensions(&["prf"]);
 
         let result = Ctap2GetAssertionRequest::from_webauthn_request(&request, &info);
-        assert!(matches!(
-            result,
-            Err(Error::Platform(PlatformError::NotSupported))
-        ));
+        assert!(matches!(result, Err(PlatformError::NotSupported)));
     }
 
     #[test]

@@ -3,7 +3,7 @@ use std::time::Duration;
 use libwebauthn::ops::u2f::{RegisterRequest, SignRequest};
 use libwebauthn::transport::{Channel, ChannelSettings, Device};
 use libwebauthn::u2f::U2F;
-use libwebauthn::webauthn::{CtapError, Error};
+use libwebauthn::webauthn::{CtapError, WebAuthnError};
 use libwebauthn::UvUpdate;
 use libwebauthn_tests::virt::get_virtual_device;
 use tokio::sync::broadcast::Receiver;
@@ -82,7 +82,10 @@ async fn test_webauthn_ctap1_exclude_list() {
         RegisterRequest::new_u2f_v2(APP_ID, challenge, vec![registered_key], TIMEOUT, false);
     let result = channel.u2f_register(&excluded_request).await;
     assert!(
-        matches!(result, Err(Error::Ctap(CtapError::CredentialExcluded))),
+        matches!(
+            result,
+            Err(WebAuthnError::Ctap(CtapError::CredentialExcluded))
+        ),
         "expected CredentialExcluded, got {:?}",
         result
     );

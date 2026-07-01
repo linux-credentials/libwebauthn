@@ -1,39 +1,4 @@
-use crate::transport::cable::error::CableTunnelError;
-
-#[derive(thiserror::Error, Debug, PartialEq, Clone)]
-pub enum TransportError {
-    #[error("connection failed")]
-    ConnectionFailed,
-    #[error("connection lost")]
-    ConnectionLost,
-    /// An error from the caBLE tunnel-server transport.
-    #[error(transparent)]
-    CableTunnel(#[from] CableTunnelError),
-    #[error("invalid endpoint")]
-    InvalidEndpoint,
-    #[error("invalid framing")]
-    InvalidFraming,
-    #[error("negotiation failed")]
-    NegotiationFailed,
-    #[error("transport unavailable")]
-    TransportUnavailable,
-    #[error("timeout")]
-    Timeout,
-    #[error("device not found")]
-    UnknownDevice,
-    #[error("invalid key")]
-    InvalidKey,
-    #[error("invalid signature")]
-    InvalidSignature,
-    #[error("input/output error: {0}")]
-    IoError(std::io::ErrorKind),
-    /// Noise transport-mode encrypt or decrypt failed; the channel is unusable.
-    #[error("encryption failed")]
-    EncryptionFailed,
-}
-
-impl From<snow::Error> for TransportError {
-    fn from(_error: snow::Error) -> Self {
-        TransportError::NegotiationFailed
-    }
-}
+//! Per-transport errors live with each transport (e.g. `hid::HidError`,
+//! `ble::BleError`, `cable::CableError`). The ceremony error is
+//! [`WebAuthnError`](crate::webauthn::error::WebAuthnError), generic over the
+//! channel's concrete transport error.

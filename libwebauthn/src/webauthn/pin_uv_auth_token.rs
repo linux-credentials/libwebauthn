@@ -18,9 +18,8 @@ use crate::proto::ctap2::{
     Ctap2, Ctap2AuthTokenPermissionRole, Ctap2ClientPinRequest, Ctap2GetInfoResponse,
     Ctap2PinUvAuthProtocol, Ctap2UserVerifiableRequest, Ctap2UserVerificationOperation,
 };
-pub use crate::transport::error::TransportError;
 use crate::transport::{AuthTokenData, Channel, Ctap2AuthTokenPermission};
-pub use crate::webauthn::error::{CtapError, Error, PlatformError};
+pub use crate::webauthn::error::{CtapError, PlatformError, WebAuthnError};
 use crate::{PinNotSetUpdate, PinRequiredUpdate, UvUpdate};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,7 +70,7 @@ fn enforce_no_mc_ga_with_client_pin(
     uv_operation: Ctap2UserVerificationOperation,
     permissions: Ctap2AuthTokenPermissionRole,
     uv_unavailable: bool,
-) -> Result<Ctap2UserVerificationOperation, Error> {
+) -> Result<Ctap2UserVerificationOperation, PlatformError> {
     let is_client_pin = matches!(
         uv_operation,
         Ctap2UserVerificationOperation::GetPinToken
@@ -90,7 +89,7 @@ fn enforce_no_mc_ga_with_client_pin(
         Ok(Ctap2UserVerificationOperation::GetPinUvAuthTokenUsingUvWithPermissions)
     } else {
         error!("noMcGaPermissionsWithClientPin is set but built-in UV is unavailable for mc/ga");
-        Err(Error::Platform(PlatformError::NoUvAvailable))
+        Err(PlatformError::NoUvAvailable)
     }
 }
 
@@ -100,7 +99,7 @@ pub(crate) async fn user_verification<R, C>(
     user_verification: UserVerificationRequirement,
     ctap2_request: &mut R,
     timeout: Duration,
-) -> Result<UsedPinUvAuthToken, Error>
+) -> Result<UsedPinUvAuthToken, WebAuthnError<C::TransportError>>
 where
     C: Channel,
     R: Ctap2UserVerifiableRequest,
@@ -162,7 +161,7 @@ async fn user_verification_helper<R, C>(
     user_verification: UserVerificationRequirement,
     ctap2_request: &mut R,
     timeout: Duration,
-) -> Result<UsedPinUvAuthToken, Error>
+) -> Result<UsedPinUvAuthToken, WebAuthnError<C::TransportError>>
 where
     C: Channel,
     R: Ctap2UserVerifiableRequest,
@@ -194,7 +193,7 @@ where
         dev_uv_protected = get_info_response.is_uv_protected();
         // Still no usable UV: do not silently fall back to a shared-secret-only result.
         if !dev_uv_protected {
-            return Err(Error::Platform(PlatformError::NoUvAvailable));
+            return Err(WebAuthnError::Platform(PlatformError::NoUvAvailable));
         }
     }
 
@@ -230,9 +229,9 @@ where
             .uv_operation(uv_blocked || skip_uv)
             .ok_or({
                 if uv_blocked {
-                    Error::Ctap(CtapError::UvBlocked)
+                    WebAuthnError::Ctap(CtapError::UvBlocked)
                 } else {
-                    Error::Platform(PlatformError::NoUvAvailable)
+                    WebAuthnError::Platform(PlatformError::NoUvAvailable)
                 }
             })?;
         if let Ctap2UserVerificationOperation::LegacyUv = uv_operation {
@@ -291,7 +290,7 @@ where
         .await
         else {
             error!("No supported PIN/UV auth protocols found");
-            return Err(Error::Ctap(CtapError::Other));
+            return Err(WebAuthnError::Ctap(CtapError::Other));
         };
 
         // For operations that include a PIN, we want to fetch one before obtaining a shared secret.
@@ -348,7 +347,7 @@ where
                         &shared_secret,
                         &pin_hash(&pin.ok_or_else(|| {
                             error!("PIN expected but not available");
-                            Error::Ctap(CtapError::PINRequired)
+                            WebAuthnError::Ctap(CtapError::PINRequired)
                         })?),
                     )?,
                 )
@@ -361,7 +360,7 @@ where
                         &shared_secret,
                         &pin_hash(&pin.ok_or_else(|| {
                             error!("PIN expected but not available");
-                            Error::Ctap(CtapError::PINRequired)
+                            WebAuthnError::Ctap(CtapError::PINRequired)
                         })?),
                     )?,
                     ctap2_request.permissions(),
@@ -386,12 +385,12 @@ where
                 break (uv_proto, shared_secret, public_key, uv_operation, Some(t));
             }
             // Internal retry, because we otherwise can't fall back to PIN, if the UV is blocked
-            Err(Error::Ctap(CtapError::UvBlocked)) => {
+            Err(WebAuthnError::Ctap(CtapError::UvBlocked)) => {
                 warn!("UV failed too many times and is now blocked. Trying to fall back to PIN.");
                 uv_blocked = true;
                 continue;
             }
-            Err(Error::Ctap(CtapError::UVInvalid)) => {
+            Err(WebAuthnError::Ctap(CtapError::UVInvalid)) => {
                 let attempts_left = channel
                     .ctap2_client_pin(&Ctap2ClientPinRequest::new_get_uv_retries(), timeout)
                     .await
@@ -411,7 +410,7 @@ where
                         continue;
                     }
                 }
-                return Err(Error::Ctap(CtapError::UVInvalid));
+                return Err(WebAuthnError::Ctap(CtapError::UVInvalid));
             }
             Err(x) => {
                 return Err(x);
@@ -448,11 +447,11 @@ where
             {
                 let token_response = token_response.ok_or_else(|| {
                     error!("Expected token response but got None");
-                    Error::Ctap(CtapError::Other)
+                    WebAuthnError::Ctap(CtapError::Other)
                 })?;
                 let Some(encrypted_pin_uv_auth_token) = token_response.pin_uv_auth_token else {
                     error!("Client PIN response did not include a PIN UV auth token");
-                    return Err(Error::Ctap(CtapError::Other));
+                    return Err(WebAuthnError::Ctap(CtapError::Other));
                 };
 
                 let uv_auth_token =
@@ -465,7 +464,7 @@ where
                         token_len = uv_auth_token.len(),
                         "Decrypted pinUvAuthToken has an invalid length"
                     );
-                    return Err(Error::Ctap(CtapError::Other));
+                    return Err(WebAuthnError::Ctap(CtapError::Other));
                 }
 
                 if ctap2_request.wants_persistent_token() {
@@ -518,7 +517,7 @@ pub(crate) async fn obtain_shared_secret<C>(
     channel: &mut C,
     pin_proto: &dyn PinUvAuthProtocol,
     timeout: Duration,
-) -> Result<(PublicKey, Vec<u8>), Error>
+) -> Result<(PublicKey, Vec<u8>), WebAuthnError<C::TransportError>>
 where
     C: Channel,
 {
@@ -528,9 +527,9 @@ where
         .await?;
     let Some(public_key) = client_pin_response.key_agreement else {
         error!("Missing public key from Client PIN response");
-        return Err(Error::Ctap(CtapError::Other));
+        return Err(WebAuthnError::Ctap(CtapError::Other));
     };
-    pin_proto.encapsulate(&public_key)
+    Ok(pin_proto.encapsulate(&public_key)?)
 }
 
 pub(crate) async fn obtain_pin<C>(
@@ -539,7 +538,7 @@ pub(crate) async fn obtain_pin<C>(
     pin_proto: Ctap2PinUvAuthProtocol,
     reason: PinRequestReason,
     timeout: Duration,
-) -> Result<Vec<u8>, Error>
+) -> Result<Vec<u8>, WebAuthnError<C::TransportError>>
 where
     C: Channel,
 {
@@ -575,7 +574,7 @@ where
         Ok(pin) => pin,
         Err(_) => {
             info!("User cancelled operation: no PIN provided");
-            return Err(Error::Ctap(CtapError::PINRequired));
+            return Err(WebAuthnError::Ctap(CtapError::PINRequired));
         }
     };
     // CTAP 2.1 sends the PIN as UTF-8 in Unicode Normalization Form C.
@@ -590,7 +589,7 @@ pub(crate) async fn try_to_set_pin<C>(
     info: &Ctap2GetInfoResponse,
     mut reason: PinNotSetReason,
     timeout: Duration,
-) -> Result<(), Error>
+) -> Result<(), WebAuthnError<C::TransportError>>
 where
     C: Channel,
 {
@@ -621,7 +620,7 @@ where
             Ok(pin) => pin,
             Err(_) => {
                 info!("User cancelled operation: no PIN provided");
-                return Err(Error::Platform(PlatformError::Cancelled));
+                return Err(WebAuthnError::Platform(PlatformError::Cancelled));
             }
         };
         match channel
@@ -632,15 +631,15 @@ where
                 // PIN was successfully set. The user can now try to finish the ongoing operation.
                 return Ok(());
             }
-            Err(Error::Platform(PlatformError::PinTooShort)) => {
+            Err(WebAuthnError::Platform(PlatformError::PinTooShort)) => {
                 reason = PinNotSetReason::PinTooShort;
                 continue;
             }
-            Err(Error::Platform(PlatformError::PinTooLong)) => {
+            Err(WebAuthnError::Platform(PlatformError::PinTooLong)) => {
                 reason = PinNotSetReason::PinTooLong;
                 continue;
             }
-            Err(Error::Ctap(CtapError::PINPolicyViolation)) => {
+            Err(WebAuthnError::Ctap(CtapError::PINPolicyViolation)) => {
                 reason = PinNotSetReason::PinPolicyViolation;
                 continue;
             }
@@ -689,9 +688,17 @@ mod test {
 
     use super::{
         enforce_no_mc_ga_with_client_pin, obtain_pin, pin_uv_auth_token_len_valid,
-        user_verification, CtapError, Error,
+        user_verification, CtapError, WebAuthnError,
     };
+    use std::convert::Infallible;
     const TIMEOUT: Duration = Duration::from_secs(1);
+
+    fn assert_uv_result(
+        actual: &Result<UsedPinUvAuthToken, WebAuthnError<Infallible>>,
+        expected: &Result<UsedPinUvAuthToken, WebAuthnError<Infallible>>,
+    ) {
+        assert_eq!(format!("{actual:?}"), format!("{expected:?}"));
+    }
 
     #[test]
     fn pin_uv_auth_token_len_valid_enforces_spec_lengths() {
@@ -754,7 +761,7 @@ mod test {
         info_extensions: Option<&[&'static str]>,
         uv_requirement: UserVerificationRequirement,
         extensions: Option<GetAssertionRequestExtensions>,
-        expected_result: Result<UsedPinUvAuthToken, Error>,
+        expected_result: Result<UsedPinUvAuthToken, WebAuthnError<Infallible>>,
     ) {
         let mut channel = MockChannel::new();
         let status_recv = channel.get_ux_update_receiver();
@@ -770,7 +777,7 @@ mod test {
         let resp =
             user_verification(&mut channel, uv_requirement, &mut getassertion, TIMEOUT).await;
 
-        assert_eq!(resp, expected_result);
+        assert_uv_result(&resp, &expected_result);
         // Nothing ended up in the auth store
         assert!(channel.get_auth_data().is_none());
         // No updates should be sent, since we are exiting early
@@ -833,9 +840,11 @@ mod test {
 
         handle.await.unwrap();
 
-        assert_eq!(
-            resp,
-            Err(Error::Platform(crate::webauthn::PlatformError::Cancelled))
+        assert_uv_result(
+            &resp,
+            &Err(WebAuthnError::Platform(
+                crate::webauthn::PlatformError::Cancelled,
+            )),
         );
     }
 
@@ -1040,7 +1049,7 @@ mod test {
         let expected_result = Ok(UsedPinUvAuthToken::NewlyCalculated(
             Ctap2UserVerificationOperation::GetPinUvAuthTokenUsingPinWithPermissions,
         ));
-        assert_eq!(resp, expected_result);
+        assert_uv_result(&resp, &expected_result);
         // Something ended up in the auth store
         assert!(channel.get_auth_data().is_some());
         assert_eq!(
@@ -1257,7 +1266,7 @@ mod test {
             let resp =
                 user_verification(&mut channel, uv_requirement, &mut getassertion, TIMEOUT).await;
 
-            assert_eq!(resp, expected_result);
+            assert_uv_result(&resp, &expected_result);
             // Something ended up in the auth store
             assert!(channel.get_auth_data().is_some());
             assert!(channel.get_auth_data().unwrap().pin_uv_auth_token.is_none());
@@ -1307,11 +1316,11 @@ mod test {
         )
         .await;
 
-        assert_eq!(
-            resp,
-            Err(Error::Platform(
-                crate::webauthn::PlatformError::NoUvAvailable
-            ))
+        assert_uv_result(
+            &resp,
+            &Err(WebAuthnError::Platform(
+                crate::webauthn::PlatformError::NoUvAvailable,
+            )),
         );
         // No shared-secret-only fallback ended up in the auth store.
         assert!(channel.get_auth_data().is_none());
@@ -1417,7 +1426,7 @@ mod test {
             let resp =
                 user_verification(&mut channel, uv_requirement, &mut getassertion, TIMEOUT).await;
 
-            assert_eq!(resp, expected_result);
+            assert_uv_result(&resp, &expected_result);
             // Something ended up in the auth store
             assert!(channel.get_auth_data().is_some());
             assert_eq!(
@@ -1562,7 +1571,7 @@ mod test {
             let resp =
                 user_verification(&mut channel, uv_requirement, &mut getassertion, TIMEOUT).await;
 
-            assert_eq!(resp, expected_result);
+            assert_uv_result(&resp, &expected_result);
             // Something ended up in the auth store
             assert!(channel.get_auth_data().is_some());
             assert_eq!(
@@ -1691,11 +1700,11 @@ mod test {
         .await;
 
         // Reused from the persistent store, carrying the record id for invalidation.
-        assert_eq!(
-            result,
-            Ok(UsedPinUvAuthToken::FromPersistentStorage(
-                "rec-1".to_string()
-            ))
+        assert_uv_result(
+            &result,
+            &Ok(UsedPinUvAuthToken::FromPersistentStorage(
+                "rec-1".to_string(),
+            )),
         );
         // The reused token must never enter the ephemeral cache.
         assert!(channel.get_auth_data().is_none());
@@ -1789,11 +1798,11 @@ mod test {
         )
         .await;
 
-        assert_eq!(
-            result,
-            Ok(UsedPinUvAuthToken::NewlyCalculated(
-                Ctap2UserVerificationOperation::GetPinUvAuthTokenUsingUvWithPermissions
-            ))
+        assert_uv_result(
+            &result,
+            &Ok(UsedPinUvAuthToken::NewlyCalculated(
+                Ctap2UserVerificationOperation::GetPinUvAuthTokenUsingUvWithPermissions,
+            )),
         );
         // The minted pcmr token is persisted, not cached ephemerally.
         assert!(channel.get_auth_data().is_none());
@@ -1913,11 +1922,11 @@ mod test {
         .await;
 
         // Recognition missed, so the token was minted, not reused.
-        assert_eq!(
-            result,
-            Ok(UsedPinUvAuthToken::NewlyCalculated(
-                Ctap2UserVerificationOperation::GetPinUvAuthTokenUsingUvWithPermissions
-            ))
+        assert_uv_result(
+            &result,
+            &Ok(UsedPinUvAuthToken::NewlyCalculated(
+                Ctap2UserVerificationOperation::GetPinUvAuthTokenUsingUvWithPermissions,
+            )),
         );
         // The stale record was reaped and replaced by exactly one fresh record.
         let listed = store.list().await;
@@ -2263,11 +2272,11 @@ mod test {
         .await;
 
         // A full token via PIN, not the OnlyForSharedSecret downgrade.
-        assert_eq!(
-            resp,
-            Ok(UsedPinUvAuthToken::NewlyCalculated(
+        assert_uv_result(
+            &resp,
+            &Ok(UsedPinUvAuthToken::NewlyCalculated(
                 Ctap2UserVerificationOperation::GetPinUvAuthTokenUsingPinWithPermissions,
-            ))
+            )),
         );
         let auth_data = channel.get_auth_data().expect("auth data stored");
         assert_eq!(auth_data.pin_uv_auth_token.as_ref().unwrap(), &token);
@@ -2314,7 +2323,7 @@ mod test {
                 mc_ga,
                 true
             ),
-            Err(Error::Platform(PlatformError::NoUvAvailable))
+            Err(PlatformError::NoUvAvailable)
         );
 
         // Policy set but no built-in UV at all: error on the clientPin mc/ga path.
@@ -2328,7 +2337,7 @@ mod test {
         );
         assert_eq!(
             enforce_no_mc_ga_with_client_pin(&info_no_uv, GetPinToken, mc_ga, false),
-            Err(Error::Platform(PlatformError::NoUvAvailable))
+            Err(PlatformError::NoUvAvailable)
         );
         // A non-mc/ga permission (e.g. credential management) is unaffected by the policy.
         assert_eq!(
@@ -2389,7 +2398,10 @@ mod test {
         )
         .await;
 
-        assert_eq!(resp, Err(Error::Platform(PlatformError::NoUvAvailable)));
+        assert_uv_result(
+            &resp,
+            &Err(WebAuthnError::Platform(PlatformError::NoUvAvailable)),
+        );
         assert!(channel.get_auth_data().is_none());
         // No PIN prompt: we never start the forbidden clientPin token request.
         assert!(status_recv.is_empty());
@@ -2428,7 +2440,10 @@ mod test {
         .await;
 
         recv_handle.await.expect("Failed to join update thread");
-        assert_eq!(resp, Err(Error::Platform(PlatformError::Cancelled)));
+        assert_uv_result(
+            &resp,
+            &Err(WebAuthnError::Platform(PlatformError::Cancelled)),
+        );
         assert!(channel.get_auth_data().is_none());
     }
 
@@ -2442,14 +2457,20 @@ mod test {
         let result = channel
             .change_pin_internal(&info, "\u{e9}\u{e9}\u{e9}".to_string(), TIMEOUT)
             .await;
-        assert_eq!(result, Err(Error::Platform(PlatformError::PinTooShort)));
+        assert!(matches!(
+            result,
+            Err(WebAuthnError::Platform(PlatformError::PinTooShort))
+        ));
 
         // 4 code points clears the length gate (it then fails later for an unrelated reason).
         let mut channel = MockChannel::new();
         let result = channel
             .change_pin_internal(&info, "\u{e9}\u{e9}\u{e9}\u{e9}".to_string(), TIMEOUT)
             .await;
-        assert_ne!(result, Err(Error::Platform(PlatformError::PinTooShort)));
+        assert!(!matches!(
+            result,
+            Err(WebAuthnError::Platform(PlatformError::PinTooShort))
+        ));
     }
 
     #[tokio::test]

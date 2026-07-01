@@ -14,7 +14,7 @@ use libwebauthn::proto::ctap2::{
 };
 use libwebauthn::transport::hid::list_devices;
 use libwebauthn::transport::{Channel, ChannelSettings, Device};
-use libwebauthn::webauthn::{CtapError, Error as WebAuthnError, WebAuthn};
+use libwebauthn::webauthn::{CtapError, WebAuthn, WebAuthnError};
 
 #[path = "../common/mod.rs"]
 mod common;
@@ -103,11 +103,11 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-async fn make_credential_call(
-    channel: &mut impl Channel,
+async fn make_credential_call<C: Channel>(
+    channel: &mut C,
     user_id: &[u8],
     exclude_list: Option<Vec<Ctap2PublicKeyCredentialDescriptor>>,
-) -> Result<Ctap2PublicKeyCredentialDescriptor, WebAuthnError> {
+) -> Result<Ctap2PublicKeyCredentialDescriptor, WebAuthnError<C::TransportError>> {
     let challenge: [u8; 32] = thread_rng().gen();
     let make_credentials_request = MakeCredentialRequest {
         challenge: Vec::from(challenge),
@@ -128,10 +128,10 @@ async fn make_credential_call(
         .map(|x| (&x.authenticator_data).try_into().unwrap())
 }
 
-async fn get_assertion_call(
-    channel: &mut impl Channel,
+async fn get_assertion_call<C: Channel>(
+    channel: &mut C,
     allow_list: Vec<Ctap2PublicKeyCredentialDescriptor>,
-) -> Result<GetAssertionResponse, WebAuthnError> {
+) -> Result<GetAssertionResponse, WebAuthnError<C::TransportError>> {
     let challenge: [u8; 32] = thread_rng().gen();
     let get_assertion = GetAssertionRequest {
         relying_party_id: "example.org".to_owned(),

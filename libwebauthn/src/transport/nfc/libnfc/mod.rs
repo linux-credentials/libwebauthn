@@ -1,11 +1,8 @@
 use super::channel::{HandlerInCtx, NfcBackend, NfcChannel};
 use super::device::NfcDevice;
+use super::error::NfcError;
 use super::Context;
-use crate::transport::error::TransportError;
 use crate::transport::ChannelSettings;
-use crate::webauthn::Error;
-use apdu::core::HandleError;
-use apdu_core;
 use std::fmt;
 use std::fmt::Debug;
 use std::io::Write;
@@ -30,39 +27,6 @@ impl fmt::Display for Info {
     }
 }
 
-fn map_error(_err: nfc1::Error) -> Error {
-    Error::Transport(TransportError::ConnectionFailed)
-}
-
-impl From<nfc1::Error> for Error {
-    fn from(input: nfc1::Error) -> Self {
-        trace!("{:?}", input);
-        let output = match input {
-            // rs-nfc1 errors
-            nfc1::Error::Malloc => TransportError::TransportUnavailable,
-            nfc1::Error::Undefined(_c_int) => TransportError::TransportUnavailable,
-            nfc1::Error::UndefinedModulationType => TransportError::TransportUnavailable,
-            nfc1::Error::NoDeviceFound => TransportError::TransportUnavailable,
-
-            // libnfc errors
-            nfc1::Error::Io => TransportError::ConnectionLost,
-            nfc1::Error::InvalidArgument => TransportError::NegotiationFailed,
-            nfc1::Error::DeviceNotSupported => TransportError::InvalidEndpoint,
-            nfc1::Error::NoSuchDeviceFound => TransportError::InvalidEndpoint,
-            nfc1::Error::BufferOverflow => TransportError::InvalidFraming,
-            nfc1::Error::Timeout => TransportError::Timeout,
-            nfc1::Error::OperationAborted => TransportError::InvalidFraming,
-            nfc1::Error::NotImplemented => TransportError::NegotiationFailed,
-            nfc1::Error::TargetReleased => TransportError::NegotiationFailed,
-            nfc1::Error::RfTransmissionError => TransportError::NegotiationFailed,
-            nfc1::Error::MifareAuthFailed => TransportError::NegotiationFailed,
-            nfc1::Error::Soft => TransportError::Timeout,
-            nfc1::Error::Chip => TransportError::InvalidFraming,
-        };
-        Error::Transport(output)
-    }
-}
-
 impl Info {
     pub fn new(connstring: &str) -> Self {
         Info {
@@ -70,16 +34,13 @@ impl Info {
         }
     }
 
-    pub fn channel(&self, settings: ChannelSettings) -> Result<NfcChannel<Context>, Error> {
-        let context = nfc1::Context::new().map_err(map_error)?;
+    pub fn channel(&self, settings: ChannelSettings) -> Result<NfcChannel<Context>, NfcError> {
+        let context = nfc1::Context::new()?;
 
         let mut chan = Channel::new(self, context)?;
 
         {
-            let mut device = chan
-                .device
-                .lock()
-                .map_err(|_| Error::Transport(TransportError::ConnectionFailed))?;
+            let mut device = chan.device.lock().map_err(|_| NfcError::MutexPoisoned)?;
             device.initiator_init()?;
             device.set_property_bool(nfc1::Property::InfiniteSelect, false)?;
 
@@ -104,7 +65,7 @@ pub struct Channel {
 unsafe impl Send for Channel {}
 
 impl Channel {
-    pub fn new(info: &Info, mut context: nfc1::Context) -> Result<Self, Error> {
+    pub fn new(info: &Info, mut context: nfc1::Context) -> Result<Self, NfcError> {
         let mut device = context.open_with_connstring(&info.connstring)?;
         let name = device.name().to_owned();
 
@@ -137,11 +98,8 @@ impl Channel {
         }
     }
 
-    fn connect_to_target(&mut self) -> Result<nfc1::Target, Error> {
-        let mut device = self
-            .device
-            .lock()
-            .map_err(|_| Error::Transport(TransportError::ConnectionFailed))?;
+    fn connect_to_target(&mut self) -> Result<nfc1::Target, NfcError> {
+        let mut device = self.device.lock().map_err(|_| NfcError::MutexPoisoned)?;
         // Assume baudrates are already sorted higher to lower
         let baudrates = device.get_supported_baud_rate(nfc1::Mode::Initiator, MODULATION_TYPE)?;
         let modulations = baudrates
@@ -151,9 +109,7 @@ impl Channel {
                 baud_rate: *baud_rate,
             })
             .collect::<Vec<nfc1::Modulation>>();
-        let modulation = modulations
-            .last()
-            .ok_or(Error::Transport(TransportError::TransportUnavailable))?;
+        let modulation = modulations.last().ok_or(NfcError::NoTarget)?;
         let is_one_rate = modulations.len() == 1;
         for i in 0..2 {
             if i > 0 {
@@ -179,7 +135,7 @@ impl Channel {
             }
         }
 
-        Err(Error::Transport(TransportError::TransportUnavailable))
+        Err(NfcError::NoTarget)
     }
 }
 
@@ -192,26 +148,24 @@ where
         _ctx: Ctx,
         command: &[u8],
         mut response: &mut [u8],
-    ) -> apdu_core::Result {
+    ) -> Result<usize, NfcError> {
         let timeout = nfc1::Timeout::Duration(TIMEOUT);
         let len = response.len();
         trace!("TX: {:?}", command);
         let rapdu = self
             .device
             .lock()
-            .map_err(|_| HandleError::Nfc(Box::new(std::io::Error::other("mutex poisoned"))))?
+            .map_err(|_| NfcError::MutexPoisoned)?
             .initiator_transceive_bytes(command, len, timeout)
-            .map_err(|e| HandleError::Nfc(Box::new(e)))?;
+            .map_err(NfcError::LibNfc)?;
 
         trace!("RX: {:?}", rapdu);
 
         if response.len() < rapdu.len() {
-            return Err(HandleError::NotEnoughBuffer(rapdu.len()));
+            return Err(NfcError::BufferOverflow(rapdu.len()));
         }
 
-        response
-            .write(&rapdu)
-            .map_err(|e| HandleError::Nfc(Box::new(e)))
+        response.write(&rapdu).map_err(NfcError::Io)
     }
 }
 
@@ -233,12 +187,10 @@ pub(crate) fn is_nfc_available() -> bool {
 }
 
 #[instrument]
-pub(crate) fn list_devices() -> Result<Vec<NfcDevice>, Error> {
-    let mut context =
-        nfc1::Context::new().map_err(|_| Error::Transport(TransportError::TransportUnavailable))?;
+pub(crate) fn list_devices() -> Result<Vec<NfcDevice>, NfcError> {
+    let mut context = nfc1::Context::new()?;
     let devices = context
-        .list_devices(MAX_DEVICES)
-        .map_err(|_| Error::Transport(TransportError::TransportUnavailable))?
+        .list_devices(MAX_DEVICES)?
         .iter()
         .map(|x| NfcDevice::new_libnfc(Info::new(x)))
         .collect::<Vec<_>>();

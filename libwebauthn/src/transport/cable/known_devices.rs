@@ -9,10 +9,10 @@ use crate::transport::cable::connection_stages::{
     UxUpdateSender,
 };
 
-use crate::transport::error::TransportError;
+use crate::transport::cable::error::CableError;
 use crate::transport::ChannelSettings;
 use crate::transport::Device;
-use crate::webauthn::error::Error;
+use crate::webauthn::error::WebAuthnError;
 
 use async_trait::async_trait;
 use futures::lock::Mutex;
@@ -102,24 +102,24 @@ impl CableKnownDeviceInfo {
     pub(crate) fn new(
         tunnel_domain: &str,
         linking_info: &CableLinkingInfo,
-    ) -> Result<Self, TransportError> {
+    ) -> Result<Self, CableError> {
         let info = Self {
             contact_id: linking_info.contact_id.to_vec(),
             link_id: linking_info
                 .link_id
                 .clone()
                 .try_into()
-                .map_err(|_| TransportError::InvalidFraming)?,
+                .map_err(|_| CableError::InvalidFraming)?,
             link_secret: linking_info
                 .link_secret
                 .clone()
                 .try_into()
-                .map_err(|_| TransportError::InvalidFraming)?,
+                .map_err(|_| CableError::InvalidFraming)?,
             public_key: linking_info
                 .authenticator_public_key
                 .clone()
                 .try_into()
-                .map_err(|_| TransportError::InvalidFraming)?,
+                .map_err(|_| CableError::InvalidFraming)?,
             name: linking_info.authenticator_name.clone(),
             tunnel_domain: tunnel_domain.to_string(),
         };
@@ -153,7 +153,7 @@ impl CableKnownDevice {
         hint: ClientPayloadHint,
         device_info: &CableKnownDeviceInfo,
         store: Arc<dyn CableKnownDeviceInfoStore>,
-    ) -> Result<CableKnownDevice, Error> {
+    ) -> Result<CableKnownDevice, CableError> {
         let device = CableKnownDevice {
             hint,
             device_info: device_info.clone(),
@@ -166,7 +166,7 @@ impl CableKnownDevice {
     async fn connection(
         known_device: &CableKnownDevice,
         ux_sender: &super::connection_stages::MpscUxUpdateSender,
-    ) -> Result<HandshakeOutput, Error> {
+    ) -> Result<HandshakeOutput, CableError> {
         let client_nonce = rand::random::<ClientNonce>();
 
         // Stage 1: Connection (no proximity check needed for known devices)
@@ -192,7 +192,10 @@ impl CableKnownDevice {
 
 #[async_trait]
 impl<'d> Device<'d, Cable, CableChannel> for CableKnownDevice {
-    async fn channel(&'d mut self, settings: ChannelSettings) -> Result<CableChannel, Error> {
+    async fn channel(
+        &'d mut self,
+        settings: ChannelSettings,
+    ) -> Result<CableChannel, WebAuthnError<CableError>> {
         debug!(?self.device_info.tunnel_domain, "Creating channel to tunnel server");
 
         let (ux_update_sender, _) = broadcast::channel(16);
@@ -211,11 +214,7 @@ impl<'d> Device<'d, Cable, CableChannel> for CableKnownDevice {
             let handshake_output = match Self::connection(&known_device, &ux_sender).await {
                 Ok(handshake_output) => handshake_output,
                 Err(e) => {
-                    let transport_err = match e {
-                        Error::Transport(t) => t,
-                        _ => TransportError::ConnectionFailed,
-                    };
-                    ux_sender.send_error(transport_err).await;
+                    ux_sender.send_error(e).await;
                     return;
                 }
             };

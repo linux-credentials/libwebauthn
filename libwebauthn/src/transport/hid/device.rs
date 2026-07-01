@@ -11,10 +11,10 @@ use tracing::{debug, info, instrument};
 
 #[cfg(feature = "virt")]
 use super::framing::HidMessage;
-use crate::transport::error::TransportError;
+use crate::transport::hid::error::HidError;
 use crate::transport::usb::{usb_id_from_hidraw, UsbDeviceId};
 use crate::transport::{ChannelSettings, Device};
-use crate::webauthn::error::Error;
+use crate::webauthn::error::WebAuthnError;
 
 #[cfg(feature = "virt")]
 pub trait HidPipeBackend: fmt::Debug + Send {
@@ -68,12 +68,12 @@ impl fmt::Display for HidDevice {
     }
 }
 
-pub(crate) fn get_hidapi() -> Result<HidApi, Error> {
-    HidApi::new().or(Err(Error::Transport(TransportError::TransportUnavailable)))
+pub(crate) fn get_hidapi() -> Result<HidApi, HidError> {
+    HidApi::new().map_err(HidError::ApiInit)
 }
 
 #[instrument]
-pub async fn list_devices() -> Result<Vec<HidDevice>, Error> {
+pub async fn list_devices() -> Result<Vec<HidDevice>, HidError> {
     let devices: Vec<_> = get_hidapi()?
         .device_list()
         .filter(|device| device.usage_page() == 0xF1D0)
@@ -94,7 +94,10 @@ pub fn virtual_device<B: HidPipeBackend + 'static>(backend: B) -> HidDevice {
 
 #[async_trait]
 impl<'d> Device<'d, Hid, HidChannel<'d>> for HidDevice {
-    async fn channel(&'d mut self, settings: ChannelSettings) -> Result<HidChannel<'d>, Error> {
+    async fn channel(
+        &'d mut self,
+        settings: ChannelSettings,
+    ) -> Result<HidChannel<'d>, WebAuthnError<HidError>> {
         let channel = HidChannel::new(self, settings).await?;
         Ok(channel)
     }

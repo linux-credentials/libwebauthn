@@ -1,17 +1,37 @@
+use crate::proto::ctap2::cbor::CborError;
 pub use crate::proto::CtapError;
-use crate::{proto::ctap2::cbor::CborError, webauthn::TransportError};
 
-#[derive(thiserror::Error, Debug, PartialEq)]
-pub enum Error {
-    #[error("Transport error: {0}")]
-    Transport(#[from] TransportError),
-    #[error("Ctap error: {0}")]
-    Ctap(#[from] CtapError),
-    #[error("Platform error: {0}")]
-    Platform(#[from] PlatformError),
+/// Ceremony-level error, generic over the channel's concrete transport error.
+///
+/// `E` is bound exactly once, by the channel that runs the operation
+/// ([`Channel::TransportError`](crate::transport::Channel::TransportError)).
+#[derive(thiserror::Error, Debug)]
+#[non_exhaustive]
+pub enum Error<E> {
+    #[error("ctap error: {0}")]
+    Ctap(#[source] CtapError),
+    #[error("transport error: {0}")]
+    Transport(#[source] E),
+    #[error("platform error: {0}")]
+    Platform(#[source] PlatformError),
 }
 
-impl From<CborError> for Error {
+/// Former name of the ceremony [`Error`], retained to avoid call-site churn.
+pub use self::Error as WebAuthnError;
+
+impl<E> From<CtapError> for Error<E> {
+    fn from(error: CtapError) -> Self {
+        Error::Ctap(error)
+    }
+}
+
+impl<E> From<PlatformError> for Error<E> {
+    fn from(error: PlatformError) -> Self {
+        Error::Platform(error)
+    }
+}
+
+impl<E> From<CborError> for Error<E> {
     fn from(error: CborError) -> Self {
         Error::Platform(PlatformError::CborError(error))
     }

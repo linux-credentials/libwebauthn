@@ -16,8 +16,9 @@ use libwebauthn::management::CredentialManagement;
 use libwebauthn::pin::persistent_token::{MemoryPersistentTokenStore, PersistentTokenStore};
 use libwebauthn::proto::ctap2::Ctap2;
 use libwebauthn::transport::hid::list_devices;
+use libwebauthn::transport::hid::HidError;
 use libwebauthn::transport::{Channel as _, ChannelSettings, Device};
-use libwebauthn::webauthn::Error as WebAuthnError;
+use libwebauthn::webauthn::WebAuthnError;
 
 #[path = "../common/mod.rs"]
 mod common;
@@ -25,7 +26,7 @@ mod common;
 const TIMEOUT: Duration = Duration::from_secs(10);
 
 #[tokio::main]
-pub async fn main() -> Result<(), WebAuthnError> {
+pub async fn main() -> Result<(), WebAuthnError<HidError>> {
     common::setup_logging();
 
     // In production, use a securely stored implementation. See the module docs.
@@ -75,7 +76,9 @@ pub async fn main() -> Result<(), WebAuthnError> {
     Ok(())
 }
 
-async fn print_metadata(channel: &mut impl CredentialManagement) -> Result<(), WebAuthnError> {
+async fn print_metadata<T: CredentialManagement>(
+    channel: &mut T,
+) -> Result<(), WebAuthnError<T::TransportError>> {
     let metadata = channel.get_credential_metadata(TIMEOUT).await?;
     println!(
         "Discoverable credentials: {} (max remaining: {})",

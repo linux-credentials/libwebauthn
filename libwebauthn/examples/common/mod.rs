@@ -123,12 +123,12 @@ macro_rules! retry_user_errors {
         loop {
             match $call.await {
                 Ok(response) => break Ok(response),
-                Err(libwebauthn::webauthn::Error::Ctap(ctap_error)) => {
+                Err(libwebauthn::webauthn::WebAuthnError::Ctap(ctap_error)) => {
                     if ctap_error.is_retryable_user_error() {
                         println!("Oops, try again! Error: {}", ctap_error);
                         continue;
                     }
-                    break Err(libwebauthn::webauthn::Error::Ctap(ctap_error));
+                    break Err(libwebauthn::webauthn::WebAuthnError::Ctap(ctap_error));
                 }
                 Err(err) => break Err(err),
             }

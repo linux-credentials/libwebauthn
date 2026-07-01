@@ -12,12 +12,12 @@ use crate::proto::{
     ctap1::apdu::{ApduRequest, ApduResponse},
     ctap2::cbor::{CborRequest, CborResponse},
 };
-use crate::transport::error::TransportError;
+use crate::transport::cable::error::CableError;
 use crate::transport::AuthTokenData;
 use crate::transport::{
     channel::ChannelStatus, device::SupportedProtocols, Channel, Ctap2AuthTokenStore,
 };
-use crate::webauthn::error::Error;
+use crate::webauthn::error::WebAuthnError;
 use crate::Transport;
 use crate::UvUpdate;
 
@@ -51,7 +51,7 @@ pub struct CableChannel {
 }
 
 impl CableChannel {
-    async fn wait_for_connection(&self) -> Result<(), Error> {
+    async fn wait_for_connection(&self) -> Result<(), CableError> {
         let mut rx = self.connection_state_receiver.clone();
 
         // If already connected, return immediately
@@ -65,22 +65,20 @@ impl CableChannel {
         // the caller can't observe the timing difference and the asymmetry
         // was accidental.
         if *rx.borrow() == ConnectionState::Terminated {
-            return Err(Error::Transport(TransportError::ConnectionFailed));
+            return Err(CableError::ConnectionFailed);
         }
 
         // Wait for state change
         while rx.changed().await.is_ok() {
             match *rx.borrow() {
                 ConnectionState::Connected => return Ok(()),
-                ConnectionState::Terminated => {
-                    return Err(Error::Transport(TransportError::ConnectionFailed))
-                }
+                ConnectionState::Terminated => return Err(CableError::ConnectionFailed),
                 ConnectionState::Connecting => continue,
             }
         }
 
         // If the sender was dropped, consider it a failure
-        Err(Error::Transport(TransportError::ConnectionLost))
+        Err(CableError::ConnectionLost)
     }
 }
 
@@ -113,7 +111,7 @@ pub enum CableUpdate {
     /// Connected to the authenticator device via the tunnel server.
     Connected,
     /// The connection to the authenticator device has failed.
-    Error(TransportError),
+    Error(CableError),
 }
 
 impl From<UvUpdate> for CableUxUpdate {
@@ -125,12 +123,13 @@ impl From<UvUpdate> for CableUxUpdate {
 #[async_trait]
 impl Channel for CableChannel {
     type UxUpdate = CableUxUpdate;
+    type TransportError = CableError;
 
     fn transport(&self) -> Transport {
         Transport::Hybrid
     }
 
-    async fn supported_protocols(&self) -> Result<SupportedProtocols, Error> {
+    async fn supported_protocols(&self) -> Result<SupportedProtocols, WebAuthnError<CableError>> {
         Ok(SupportedProtocols::fido2_only())
     }
 
@@ -145,17 +144,25 @@ impl Channel for CableChannel {
         // TODO Send CableTunnelMessageType#Shutdown and drop the connection
     }
 
-    async fn apdu_send(&mut self, _request: &ApduRequest, _timeout: Duration) -> Result<(), Error> {
+    async fn apdu_send(
+        &mut self,
+        _request: &ApduRequest,
+        _timeout: Duration,
+    ) -> Result<(), CableError> {
         error!("APDU send not supported in caBLE transport");
-        Err(Error::Transport(TransportError::TransportUnavailable))
+        Err(CableError::TransportUnavailable)
     }
 
-    async fn apdu_recv(&mut self, _timeout: Duration) -> Result<ApduResponse, Error> {
+    async fn apdu_recv(&mut self, _timeout: Duration) -> Result<ApduResponse, CableError> {
         error!("APDU recv not supported in caBLE transport");
-        Err(Error::Transport(TransportError::TransportUnavailable))
+        Err(CableError::TransportUnavailable)
     }
 
-    async fn cbor_send(&mut self, request: &CborRequest, timeout: Duration) -> Result<(), Error> {
+    async fn cbor_send(
+        &mut self,
+        request: &CborRequest,
+        timeout: Duration,
+    ) -> Result<(), CableError> {
         // First, wait for connection to be established (no timeout for handshake)
         self.wait_for_connection().await?;
 
@@ -164,26 +171,26 @@ impl Channel for CableChannel {
             Ok(Ok(_)) => Ok(()),
             Ok(Err(error)) => {
                 error!(%error, "CBOR request send failure");
-                Err(Error::Transport(TransportError::TransportUnavailable))
+                Err(CableError::TransportUnavailable)
             }
             Err(elapsed) => {
                 error!({ %elapsed, ?timeout }, "CBOR request send timeout");
-                Err(Error::Transport(TransportError::Timeout))
+                Err(CableError::Timeout)
             }
         }
     }
 
-    async fn cbor_recv(&mut self, timeout: Duration) -> Result<CborResponse, Error> {
+    async fn cbor_recv(&mut self, timeout: Duration) -> Result<CborResponse, CableError> {
         // First, wait for connection to be established (no timeout for handshake)
         self.wait_for_connection().await?;
 
         // Now apply timeout only to the actual CBOR operation
         match time::timeout(timeout, self.cbor_receiver.recv()).await {
             Ok(Some(response)) => Ok(response),
-            Ok(None) => Err(Error::Transport(TransportError::TransportUnavailable)),
+            Ok(None) => Err(CableError::TransportUnavailable),
             Err(elapsed) => {
                 error!({ %elapsed, ?timeout }, "CBOR response recv timeout");
-                Err(Error::Transport(TransportError::Timeout))
+                Err(CableError::Timeout)
             }
         }
     }
