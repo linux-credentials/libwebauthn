@@ -206,6 +206,11 @@ pub struct AuthenticationExtensionsClientOutputsJSON {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub appid: Option<bool>,
 
+    /// FIDO AppID Exclusion extension output (for registration, WebAuthn L3
+    /// §10.1.2): `Some(true)` when the appidExclude AppID was acted upon.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub appid_exclude: Option<bool>,
+
     /// The credential properties extension output (for registration).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cred_props: Option<CredentialPropertiesOutputJSON>,

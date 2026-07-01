@@ -12,6 +12,7 @@ use crate::{
     ops::webauthn::{
         client_data::ClientData,
         idl::{
+            appid_authorised,
             create::PublicKeyCredentialCreationOptionsJSON,
             get::PrfValuesJson,
             response::{
@@ -196,6 +197,9 @@ impl MakeCredentialResponse {
         let mut results = AuthenticationExtensionsClientOutputsJSON::default();
         let unsigned_ext = &self.unsigned_extensions_output;
 
+        // FIDO AppID Exclusion extension output
+        results.appid_exclude = unsigned_ext.appid_exclude;
+
         // Credential properties extension
         if let Some(cred_props) = &unsigned_ext.cred_props {
             results.cred_props = Some(CredentialPropertiesOutputJSON { rk: cred_props.rk });
@@ -233,7 +237,10 @@ impl MakeCredentialResponse {
 #[derive(Debug, Default, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MakeCredentialsResponseUnsignedExtensions {
-    // pub app_id: Option<bool>,
+    /// FIDO AppID Exclusion output (WebAuthn L3 §10.1.2): `Some(true)` when the
+    /// appidExclude AppID was used in the exclusion check.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub appid_exclude: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cred_props: Option<CredentialPropsExtension>,
     // #[serde(skip_serializing_if = "Option::is_none")]
@@ -362,7 +369,21 @@ impl MakeCredentialsResponseUnsignedExtensions {
             }
         };
 
+        // appidExclude output is true when an excludeList entry was tested under it.
+        let exclude_present = request
+            .exclude
+            .as_ref()
+            .map(|list| !list.is_empty())
+            .unwrap_or(false);
+        let appid_exclude = request
+            .extensions
+            .as_ref()
+            .and_then(|e| e.appid_exclude.as_ref())
+            .filter(|_| exclude_present)
+            .map(|_| true);
+
         MakeCredentialsResponseUnsignedExtensions {
+            appid_exclude,
             cred_props,
             hmac_create_secret,
             large_blob,
@@ -446,6 +467,15 @@ impl FromIdlModel<PublicKeyCredentialCreationOptionsJSON> for MakeCredentialRequ
                 effective_rp_id.to_string(),
             ));
         }
+        if let Some(appid_exclude) = inner
+            .extensions
+            .as_ref()
+            .and_then(|e| e.appid_exclude.as_deref())
+        {
+            appid_authorised(request_origin, settings, appid_exclude)
+                .await
+                .map_err(|err| MakeCredentialPrepareError::InvalidAppId(err.to_string()))?;
+        }
         let relying_party = Ctap2PublicKeyCredentialRpEntity {
             id: rp_id.0,
             name: inner.rp.name,
@@ -513,6 +543,9 @@ pub enum MakeCredentialPrepareError {
     InvalidRelyingPartyId(String),
     #[error("Mismatching relying party ID: {0} != {1}")]
     MismatchingRelyingPartyId(String, String),
+    /// The client must throw a "SecurityError" DOMException.
+    #[error("Invalid AppID: {0}")]
+    InvalidAppId(String),
 }
 
 impl MakeCredentialRequest {
@@ -1041,7 +1074,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_request_from_json_appid_exclude_extension() {
-        let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
+        // Same-site AppID (equal host) is authorised for the caller.
+        let request_origin: RequestOrigin = "https://www.example.org".parse().unwrap();
         let req_json = json_field_add(
             REQUEST_BASE_JSON,
             "extensions",
@@ -1061,6 +1095,131 @@ mod tests {
             ext.appid_exclude.as_deref(),
             Some("https://www.example.org/u2f/origins.json")
         );
+    }
+
+    #[tokio::test]
+    async fn test_request_from_json_appid_exclude_rejects_cross_site() {
+        // WebAuthn L3 §10.1.2: appidExclude must be same-site with the caller.
+        let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
+        let req_json = json_field_add(
+            REQUEST_BASE_JSON,
+            "extensions",
+            r#"{"appidExclude": "https://example.net/u2f/origins.json"}"#,
+        );
+
+        let res = from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            RelatedOrigins::Disabled,
+            &req_json,
+        )
+        .await;
+        assert!(matches!(
+            res,
+            Err(MakeCredentialPrepareError::InvalidAppId(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_request_from_json_appid_exclude_parent_domain() {
+        // Legacy U2F migration: a subdomain caller may use its registrable
+        // parent domain as the appidExclude AppID (WebAuthn L3 §10.1.2).
+        let request_origin: RequestOrigin = "https://login.example.org".parse().unwrap();
+        let req_json = json_field_add(
+            REQUEST_BASE_JSON,
+            "extensions",
+            r#"{"appidExclude": "https://example.org/u2f/origins.json"}"#,
+        );
+
+        let req: MakeCredentialRequest = from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            RelatedOrigins::Disabled,
+            &req_json,
+        )
+        .await
+        .unwrap();
+        let ext = req.extensions.expect("extensions should be present");
+        assert_eq!(
+            ext.appid_exclude.as_deref(),
+            Some("https://example.org/u2f/origins.json")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_request_from_json_appid_exclude_rejects_subdomain() {
+        // The AppID host must be a suffix of the caller host, so a parent-domain
+        // caller cannot claim a more-specific subdomain AppID.
+        let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
+        let req_json = json_field_add(
+            REQUEST_BASE_JSON,
+            "extensions",
+            r#"{"appidExclude": "https://sub.example.org/u2f/origins.json"}"#,
+        );
+
+        let res = from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            RelatedOrigins::Disabled,
+            &req_json,
+        )
+        .await;
+        assert!(matches!(
+            res,
+            Err(MakeCredentialPrepareError::InvalidAppId(_))
+        ));
+    }
+
+    #[test]
+    fn test_appid_exclude_output_emitted_when_acted_upon() {
+        // WebAuthn L3 §10.1.2: appidExclude output is true when acted upon.
+        use serde_bytes::ByteBuf;
+
+        let mut request = create_test_request();
+        request.exclude = Some(vec![Ctap2PublicKeyCredentialDescriptor {
+            id: ByteBuf::from(vec![1, 2, 3, 4]),
+            r#type: Ctap2PublicKeyCredentialType::PublicKey,
+            transports: None,
+        }]);
+        request.extensions = Some(MakeCredentialsRequestExtensions {
+            appid_exclude: Some("https://www.example.org/u2f/origins.json".to_string()),
+            ..MakeCredentialsRequestExtensions::default()
+        });
+
+        let unsigned = MakeCredentialsResponseUnsignedExtensions::from_signed_extensions(
+            &None, None, &request, None, None,
+        );
+        assert_eq!(unsigned.appid_exclude, Some(true));
+
+        let mut response = create_test_response();
+        response.unsigned_extensions_output = unsigned;
+        let model = response.to_idl_model(&request).unwrap();
+        assert_eq!(model.client_extension_results.appid_exclude, Some(true));
+
+        // The RP sees `appidExclude: true` in the serialized client outputs.
+        use crate::ops::webauthn::idl::response::JsonFormat;
+        let json = response
+            .to_json_string(&request, JsonFormat::default())
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            parsed["clientExtensionResults"]["appidExclude"],
+            serde_json::Value::Bool(true)
+        );
+    }
+
+    #[test]
+    fn test_appid_exclude_output_absent_without_exclude_list() {
+        let mut request = create_test_request();
+        request.extensions = Some(MakeCredentialsRequestExtensions {
+            appid_exclude: Some("https://www.example.org/u2f/origins.json".to_string()),
+            ..MakeCredentialsRequestExtensions::default()
+        });
+
+        let unsigned = MakeCredentialsResponseUnsignedExtensions::from_signed_extensions(
+            &None, None, &request, None, None,
+        );
+        assert_eq!(unsigned.appid_exclude, None);
     }
 
     #[tokio::test]
@@ -1880,6 +2039,7 @@ mod tests {
 
         // Add some extension outputs
         response.unsigned_extensions_output = MakeCredentialsResponseUnsignedExtensions {
+            appid_exclude: None,
             cred_props: Some(CredentialPropsExtension { rk: Some(true) }),
             hmac_create_secret: Some(true),
             large_blob: None,

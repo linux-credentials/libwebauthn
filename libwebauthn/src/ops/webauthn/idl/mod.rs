@@ -17,6 +17,7 @@ pub use response::{
 use async_trait::async_trait;
 use serde::de::DeserializeOwned;
 use tracing::debug;
+use url::Url;
 
 use origin::{is_registrable_domain_suffix_or_equal, RequestOrigin};
 use rpid::RelyingPartyId;
@@ -58,6 +59,52 @@ where
         settings: &RequestSettings<'_>,
         model: T,
     ) -> Result<Self, Self::Error>;
+}
+
+/// Errors authorising a FIDO `appid` / `appidExclude` URL against the caller
+/// origin (WebAuthn L3 §10.1.1 / §10.1.2).
+#[derive(thiserror::Error, Debug)]
+pub(crate) enum AppIdAuthorisationError {
+    #[error("appid must not be empty")]
+    Empty,
+    #[error("appid must be an https URL: {0}")]
+    NotHttps(String),
+    #[error("appid is not a valid URL: {0}")]
+    InvalidUrl(String),
+    #[error("appid has no host: {0}")]
+    NoHost(String),
+    #[error("appid host is not a valid domain: {0}")]
+    InvalidHost(String),
+    #[error("appid is not authorised for the caller origin")]
+    NotAuthorised,
+}
+
+/// Authorises a FIDO AppID URL for the caller, reusing the same-site rp.id
+/// check: the AppID host must be a registrable-domain suffix of, or equal to,
+/// the caller origin host (or pass related-origins). This is the web reduction
+/// of the FIDO AppID and Facet "is a caller's FacetID authorized" algorithm.
+pub(crate) async fn appid_authorised(
+    request_origin: &RequestOrigin,
+    settings: &RequestSettings<'_>,
+    appid: &str,
+) -> Result<(), AppIdAuthorisationError> {
+    if appid.is_empty() {
+        return Err(AppIdAuthorisationError::Empty);
+    }
+    if !appid.starts_with("https://") {
+        return Err(AppIdAuthorisationError::NotHttps(appid.to_string()));
+    }
+    let url =
+        Url::parse(appid).map_err(|err| AppIdAuthorisationError::InvalidUrl(err.to_string()))?;
+    let host = url
+        .host_str()
+        .ok_or_else(|| AppIdAuthorisationError::NoHost(appid.to_string()))?;
+    let appid_rp = RelyingPartyId::try_from(host)
+        .map_err(|err| AppIdAuthorisationError::InvalidHost(err.to_string()))?;
+    if !rp_id_authorised(request_origin, &appid_rp, settings).await {
+        return Err(AppIdAuthorisationError::NotAuthorised);
+    }
+    Ok(())
 }
 
 /// Whether `request_origin` may act for `rp_id`. `Trust` accepts any rp.id;
