@@ -46,6 +46,8 @@ async fn test_webauthn_large_blob_read_returns_planted_blob() {
     let challenge: [u8; 32] = thread_rng().gen();
 
     let make = MakeCredentialRequest {
+        hints: vec![],
+        authenticator_attachment: None,
         origin: RP.into(),
         challenge: challenge.to_vec(),
         relying_party: Ctap2PublicKeyCredentialRpEntity::new(RP, RP),
@@ -91,6 +93,7 @@ async fn test_webauthn_large_blob_read_returns_planted_blob() {
     plant_large_blob_array(&mut channel, serialized).await;
 
     let ga = GetAssertionRequest {
+        hints: vec![],
         relying_party_id: RP.into(),
         origin: RP.into(),
         challenge: challenge.to_vec(),
@@ -127,6 +130,7 @@ async fn capture_large_blob_key(
     challenge: &[u8; 32],
 ) -> [u8; 32] {
     let ga_for_key = GetAssertionRequest {
+        hints: vec![],
         relying_party_id: RP.into(),
         origin: RP.into(),
         challenge: challenge.to_vec(),
@@ -239,6 +243,8 @@ async fn register_with_large_blob(
 ) -> Ctap2PublicKeyCredentialDescriptor {
     let user_id: [u8; 32] = thread_rng().gen();
     let make = MakeCredentialRequest {
+        hints: vec![],
+        authenticator_attachment: None,
         origin: RP.into(),
         challenge: challenge.to_vec(),
         relying_party: Ctap2PublicKeyCredentialRpEntity::new(RP, RP),
@@ -281,6 +287,7 @@ fn ga_request(
     ext: GetAssertionLargeBlobExtension,
 ) -> GetAssertionRequest {
     GetAssertionRequest {
+        hints: vec![],
         relying_party_id: RP.into(),
         origin: RP.into(),
         challenge: challenge.to_vec(),

@@ -4,7 +4,7 @@ use serde::Deserialize;
 use serde_bytes::ByteBuf;
 
 use crate::{
-    ops::webauthn::{Base64UrlString, UserVerificationRequirement},
+    ops::webauthn::{Base64UrlString, PublicKeyCredentialHint, UserVerificationRequirement},
     proto::ctap2::{
         Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialType, Ctap2Transport,
     },
@@ -22,7 +22,7 @@ pub struct PublicKeyCredentialRequestOptionsJSON {
     #[serde(rename = "userVerification", default)]
     pub user_verification: UserVerificationRequirement,
     #[serde(default)]
-    pub hints: Vec<String>,
+    pub hints: Vec<PublicKeyCredentialHint>,
     pub extensions: Option<GetAssertionRequestExtensionsJSON>,
 }
 

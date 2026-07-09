@@ -228,6 +228,7 @@ impl UpgradableResponse<GetAssertionResponse, SignRequest> for SignResponse {
         // This isn't great, but we have no access to the original request, and need to construct
         // something like that here. In reality, we only need `extensions: None` currently.
         let orig_request = GetAssertionRequest {
+            hints: vec![],
             relying_party_id: String::new(), // We don't have access to that info here, but we don't need it either
             challenge: Vec::new(), // U2F path doesn't use client_data for response serialization
             origin: String::new(),

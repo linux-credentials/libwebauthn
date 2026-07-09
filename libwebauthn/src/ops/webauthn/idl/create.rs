@@ -2,7 +2,8 @@ use super::get::PublicKeyCredentialDescriptorJSON;
 use super::Base64UrlString;
 use crate::{
     ops::webauthn::{
-        MakeCredentialsRequestExtensions, ResidentKeyRequirement, UserVerificationRequirement,
+        AuthenticatorAttachment, MakeCredentialsRequestExtensions, PublicKeyCredentialHint,
+        ResidentKeyRequirement, UserVerificationRequirement,
     },
     proto::ctap2::Ctap2CredentialType,
 };
@@ -16,7 +17,7 @@ use serde::Deserialize;
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AuthenticatorSelectionCriteria {
-    pub authenticator_attachment: Option<String>,
+    pub authenticator_attachment: Option<AuthenticatorAttachment>,
     pub resident_key: Option<ResidentKeyRequirement>,
     #[serde(default)]
     pub require_resident_key: bool,
@@ -55,7 +56,7 @@ pub struct PublicKeyCredentialCreationOptionsJSON {
     #[serde(default)]
     pub exclude_credentials: Vec<PublicKeyCredentialDescriptorJSON>,
     pub authenticator_selection: Option<AuthenticatorSelectionCriteria>,
-    pub hints: Option<Vec<String>>,
+    pub hints: Option<Vec<PublicKeyCredentialHint>>,
     pub attestation: Option<String>,
     pub attestation_formats: Option<Vec<String>>,
     pub extensions: Option<MakeCredentialsRequestExtensions>,

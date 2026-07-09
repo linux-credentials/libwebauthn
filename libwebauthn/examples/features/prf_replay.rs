@@ -84,6 +84,7 @@ async fn run_success_test(
     printoutput: &str,
 ) {
     let get_assertion = GetAssertionRequest {
+        hints: vec![],
         relying_party_id: "demo.yubico.com".to_owned(),
         challenge: Vec::from(challenge),
         origin: "demo.yubico.com".to_string(),

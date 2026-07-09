@@ -34,7 +34,8 @@ use crate::{
 
 use super::timeout::DEFAULT_TIMEOUT;
 use super::{
-    DowngradableRequest, RelyingPartyId, RequestOrigin, SignRequest, UserVerificationRequirement,
+    DowngradableRequest, PublicKeyCredentialHint, RelyingPartyId, RequestOrigin, SignRequest,
+    UserVerificationRequirement,
 };
 
 /// PRF extension input salts. Per W3C WebAuthn L3 §10.1.4, these are
@@ -83,6 +84,9 @@ pub struct GetAssertionRequest {
     /// nested browsing context. None for same-origin requests.
     pub top_origin: Option<String>,
     pub allow: Vec<Ctap2PublicKeyCredentialDescriptor>,
+    /// Relying-party hints, in descending order of preference, verbatim as parsed (may contain
+    /// [`PublicKeyCredentialHint::Unknown`]). See [`TransportHintedRequest`](crate::ops::webauthn::TransportHintedRequest).
+    pub hints: Vec<PublicKeyCredentialHint>,
     pub extensions: Option<GetAssertionRequestExtensions>,
     pub user_verification: UserVerificationRequirement,
     pub timeout: Duration,
@@ -243,6 +247,7 @@ impl FromIdlModel<PublicKeyCredentialRequestOptionsJSON> for GetAssertionRequest
                 .into_iter()
                 .map(|c| c.into())
                 .collect(),
+            hints: inner.hints,
             extensions,
             user_verification: inner.user_verification,
             timeout,
@@ -793,6 +798,7 @@ mod tests {
 
     fn request_base() -> GetAssertionRequest {
         GetAssertionRequest {
+            hints: vec![],
             relying_party_id: "example.org".to_owned(),
             challenge: base64_url::decode("Y3JlZGVudGlhbHMtZm9yLWxpbnV4L2xpYndlYmF1dGhu").unwrap(),
             origin: "https://example.org".to_string(),
@@ -834,6 +840,117 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(req, request_base());
+    }
+
+    #[tokio::test]
+    async fn test_request_hints_parsed_and_merged() {
+        use crate::ops::webauthn::{PublicKeyCredentialHint, TransportHintedRequest};
+        use crate::proto::ctap2::Ctap2Transport;
+        let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
+        let req_json = json_field_add(
+            &json_field_add(
+                REQUEST_BASE_JSON,
+                "allowCredentials",
+                r#"[{"type":"public-key","id":"bXktY3JlZGVudGlhbC1pZA","transports":["usb"]}]"#,
+            ),
+            "hints",
+            r#"["hybrid","security-key","made-up"]"#,
+        );
+        let req = from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            RelatedOrigins::Disabled,
+            &req_json,
+        )
+        .await
+        .unwrap();
+        // Hints stored verbatim; the unknown value survives as `Unknown`.
+        assert_eq!(
+            req.hints,
+            vec![
+                PublicKeyCredentialHint::Hybrid,
+                PublicKeyCredentialHint::SecurityKey,
+                PublicKeyCredentialHint::Unknown,
+            ]
+        );
+        // hybrid first, then security-key's roaming set; the allowCredentials `usb` de-dups.
+        assert_eq!(
+            req.preferred_transports(),
+            vec![
+                Ctap2Transport::Hybrid,
+                Ctap2Transport::Usb,
+                Ctap2Transport::Nfc,
+                Ctap2Transport::Ble,
+                Ctap2Transport::SmartCard,
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_preferred_transports_from_allow_credentials_transports() {
+        use crate::ops::webauthn::TransportHintedRequest;
+        use crate::proto::ctap2::Ctap2Transport;
+        // No hints: preference comes purely from allowCredentials.transports, flattened in
+        // descriptor list order and de-duplicated. A descriptor with no `transports` (a
+        // discoverable credential) contributes nothing.
+        let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
+        let req_json = json_field_add(
+            REQUEST_BASE_JSON,
+            "allowCredentials",
+            r#"[
+                {"type":"public-key","id":"bXktY3JlZGVudGlhbC1pZA"},
+                {"type":"public-key","id":"AQID","transports":["usb"]},
+                {"type":"public-key","id":"BAUG","transports":["nfc","usb"]}
+            ]"#,
+        );
+        let req = from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            RelatedOrigins::Disabled,
+            &req_json,
+        )
+        .await
+        .unwrap();
+        assert!(req.hints.is_empty());
+        assert_eq!(
+            req.preferred_transports(),
+            vec![Ctap2Transport::Usb, Ctap2Transport::Nfc]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_preferred_transports_orders_a_device_chooser() {
+        use crate::ops::webauthn::TransportHintedRequest;
+        use crate::proto::ctap2::Ctap2Transport;
+        // The consumer contract in miniature: a partial preference list used as a sort key, with
+        // unlisted transports ranked last while keeping their original relative order.
+        let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
+        let req_json = json_field_add(REQUEST_BASE_JSON, "hints", r#"["client-device"]"#);
+        let req = from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            RelatedOrigins::Disabled,
+            &req_json,
+        )
+        .await
+        .unwrap();
+        let pref = req.preferred_transports();
+        assert_eq!(pref, vec![Ctap2Transport::Internal]);
+
+        let mut devices = vec![
+            Ctap2Transport::Usb,
+            Ctap2Transport::Internal,
+            Ctap2Transport::Hybrid,
+        ];
+        devices.sort_by_key(|t| pref.iter().position(|p| p == t).unwrap_or(usize::MAX));
+        assert_eq!(
+            devices,
+            vec![
+                Ctap2Transport::Internal,
+                Ctap2Transport::Usb,
+                Ctap2Transport::Hybrid,
+            ]
+        );
     }
 
     #[tokio::test]
@@ -1427,6 +1544,7 @@ mod tests {
 
     fn create_test_request() -> GetAssertionRequest {
         GetAssertionRequest {
+            hints: vec![],
             relying_party_id: "example.org".to_owned(),
             challenge: b"DEADCODE_challenge".to_vec(),
             origin: "example.org".to_string(),

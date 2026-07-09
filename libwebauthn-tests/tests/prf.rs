@@ -99,6 +99,8 @@ async fn test_webauthn_prf_eval_at_create_degrades_when_unsupported() {
         ..Default::default()
     };
     let req = MakeCredentialRequest {
+        hints: vec![],
+        authenticator_attachment: None,
         origin: "example.org".to_owned(),
         challenge: Vec::from(challenge),
         relying_party: Ctap2PublicKeyCredentialRpEntity::new("example.org", "example.org"),
@@ -174,6 +176,8 @@ async fn run_test_battery(channel: &mut HidChannel<'_>, using_pin: bool) {
 
     // Make Credentials ceremony
     let make_credentials_request = MakeCredentialRequest {
+        hints: vec![],
+        authenticator_attachment: None,
         origin: "example.org".to_owned(),
         challenge: Vec::from(challenge),
         relying_party: Ctap2PublicKeyCredentialRpEntity::new("example.org", "example.org"),
@@ -242,6 +246,7 @@ async fn run_test_battery(channel: &mut HidChannel<'_>, using_pin: bool) {
     let credential: Ctap2PublicKeyCredentialDescriptor =
         (&response.authenticator_data).try_into().unwrap();
     let get_assertion = GetAssertionRequest {
+        hints: vec![],
         relying_party_id: "example.org".to_owned(),
         origin: "example.org".to_owned(),
         challenge: Vec::from(challenge),
@@ -558,6 +563,7 @@ async fn run_success_test(
     printoutput: &str,
 ) {
     let get_assertion = GetAssertionRequest {
+        hints: vec![],
         relying_party_id: "example.org".to_owned(),
         origin: "example.org".to_owned(),
         challenge: Vec::from(challenge),
@@ -625,6 +631,7 @@ async fn run_failed_test(
     expected_error: PlatformError,
 ) {
     let get_assertion = GetAssertionRequest {
+        hints: vec![],
         relying_party_id: "example.org".to_owned(),
         origin: "example.org".to_owned(),
         challenge: Vec::from(challenge),
@@ -671,6 +678,8 @@ async fn test_webauthn_prf_variable_length_input() {
     let challenge: [u8; 32] = thread_rng().gen();
 
     let make_credentials_request = MakeCredentialRequest {
+        hints: vec![],
+        authenticator_attachment: None,
         origin: "example.org".to_owned(),
         challenge: Vec::from(challenge),
         relying_party: Ctap2PublicKeyCredentialRpEntity::new("example.org", "example.org"),
@@ -716,6 +725,7 @@ async fn test_webauthn_prf_variable_length_input() {
         label: &str,
     ) -> [u8; 32] {
         let get_assertion = GetAssertionRequest {
+            hints: vec![],
             relying_party_id: "example.org".to_owned(),
             origin: "example.org".to_owned(),
             challenge: Vec::from(challenge.as_slice()),
@@ -797,6 +807,8 @@ fn basic_make_credential_request(
     extensions: Option<MakeCredentialsRequestExtensions>,
 ) -> MakeCredentialRequest {
     MakeCredentialRequest {
+        hints: vec![],
+        authenticator_attachment: None,
         origin: "example.org".to_owned(),
         challenge: Vec::from(challenge.as_slice()),
         relying_party: Ctap2PublicKeyCredentialRpEntity::new("example.org", "example.org"),
@@ -933,6 +945,7 @@ async fn test_webauthn_prf_upgrades_uv_at_assertion() {
         eval_by_credential: HashMap::new(),
     };
     let get_assertion = GetAssertionRequest {
+        hints: vec![],
         relying_party_id: "example.org".to_owned(),
         origin: "example.org".to_owned(),
         challenge: Vec::from(challenge),

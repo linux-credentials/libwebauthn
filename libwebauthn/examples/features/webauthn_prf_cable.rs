@@ -108,6 +108,8 @@ async fn create() -> Result<(), Box<dyn Error>> {
     };
 
     let request = MakeCredentialRequest {
+        hints: vec![],
+        authenticator_attachment: None,
         challenge: vec![0x11; 32],
         origin: ORIGIN.to_owned(),
         top_origin: None,
@@ -169,6 +171,7 @@ async fn get(credential_id: Option<&str>) -> Result<(), Box<dyn Error>> {
     };
 
     let request = GetAssertionRequest {
+        hints: vec![],
         relying_party_id: RP_ID.to_owned(),
         challenge: vec![0x22; 32],
         origin: ORIGIN.to_owned(),
