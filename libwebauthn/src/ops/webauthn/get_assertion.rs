@@ -30,6 +30,7 @@ use crate::{
         Ctap2PublicKeyCredentialUserEntity,
     },
     webauthn::CtapError,
+    Transport,
 };
 
 use super::timeout::DEFAULT_TIMEOUT;
@@ -478,6 +479,8 @@ pub struct Assertion {
     pub credentials_count: Option<u32>,
     pub user_selected: Option<bool>,
     pub unsigned_extensions_output: Option<GetAssertionResponseUnsignedExtensions>,
+    /// Transport the assertion was produced over, stamped by the channel.
+    pub transport: Option<Transport>,
 }
 
 impl WebAuthnIDLResponse for Assertion {
@@ -522,7 +525,9 @@ impl WebAuthnIDLResponse for Assertion {
                 signature: Base64UrlString::from(self.signature.clone()),
                 user_handle,
             },
-            authenticator_attachment: None,
+            authenticator_attachment: self
+                .transport
+                .map(|t| t.authenticator_attachment().to_string()),
             client_extension_results,
             r#type: "public-key".to_string(),
         })
@@ -1422,6 +1427,7 @@ mod tests {
             credentials_count: None,
             user_selected: None,
             unsigned_extensions_output: None,
+            transport: None,
         }
     }
 
@@ -1478,6 +1484,33 @@ mod tests {
 
         // Verify signature
         assert_eq!(model.response.signature.0, vec![0xDE, 0xAD, 0xC0, 0xDE]);
+    }
+
+    #[test]
+    fn test_assertion_to_idl_model_populates_attachment() {
+        // libwebauthn drives roaming authenticators, so every known transport
+        // yields authenticatorAttachment "cross-platform" (WebAuthn L3 §5.1).
+        let mut assertion = create_test_assertion();
+        let request = create_test_request();
+
+        for transport in [
+            Transport::Usb,
+            Transport::Ble,
+            Transport::Nfc,
+            Transport::Hybrid,
+        ] {
+            assertion.transport = Some(transport);
+            let model = assertion.to_idl_model(&request).unwrap();
+            assert_eq!(
+                model.authenticator_attachment.as_deref(),
+                Some("cross-platform")
+            );
+        }
+
+        // An unknown transport omits the field.
+        assertion.transport = None;
+        let model = assertion.to_idl_model(&request).unwrap();
+        assert_eq!(model.authenticator_attachment, None);
     }
 
     #[test]

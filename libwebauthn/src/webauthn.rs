@@ -218,10 +218,15 @@ where
         };
         trace!(?op, "WebAuthn GetAssertion request");
         let protocol = negotiate_protocol(self, op.is_downgradable()).await?;
-        match protocol {
+        let mut response = match protocol {
             FidoProtocol::FIDO2 => get_assertion_fido2(self, op).await,
             FidoProtocol::U2F => get_assertion_u2f(self, op).await,
+        }?;
+        let transport = self.transport();
+        for assertion in &mut response.assertions {
+            assertion.transport = Some(transport);
         }
+        Ok(response)
     }
 }
 

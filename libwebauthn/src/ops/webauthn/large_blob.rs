@@ -1063,6 +1063,10 @@ mod tests {
             .await
             .expect("webauthn_get_assertion should succeed");
         assert_eq!(response.assertions.len(), 1);
+        assert_eq!(
+            response.assertions[0].transport,
+            Some(crate::Transport::Usb)
+        );
         let large_blob = response.assertions[0]
             .unsigned_extensions_output
             .as_ref()
@@ -1184,6 +1188,9 @@ mod tests {
             .await
             .expect("get_assertion should succeed");
         assert_eq!(response.assertions.len(), 2);
+        for a in &response.assertions {
+            assert_eq!(a.transport, Some(crate::Transport::Usb));
+        }
         let blob = |i: usize| {
             response.assertions[i]
                 .unsigned_extensions_output
