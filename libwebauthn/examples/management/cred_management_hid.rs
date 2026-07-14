@@ -85,7 +85,7 @@ pub async fn main() -> Result<(), WebAuthnError<HidError>> {
     println!("Devices found: {:?}", devices);
 
     for mut device in devices {
-        println!("Selected HID authenticator: {}", &device);
+        println!("Selected HID authenticator: {}", device);
         let mut channel = device.channel(ChannelSettings::default()).await?;
         channel
             .wink(TIMEOUT)

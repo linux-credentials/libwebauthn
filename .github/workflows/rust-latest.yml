@@ -1,27 +1,30 @@
-name: Build and run tests
-on: [push, pull_request]
+name: Latest stable toolchain
+on:
+  push:
+    branches: [master]
+  schedule:
+    - cron: '37 10 * * 6'
+  workflow_dispatch:
 
 jobs:
-  build:
+  latest-stable:
     env:
       RUST_LOG: debug
-    name: Build and run tests
+    # Early warning for toolchain drift. The build job is pinned, so without this a new
+    # compiler or a new clippy lint would go unnoticed until someone bumped the pin by hand.
+    # It does not run on pull requests, so it can never block a merge.
+    name: Build and run tests on latest stable
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
       - name: Checkout submodules
         run: git submodule update --init --recursive
       - name: Update apt cache
         run: sudo apt-get update
       - name: Install system dependencies
         run: sudo apt-get install libudev-dev libdbus-1-dev libsodium-dev libnfc-dev libpcsclite-dev publicsuffix
-      - name: Install pinned toolchain
-        # Drop the toolchain the image ships with once we have switched off it. The job builds the
-        # workspace three times over, and the runner does not have the disk to spare for both.
-        run: |
-          rustup toolchain install 1.97.0 --profile minimal -c clippy,rustfmt
-          rustup default 1.97.0
-          rustup toolchain uninstall stable
+      - name: Install latest stable toolchain
+        run: rustup toolchain install stable --profile minimal -c clippy,rustfmt && rustup default stable
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: Check formatting
@@ -42,19 +45,3 @@ jobs:
           LIBWEBAUTHN_PSL_SYSTEM_TEST: "1"
       - name: Verify libwebauthn publishes cleanly
         run: cargo publish --dry-run -p libwebauthn
-
-  msrv:
-    name: Verify MSRV
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-      - name: Checkout submodules
-        run: git submodule update --init --recursive
-      - name: Update apt cache
-        run: sudo apt-get update
-      - name: Install system dependencies
-        run: sudo apt-get install libudev-dev libdbus-1-dev libsodium-dev libnfc-dev libpcsclite-dev publicsuffix
-      - name: Install declared MSRV toolchain
-        run: rustup toolchain install 1.88 --profile minimal
-      - name: Check against declared MSRV
-        run: cargo +1.88 check --workspace --all-features

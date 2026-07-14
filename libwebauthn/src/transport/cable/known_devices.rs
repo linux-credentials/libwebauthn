@@ -139,7 +139,7 @@ impl Display for CableKnownDevice {
         write!(
             f,
             "{} ({})",
-            &self.device_info.name,
+            self.device_info.name,
             hex::encode(self.device_info.public_key)
         )
     }

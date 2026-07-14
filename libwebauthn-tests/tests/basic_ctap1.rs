@@ -21,7 +21,7 @@ async fn handle_updates(mut state_recv: Receiver<UvUpdate>) {
 async fn test_webauthn_basic_ctap1() {
     let mut device = get_virtual_device();
 
-    println!("Selected HID authenticator: {}", &device);
+    println!("Selected HID authenticator: {}", device);
     let mut channel = device.channel(ChannelSettings::default()).await.unwrap();
     channel.wink(TIMEOUT).await.unwrap();
 

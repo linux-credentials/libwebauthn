@@ -23,7 +23,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
     let device = get_nfc_device().await?;
 
     if let Some(mut device) = device {
-        println!("Selected NFC authenticator: {}", &device);
+        println!("Selected NFC authenticator: {}", device);
         let mut channel = device.channel(ChannelSettings::default()).await?;
 
         const APP_ID: &str = "https://foo.example.org";
