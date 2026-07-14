@@ -36,7 +36,7 @@ pub async fn main() -> Result<(), WebAuthnError<HidError>> {
     println!("Devices found: {:?}", devices);
 
     for mut device in devices {
-        println!("Selected HID authenticator: {}", &device);
+        println!("Selected HID authenticator: {}", device);
 
         // Pass the store via ChannelSettings; the channel reuses or mints a persistent
         // token through it. The same settings apply to any transport.

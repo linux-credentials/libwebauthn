@@ -32,7 +32,7 @@ async fn test_webauthn_basic_ctap2() {
     let user_id: [u8; 32] = thread_rng().gen();
     let challenge: [u8; 32] = thread_rng().gen();
 
-    println!("Selected HID authenticator: {}", &device);
+    println!("Selected HID authenticator: {}", device);
     let mut channel = device.channel(ChannelSettings::default()).await.unwrap();
     channel.wink(TIMEOUT).await.unwrap();
 
