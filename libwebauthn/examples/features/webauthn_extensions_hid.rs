@@ -55,6 +55,8 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         tokio::spawn(common::handle_uv_updates(state_recv));
 
         let make_credentials_request = MakeCredentialRequest {
+            hints: vec![],
+            authenticator_attachment: None,
             challenge: Vec::from(challenge),
             origin: "example.org".to_owned(),
             top_origin: None,
@@ -80,6 +82,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         let credential: Ctap2PublicKeyCredentialDescriptor =
             (&response.authenticator_data).try_into().unwrap();
         let get_assertion = GetAssertionRequest {
+            hints: vec![],
             relying_party_id: "example.org".to_owned(),
             challenge: Vec::from(challenge),
             origin: "example.org".to_string(),

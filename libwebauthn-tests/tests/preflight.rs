@@ -49,6 +49,8 @@ async fn make_credential_call_with_rp(
 ) -> Result<(Ctap2PublicKeyCredentialDescriptor, [u8; 32]), WebAuthnError<HidError>> {
     let challenge: [u8; 32] = thread_rng().gen();
     let make_credentials_request = MakeCredentialRequest {
+        hints: vec![],
+        authenticator_attachment: None,
         origin: rp_id.to_owned(),
         challenge: Vec::from(challenge),
         relying_party: Ctap2PublicKeyCredentialRpEntity::new(rp_id, rp_id),
@@ -75,6 +77,7 @@ async fn get_assertion_call(
 ) -> Result<GetAssertionResponse, WebAuthnError<HidError>> {
     let challenge: [u8; 32] = thread_rng().gen();
     let get_assertion = GetAssertionRequest {
+        hints: vec![],
         origin: "example.org".to_owned(),
         relying_party_id: "example.org".to_owned(),
         challenge: Vec::from(challenge),

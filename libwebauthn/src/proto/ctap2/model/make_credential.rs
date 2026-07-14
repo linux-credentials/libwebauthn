@@ -683,6 +683,8 @@ mod tests {
 
     fn mc_request_with_prf(eval: Option<PrfInputValue>) -> MakeCredentialRequest {
         MakeCredentialRequest {
+            hints: vec![],
+            authenticator_attachment: None,
             challenge: vec![0u8; 32],
             origin: "https://example.org".into(),
             top_origin: None,

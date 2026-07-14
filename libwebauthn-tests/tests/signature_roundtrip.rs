@@ -67,6 +67,8 @@ async fn test_ctap2_signature_roundtrip() {
     let challenge: [u8; 32] = thread_rng().gen();
 
     let make_request = MakeCredentialRequest {
+        hints: vec![],
+        authenticator_attachment: None,
         challenge: Vec::from(challenge),
         origin: "example.org".to_owned(),
         top_origin: None,
@@ -171,6 +173,7 @@ async fn test_ctap2_signature_roundtrip() {
     let credential: Ctap2PublicKeyCredentialDescriptor =
         (&registration.authenticator_data).try_into().unwrap();
     let get_assertion = GetAssertionRequest {
+        hints: vec![],
         relying_party_id: "example.org".to_owned(),
         challenge: Vec::from(challenge),
         origin: "example.org".to_owned(),

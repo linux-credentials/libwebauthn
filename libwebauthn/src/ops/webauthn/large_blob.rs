@@ -1004,6 +1004,7 @@ mod tests {
         );
         // 3. ctap2_get_assertion. Discouraged UV path → up=true, uv=false.
         let req = crate::proto::ctap2::Ctap2GetAssertionRequest::from(GetAssertionRequest {
+            hints: vec![],
             relying_party_id: "example.com".into(),
             challenge: vec![0u8; 32],
             origin: "example.com".into(),
@@ -1043,6 +1044,7 @@ mod tests {
         );
 
         let request = GetAssertionRequest {
+            hints: vec![],
             relying_party_id: "example.com".into(),
             challenge: vec![0u8; 32],
             origin: "example.com".into(),
@@ -1143,6 +1145,7 @@ mod tests {
         );
 
         let make_req = || GetAssertionRequest {
+            hints: vec![],
             relying_party_id: "example.com".into(),
             challenge: vec![0u8; 32],
             origin: "example.com".into(),

@@ -1,5 +1,6 @@
 mod client_data;
 mod get_assertion;
+mod hints;
 pub mod idl;
 mod large_blob;
 mod make_credential;
@@ -17,6 +18,7 @@ pub use get_assertion::{
     GetAssertionResponse, GetAssertionResponseExtensions, GetAssertionResponseUnsignedExtensions,
     HMACGetSecretInput, HMACGetSecretOutput, PrfInput, PrfInputValue, PrfOutputValue,
 };
+pub use hints::{AuthenticatorAttachment, PublicKeyCredentialHint, TransportHintedRequest};
 pub use idl::{
     origin::{HostParseError, Origin, OriginHost, OriginParseError, RequestOrigin, Scheme},
     rpid::RelyingPartyId,

@@ -110,6 +110,8 @@ async fn make_credential_call<C: Channel>(
 ) -> Result<Ctap2PublicKeyCredentialDescriptor, WebAuthnError<C::TransportError>> {
     let challenge: [u8; 32] = thread_rng().gen();
     let make_credentials_request = MakeCredentialRequest {
+        hints: vec![],
+        authenticator_attachment: None,
         challenge: Vec::from(challenge),
         origin: "example.org".to_owned(),
         top_origin: None,
@@ -134,6 +136,7 @@ async fn get_assertion_call<C: Channel>(
 ) -> Result<GetAssertionResponse, WebAuthnError<C::TransportError>> {
     let challenge: [u8; 32] = thread_rng().gen();
     let get_assertion = GetAssertionRequest {
+        hints: vec![],
         relying_party_id: "example.org".to_owned(),
         challenge: Vec::from(challenge),
         origin: "example.org".to_string(),

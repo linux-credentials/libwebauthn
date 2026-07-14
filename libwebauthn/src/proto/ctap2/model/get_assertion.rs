@@ -806,6 +806,7 @@ mod tests {
 
     fn make_request(allow: Vec<Ctap2PublicKeyCredentialDescriptor>) -> GetAssertionRequest {
         GetAssertionRequest {
+            hints: vec![],
             relying_party_id: "example.com".to_string(),
             challenge: vec![0u8; 32],
             origin: "https://example.com".to_string(),

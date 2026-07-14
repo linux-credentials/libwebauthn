@@ -39,7 +39,10 @@ use crate::{
 };
 
 use super::timeout::DEFAULT_TIMEOUT;
-use super::{DowngradableRequest, RegisterRequest, UserVerificationRequirement};
+use super::{
+    AuthenticatorAttachment, DowngradableRequest, PublicKeyCredentialHint, RegisterRequest,
+    UserVerificationRequirement,
+};
 
 #[derive(Debug, Clone)]
 pub struct MakeCredentialResponse {
@@ -422,6 +425,12 @@ pub struct MakeCredentialRequest {
     pub algorithms: Vec<Ctap2CredentialType>,
     /// excludeCredentialDescriptorList
     pub exclude: Option<Vec<Ctap2PublicKeyCredentialDescriptor>>,
+    /// Relying-party hints, in descending order of preference, verbatim as parsed (may contain
+    /// [`PublicKeyCredentialHint::Unknown`]). See [`TransportHintedRequest`](crate::ops::webauthn::TransportHintedRequest).
+    pub hints: Vec<PublicKeyCredentialHint>,
+    /// The requested `authenticatorSelection.authenticatorAttachment`, if any. Feeds the merged
+    /// transport preference and is a registration-only eligibility signal.
+    pub authenticator_attachment: Option<AuthenticatorAttachment>,
     /// extensions
     pub extensions: Option<MakeCredentialsRequestExtensions>,
     /// Attestation conveyance preference. `Some("none")` scrubs attestation.
@@ -528,6 +537,11 @@ impl FromIdlModel<PublicKeyCredentialCreationOptionsJSON> for MakeCredentialRequ
                         .collect(),
                 )
             },
+            hints: inner.hints.unwrap_or_default(),
+            authenticator_attachment: inner
+                .authenticator_selection
+                .as_ref()
+                .and_then(|s| s.authenticator_attachment),
             extensions: inner.extensions,
             // WebAuthn IDL defaults attestation conveyance to "none".
             attestation: inner.attestation.or_else(|| Some("none".to_string())),
@@ -690,6 +704,8 @@ impl MakeCredentialRequest {
     #[cfg(test)]
     pub(crate) fn dummy() -> Self {
         Self {
+            hints: vec![],
+            authenticator_attachment: None,
             challenge: Vec::new(),
             origin: "example.org".to_owned(),
             top_origin: None,
@@ -905,6 +921,8 @@ mod tests {
 
     fn request_base() -> MakeCredentialRequest {
         MakeCredentialRequest {
+            hints: vec![],
+            authenticator_attachment: None,
             challenge: base64_url::decode("Y3JlZGVudGlhbHMtZm9yLWxpbnV4L2xpYndlYmF1dGhu").unwrap(),
             origin: "https://example.org".to_string(),
             top_origin: None,
@@ -963,6 +981,120 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(req, request_base());
+    }
+
+    #[tokio::test]
+    async fn test_request_hints_and_attachment_parsed_and_merged() {
+        use crate::ops::webauthn::TransportHintedRequest;
+        use crate::proto::ctap2::Ctap2Transport;
+        let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
+        let req_json = json_field_add(
+            &json_field_add(
+                REQUEST_BASE_JSON,
+                "authenticatorSelection",
+                r#"{"residentKey":"discouraged","userVerification":"preferred","authenticatorAttachment":"cross-platform"}"#,
+            ),
+            "hints",
+            r#"["security-key"]"#,
+        );
+        let req = from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            RelatedOrigins::Disabled,
+            &req_json,
+        )
+        .await
+        .unwrap();
+        assert_eq!(req.hints, vec![PublicKeyCredentialHint::SecurityKey]);
+        assert_eq!(
+            req.authenticator_attachment,
+            Some(AuthenticatorAttachment::CrossPlatform)
+        );
+        // security-key => roaming set; cross-platform attachment only gap-fills `hybrid`.
+        assert_eq!(
+            req.preferred_transports(),
+            vec![
+                Ctap2Transport::Usb,
+                Ctap2Transport::Nfc,
+                Ctap2Transport::Ble,
+                Ctap2Transport::SmartCard,
+                Ctap2Transport::Hybrid,
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_preferred_transports_from_platform_attachment_only() {
+        use crate::ops::webauthn::TransportHintedRequest;
+        use crate::proto::ctap2::Ctap2Transport;
+        // No hints, authenticatorAttachment=platform: the preference is the platform authenticator.
+        let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
+        let req_json = json_field_add(
+            REQUEST_BASE_JSON,
+            "authenticatorSelection",
+            r#"{"residentKey":"discouraged","userVerification":"preferred","authenticatorAttachment":"platform"}"#,
+        );
+        let req = from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            RelatedOrigins::Disabled,
+            &req_json,
+        )
+        .await
+        .unwrap();
+        assert!(req.hints.is_empty());
+        assert_eq!(
+            req.authenticator_attachment,
+            Some(AuthenticatorAttachment::Platform)
+        );
+        assert_eq!(req.preferred_transports(), vec![Ctap2Transport::Internal]);
+    }
+
+    #[tokio::test]
+    async fn test_request_unknown_attachment_does_not_fail_parse() {
+        // An unrecognized authenticatorAttachment must not fail the parse (§2.1.1); it deserializes
+        // to `Unknown` and contributes nothing to the merge.
+        let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
+        let req_json = json_field_add(
+            REQUEST_BASE_JSON,
+            "authenticatorSelection",
+            r#"{"residentKey":"discouraged","userVerification":"preferred","authenticatorAttachment":"made-up"}"#,
+        );
+        let req = from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            RelatedOrigins::Disabled,
+            &req_json,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            req.authenticator_attachment,
+            Some(AuthenticatorAttachment::Unknown)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_exclude_credentials_transports_are_not_a_preference() {
+        use crate::ops::webauthn::TransportHintedRequest;
+        // `excludeCredentials.transports` are an "avoid" signal (§5.4), not a preference: they must
+        // NOT gap-fill `preferred_transports()`. With no hints/attachment, the result is empty.
+        let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
+        let req_json = json_field_add(
+            REQUEST_BASE_JSON,
+            "excludeCredentials",
+            r#"[{"type":"public-key","id":"AQID","transports":["usb"]}]"#,
+        );
+        let req = from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            RelatedOrigins::Disabled,
+            &req_json,
+        )
+        .await
+        .unwrap();
+        assert!(req.exclude.is_some());
+        assert!(req.preferred_transports().is_empty());
     }
 
     #[tokio::test]
@@ -1689,6 +1821,8 @@ mod tests {
 
     fn create_test_request() -> MakeCredentialRequest {
         MakeCredentialRequest {
+            hints: vec![],
+            authenticator_attachment: None,
             challenge: b"DEADCODE_challenge".to_vec(),
             origin: "example.org".to_string(),
             top_origin: None,
