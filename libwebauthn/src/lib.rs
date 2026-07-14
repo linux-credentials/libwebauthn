@@ -144,6 +144,18 @@ pub enum Transport {
     Hybrid,
 }
 
+impl Transport {
+    /// The WebAuthn authenticator attachment modality this transport implies.
+    /// libwebauthn only drives roaming authenticators, so all map to `"cross-platform"`.
+    pub fn authenticator_attachment(self) -> &'static str {
+        match self {
+            Transport::Usb | Transport::Ble | Transport::Nfc | Transport::Hybrid => {
+                "cross-platform"
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 #[cfg_attr(any(test, feature = "virt"), derive(PartialEq))]
 pub enum UvUpdate {

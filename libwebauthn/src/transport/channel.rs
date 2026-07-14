@@ -73,8 +73,9 @@ pub trait Channel: Send + Sync + Display + Ctap2AuthTokenStore {
     async fn status(&self) -> ChannelStatus;
     async fn close(&mut self);
 
-    /// The transport this channel speaks over, used to populate the registration
-    /// response `transports` member.
+    /// The transport this channel speaks over. Drives the registration response
+    /// `transports` member and the `authenticatorAttachment` of both registration
+    /// and assertion responses.
     fn transport(&self) -> Transport {
         Transport::Usb
     }

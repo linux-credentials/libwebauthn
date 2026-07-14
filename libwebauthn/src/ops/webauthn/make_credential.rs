@@ -185,7 +185,9 @@ impl WebAuthnIDLResponse for MakeCredentialResponse {
                 public_key_algorithm,
                 attestation_object: Base64UrlString::from(attestation_object_bytes),
             },
-            authenticator_attachment: None,
+            authenticator_attachment: self
+                .transport
+                .map(|t| t.authenticator_attachment().to_string()),
             client_extension_results,
             r#type: "public-key".to_string(),
         })
@@ -1812,6 +1814,33 @@ mod tests {
         response.transport = None;
         let model = response.to_idl_model(&request).unwrap();
         assert!(model.response.transports.is_empty());
+    }
+
+    #[test]
+    fn test_response_to_idl_model_populates_attachment() {
+        // libwebauthn drives roaming authenticators, so every known transport
+        // yields authenticatorAttachment "cross-platform" (WebAuthn L3 §5.1).
+        let mut response = create_test_response();
+        let request = create_test_request();
+
+        for transport in [
+            Transport::Usb,
+            Transport::Ble,
+            Transport::Nfc,
+            Transport::Hybrid,
+        ] {
+            response.transport = Some(transport);
+            let model = response.to_idl_model(&request).unwrap();
+            assert_eq!(
+                model.authenticator_attachment.as_deref(),
+                Some("cross-platform")
+            );
+        }
+
+        // An unknown transport omits the field.
+        response.transport = None;
+        let model = response.to_idl_model(&request).unwrap();
+        assert_eq!(model.authenticator_attachment, None);
     }
 
     #[test]

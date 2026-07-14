@@ -683,6 +683,7 @@ impl Ctap2GetAssertionResponse {
             credentials_count: self.credentials_count,
             user_selected: self.user_selected,
             unsigned_extensions_output,
+            transport: None,
         }
     }
 }
