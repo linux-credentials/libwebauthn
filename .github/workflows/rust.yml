@@ -15,6 +15,13 @@ jobs:
         run: sudo apt-get update
       - name: Install system dependencies
         run: sudo apt-get install libudev-dev libdbus-1-dev libsodium-dev libnfc-dev libpcsclite-dev publicsuffix
+      - name: Install pinned toolchain
+        # Drop the toolchain the image ships with once we have switched off it. The job builds the
+        # workspace three times over, and the runner does not have the disk to spare for both.
+        run: |
+          rustup toolchain install 1.96.1 --profile minimal -c clippy,rustfmt
+          rustup default 1.96.1
+          rustup toolchain uninstall stable
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: Check formatting
