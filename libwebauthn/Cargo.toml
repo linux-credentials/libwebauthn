@@ -1,7 +1,7 @@
 [package]
 name = "libwebauthn"
 description = "FIDO2 (WebAuthn) and FIDO U2F platform library for Linux written in Rust "
-version = "0.9.0"
+version = "0.10.0"
 authors = [
     "Alfie Fresta <afresta@noentropy.org>",
     "Martin Sirringhaus <martin.sirringhaus@suse.com>",
