@@ -16,6 +16,7 @@ pub enum Error<E> {
     Platform(#[source] PlatformError),
 }
 
+#[deprecated(note = "Use `Error` instead")]
 /// Former name of the ceremony [`Error`], retained to avoid call-site churn.
 pub use self::Error as WebAuthnError;
 
