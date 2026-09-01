@@ -80,6 +80,7 @@ pub async fn list_devices() -> Result<Vec<HidDevice>, HidError> {
         .filter(|device| device.usage() == 0x0001)
         .map(|device| device.into())
         .collect();
+    debug!({ count = devices.len() }, "Listing available HID devices");
     trace!(?devices);
     Ok(devices)
 }
