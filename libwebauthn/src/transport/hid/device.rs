@@ -7,7 +7,7 @@ use std::fmt;
 #[cfg(feature = "virt")]
 use std::sync::{Arc, Mutex};
 #[allow(unused_imports)]
-use tracing::{debug, info, instrument};
+use tracing::{debug, info, instrument, trace};
 
 #[cfg(feature = "virt")]
 use super::framing::HidMessage;
@@ -80,8 +80,7 @@ pub async fn list_devices() -> Result<Vec<HidDevice>, HidError> {
         .filter(|device| device.usage() == 0x0001)
         .map(|device| device.into())
         .collect();
-    info!({ count = devices.len() }, "Listing available HID devices");
-    debug!(?devices);
+    trace!(?devices);
     Ok(devices)
 }
 
