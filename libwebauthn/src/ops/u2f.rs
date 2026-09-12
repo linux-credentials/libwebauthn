@@ -72,22 +72,17 @@ impl UpgradableResponse<MakeCredentialResponse, MakeCredentialRequest> for Regis
                 "public key is identity or compressed".into(),
             ))
         })?;
-        let x: heapless::Vec<u8, 32> =
-            heapless::Vec::from_slice(x_bytes.as_bytes()).map_err(|_| {
-                WebAuthnError::Platform(PlatformError::CryptoError(
-                    "x coordinate exceeds 32 bytes".into(),
-                ))
-            })?;
-        let y: heapless::Vec<u8, 32> =
-            heapless::Vec::from_slice(y_bytes.as_bytes()).map_err(|_| {
-                WebAuthnError::Platform(PlatformError::CryptoError(
-                    "y coordinate exceeds 32 bytes".into(),
-                ))
-            })?;
-        let cose_public_key = cose::PublicKey::P256Key(cose::P256PublicKey {
-            x: x.into(),
-            y: y.into(),
-        });
+        let x = cose::Bytes::<32>::try_from(x_bytes.as_bytes()).map_err(|_| {
+            WebAuthnError::Platform(PlatformError::CryptoError(
+                "x coordinate exceeds 32 bytes".into(),
+            ))
+        })?;
+        let y = cose::Bytes::<32>::try_from(y_bytes.as_bytes()).map_err(|_| {
+            WebAuthnError::Platform(PlatformError::CryptoError(
+                "y coordinate exceeds 32 bytes".into(),
+            ))
+        })?;
+        let cose_public_key = cose::PublicKey::P256Key(cose::P256PublicKey { x, y });
         let cose_encoded_public_key = cbor::to_vec(&cose_public_key)?;
         // Canonical CBOR encoding of the COSE P-256 key is 77 bytes for the
         // fields we set; return a typed error if a future encoder change
