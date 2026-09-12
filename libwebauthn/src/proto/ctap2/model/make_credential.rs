@@ -971,8 +971,8 @@ mod tests {
             vec![0u8; 32],
             pin_proto,
             PublicKey::EcdhEsHkdf256Key(cosey::EcdhEsHkdf256PublicKey {
-                x: Bytes::from_slice(&[1u8; 32]).unwrap(),
-                y: Bytes::from_slice(&[2u8; 32]).unwrap(),
+                x: Bytes::from(&[1u8; 32]),
+                y: Bytes::from(&[2u8; 32]),
             }),
             Ctap2UserVerificationOperation::OnlyForSharedSecret,
         );
@@ -1015,8 +1015,8 @@ mod tests {
             vec![0u8; 64],
             Ctap2PinUvAuthProtocol::Two,
             PublicKey::EcdhEsHkdf256Key(cosey::EcdhEsHkdf256PublicKey {
-                x: Bytes::from_slice(&[1u8; 32]).unwrap(),
-                y: Bytes::from_slice(&[2u8; 32]).unwrap(),
+                x: Bytes::from(&[1u8; 32]),
+                y: Bytes::from(&[2u8; 32]),
             }),
             Ctap2UserVerificationOperation::OnlyForSharedSecret,
         );
@@ -1077,8 +1077,8 @@ mod tests {
             shared_secret.clone(),
             pin_proto,
             PublicKey::EcdhEsHkdf256Key(cosey::EcdhEsHkdf256PublicKey {
-                x: Bytes::from_slice(&[1u8; 32]).unwrap(),
-                y: Bytes::from_slice(&[2u8; 32]).unwrap(),
+                x: Bytes::from(&[1u8; 32]),
+                y: Bytes::from(&[2u8; 32]),
             }),
             Ctap2UserVerificationOperation::OnlyForSharedSecret,
         );

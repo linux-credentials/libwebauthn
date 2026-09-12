@@ -241,15 +241,12 @@ where
             error!("Public key is identity or compressed");
             PlatformError::CryptoError("public key is identity or compressed".into())
         })?;
-        let x: heapless::Vec<u8, 32> = heapless::Vec::from_slice(x_bytes.as_bytes())
+        let x = cose::Bytes::<32>::try_from(x_bytes.as_bytes())
             .map_err(|_| PlatformError::CryptoError("x coordinate exceeds 32 bytes".into()))?;
-        let y: heapless::Vec<u8, 32> = heapless::Vec::from_slice(y_bytes.as_bytes())
+        let y = cose::Bytes::<32>::try_from(y_bytes.as_bytes())
             .map_err(|_| PlatformError::CryptoError("y coordinate exceeds 32 bytes".into()))?;
         Ok(cose::PublicKey::EcdhEsHkdf256Key(
-            cose::EcdhEsHkdf256PublicKey {
-                x: x.into(),
-                y: y.into(),
-            },
+            cose::EcdhEsHkdf256PublicKey { x, y },
         ))
     }
 }
@@ -681,8 +678,8 @@ mod tests {
 
     fn make_peer_key(x: &[u8], y: &[u8]) -> cose::PublicKey {
         cose::PublicKey::EcdhEsHkdf256Key(EcdhEsHkdf256PublicKey {
-            x: Bytes::from_slice(x).unwrap(),
-            y: Bytes::from_slice(y).unwrap(),
+            x: Bytes::try_from(x).unwrap(),
+            y: Bytes::try_from(y).unwrap(),
         })
     }
 
