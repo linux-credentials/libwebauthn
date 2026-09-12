@@ -66,7 +66,7 @@ unsafe impl Send for Channel {}
 
 impl Channel {
     pub fn new(info: &Info, mut context: nfc1::Context) -> Result<Self, NfcError> {
-        let mut device = context.open_with_connstring(&info.connstring)?;
+        let device = context.open_with_connstring(&info.connstring)?;
         let name = device.name().to_owned();
 
         Ok(Self {
