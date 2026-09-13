@@ -3,7 +3,7 @@ use std::fmt;
 use ::btleplug::api::Peripheral;
 use async_trait::async_trait;
 use hex::ToHex;
-use tracing::{info, instrument};
+use tracing::{debug, instrument};
 
 use crate::transport::ble::error::BleError;
 use crate::transport::device::Device;
@@ -28,7 +28,7 @@ pub async fn list_devices() -> Result<Vec<BleDevice>, BleError> {
         .iter()
         .map(|bluez_device| bluez_device.into())
         .collect();
-    info!(count = devices.len(), "Listing available BLE devices");
+    debug!(count = devices.len(), "Listing available BLE devices");
     Ok(devices)
 }
 

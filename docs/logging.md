@@ -39,9 +39,10 @@ field we ignore, or a non-fatal failure we continue past.
 ### `info!`
 
 Sparse, high-level lifecycle events meaningful to an operator. For example
-enumerating devices, establishing a connection, selecting a transport or FIDO
-revision, or the start and end of a ceremony. INFO carries no sensitive data and
-never appears inside a loop or per packet.
+establishing a connection, selecting a transport or FIDO revision, or the start
+and end of a ceremony. INFO carries no sensitive data and never appears inside a
+loop or per packet. Device enumeration is polled by callers, so it logs the
+count at `debug!` and the device list at `trace!`.
 
 ### `debug!`
 
