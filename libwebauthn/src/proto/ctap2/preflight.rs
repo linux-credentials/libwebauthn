@@ -120,7 +120,7 @@ async fn preflight_one<C: Channel>(
         }
         // Only CTAP2_ERR_NO_CREDENTIALS proves the credential is absent.
         Err(WebAuthnError::Ctap(CtapError::NoCredentials)) => {
-            debug!(rp = %rp, "Credential not found under rp");
+            trace!(rp = %rp, "Credential not found under rp");
             Ok(None)
         }
         // Any other error is transient or unexpected, not absence: propagate it.
