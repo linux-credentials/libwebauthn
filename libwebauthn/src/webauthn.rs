@@ -60,10 +60,7 @@ fn filter_oversized_credentials(
 fn ensure_credential_count(count: usize, info: &Ctap2GetInfoResponse) -> Result<(), PlatformError> {
     if let Some(max) = info.max_credential_count_in_list() {
         if count > max {
-            warn!(
-                count,
-                max, "credential list exceeds maxCredentialCountInList"
-            );
+            warn!({ count, max }, "credential list exceeds maxCredentialCountInList");
             return Err(PlatformError::RequestTooLarge);
         }
     }
@@ -77,7 +74,7 @@ fn ensure_msg_size(
     let size = request.ctap_hid_data().len();
     let max = info.max_msg_size();
     if size > max {
-        warn!(size, max, "serialized request exceeds maxMsgSize");
+        warn!({ size, max }, "serialized request exceeds maxMsgSize");
         return Err(PlatformError::RequestTooLarge);
     }
     Ok(())
