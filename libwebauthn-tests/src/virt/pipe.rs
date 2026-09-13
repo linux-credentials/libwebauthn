@@ -401,15 +401,14 @@ impl<'a, const N: usize> Pipe<'a, N> {
                     Ok(message) => {
                         if message.len() > self.buffer.len() {
                             error!(
-                                "Message is longer than buffer ({} > {})",
-                                message.len(),
-                                self.buffer.len(),
+                                { message_len = message.len(), buffer_len = self.buffer.len() },
+                                "Message is longer than buffer"
                             );
                             self.start_sending_error(request, CtapError::InvalidLength);
                         } else {
                             info!(
-                                "Got {} bytes response from authenticator, starting send",
-                                message.len()
+                                len = message.len(),
+                                "Got response from authenticator, starting send"
                             );
                             let response = Response::from_request_and_size(request, message.len());
                             self.buffer[..message.len()].copy_from_slice(message);

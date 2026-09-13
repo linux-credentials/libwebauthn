@@ -120,7 +120,7 @@ impl<'conn> NotificationPortalUI<'conn> {
 
         self.dbus_proxy.match_signal(
             move |h: NotificationAction, _: &Connection, _: &Message| {
-                debug!("Received signal: {:?}", h);
+                debug!(?h, "Received signal");
                 match h.action.as_str() {
                     _ => callback(CancellationResponse::UserCancel),
                 };

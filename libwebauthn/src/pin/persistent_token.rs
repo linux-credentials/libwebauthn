@@ -113,7 +113,7 @@ impl PersistentTokenStore for MemoryPersistentTokenStore {
 
     async fn put(&self, id: &PersistentTokenRecordId, record: &PersistentTokenRecord) {
         debug!(?id, "Storing persistent token record");
-        trace!(?record);
+        trace!(?record, "Storing persistent token record");
         self.records.lock().await.insert(id.clone(), record.clone());
     }
 
@@ -130,7 +130,7 @@ fn enc_identifier_key(token: &[u8]) -> Result<[u8; 16], PlatformError> {
     let mut key = [0u8; 16];
     hkdf.expand(ENC_IDENTIFIER_HKDF_INFO, &mut key)
         .map_err(|e| {
-            error!("HKDF expand error deriving encIdentifier key: {e}");
+            error!(?e, "HKDF expand error deriving encIdentifier key");
             PlatformError::CryptoError(format!("HKDF expand error: {e}"))
         })?;
     Ok(key)
@@ -143,9 +143,9 @@ pub(crate) fn decrypt_enc_identifier(
     enc_identifier: &[u8],
 ) -> Result<[u8; 16], PlatformError> {
     if enc_identifier.len() != 32 {
-        error!(
+        warn!(
             len = enc_identifier.len(),
-            "encIdentifier is not a 16-byte IV followed by one 16-byte ciphertext block"
+            "Invalid encIdentifier, expected 16-byte IV followed by one 16-byte ciphertext block"
         );
         return Err(PlatformError::InvalidDeviceResponse);
     }
@@ -156,11 +156,11 @@ pub(crate) fn decrypt_enc_identifier(
         return Err(PlatformError::InvalidDeviceResponse);
     };
     let Ok(plaintext) = decryptor.decrypt_padded_vec_mut::<NoPadding>(ciphertext) else {
-        error!("Decrypt error while recovering device identifier");
+        warn!("Decrypt error while recovering device identifier");
         return Err(PlatformError::InvalidDeviceResponse);
     };
     plaintext.try_into().map_err(|_| {
-        error!("Recovered device identifier was not 16 bytes");
+        warn!("Recovered device identifier was not 16 bytes");
         PlatformError::InvalidDeviceResponse
     })
 }
@@ -205,12 +205,14 @@ pub(crate) async fn store_minted_token(
     pin_uv_auth_protocol: Ctap2PinUvAuthProtocol,
 ) -> Result<PersistentTokenRecordId, PlatformError> {
     let Some(enc_identifier) = info.enc_identifier.as_ref() else {
-        warn!("perCredMgmtRO advertised but no encIdentifier returned; cannot persist token");
+        warn!(
+            "Device advertised perCredMgmtRO but returned no encIdentifier, cannot persist token"
+        );
         return Err(PlatformError::InvalidDeviceResponse);
     };
     let device_identifier = decrypt_enc_identifier(token, enc_identifier)?;
     let aaguid: [u8; 16] = info.aaguid[..].try_into().map_err(|_| {
-        error!(len = info.aaguid.len(), "AAGUID was not 16 bytes");
+        warn!(len = info.aaguid.len(), "AAGUID was not 16 bytes");
         PlatformError::InvalidDeviceResponse
     })?;
     reap_superseded_records(store, &device_identifier).await;

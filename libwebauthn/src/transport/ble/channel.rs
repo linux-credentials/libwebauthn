@@ -105,8 +105,8 @@ impl<'a> Channel for BleChannel<'a> {
         request: &ApduRequest,
         _timeout: Duration,
     ) -> Result<(), BleError> {
-        debug!({rev = ?self.revision}, "Sending APDU request");
-        trace!(?request);
+        debug!(rev = ?self.revision, "Sending APDU request");
+        trace!(?request, "Sending APDU request");
 
         let request_apdu_packet = request.raw_long()?;
         let request_frame = BleFrame::new(BleCommand::Msg, &request_apdu_packet);
@@ -128,7 +128,7 @@ impl<'a> Channel for BleChannel<'a> {
         let response_apdu: ApduResponse = response_apdu_packet.try_into()?;
 
         debug!("Received APDU response");
-        trace!(?response_apdu);
+        trace!(?response_apdu, "Received APDU response");
         Ok(response_apdu)
     }
 
@@ -139,7 +139,7 @@ impl<'a> Channel for BleChannel<'a> {
         _timeout: std::time::Duration,
     ) -> Result<(), BleError> {
         debug!("Sending CBOR request");
-        trace!(?request);
+        trace!(?request, "Sending CBOR request");
 
         let cbor_request = request.raw_long()?;
         let request_frame = BleFrame::new(BleCommand::Msg, &cbor_request);
@@ -160,7 +160,7 @@ impl<'a> Channel for BleChannel<'a> {
         let cbor_response: CborResponse = cbor_response_packet.try_into()?;
 
         debug!("Received CBOR response");
-        trace!(?cbor_response);
+        trace!(?cbor_response, "Received CBOR response");
         Ok(cbor_response)
     }
 

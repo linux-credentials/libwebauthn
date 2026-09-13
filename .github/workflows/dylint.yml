@@ -1,0 +1,38 @@
+name: Logging policy lints
+
+on: [push, pull_request]
+
+jobs:
+  dylint:
+    name: dylint logging policy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Checkout submodules
+        run: git submodule update --init --recursive
+      - name: Update apt cache
+        run: sudo apt-get update
+      - name: Install system dependencies
+        run: sudo apt-get install libudev-dev libdbus-1-dev libsodium-dev libnfc-dev libpcsclite-dev
+      - name: Install Rust (stable, builds cargo-dylint)
+        uses: actions-rs/toolchain@16499b5e05bf2e26879000db0c1d13f7e13fa3af #@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+      - name: Install the lint toolchain
+        run: |
+          TOOLCHAIN=$(grep '^channel' lints/logging_lints/rust-toolchain | sed -E 's/.*"(.*)".*/\1/')
+          rustup toolchain install "$TOOLCHAIN" --profile minimal -c rustc-dev -c llvm-tools-preview
+      - name: Install cargo-dylint
+        run: cargo install cargo-dylint dylint-link
+      - name: Run logging policy lints
+        # The three deterministic lints fail the build. The sensitive-field
+        # heuristic stays a warning, as documented in docs/logging.md.
+        run: |
+          set -o pipefail
+          cargo dylint --all --workspace -- --all-features 2>&1 | tee dylint.log
+          if grep -qE 'dylint::(tracing_message_interpolation|print_macro_in_library|log_crate_macro)' dylint.log; then
+            echo "::error::Logging policy violations found, see docs/logging.md"
+            exit 1
+          fi
