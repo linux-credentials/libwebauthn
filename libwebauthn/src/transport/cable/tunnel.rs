@@ -3,8 +3,9 @@ use sha2::{Digest, Sha256};
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::handshake::client::Request;
 use tokio_tungstenite::tungstenite::http::{header::LOCATION, StatusCode};
+use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::Error as TungsteniteError;
-use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
+use tokio_tungstenite::{connect_async_with_config, MaybeTlsStream, WebSocketStream};
 use tracing::{debug, error, trace};
 use tungstenite::client::IntoClientRequest;
 use url::Url;
@@ -16,6 +17,16 @@ use crate::proto::ctap2::cbor;
 use crate::transport::cable::error::CableError;
 
 const MAX_TUNNEL_REDIRECTS: usize = 5;
+/// Largest tunnel message accepted from the server. A Noise transport message
+/// is at most 65535 bytes, so nothing larger could be decrypted anyway.
+/// Everything above is rejected before it is buffered.
+const MAX_WS_MESSAGE_SIZE: usize = 65535;
+
+fn websocket_config() -> WebSocketConfig {
+    WebSocketConfig::default()
+        .max_message_size(Some(MAX_WS_MESSAGE_SIZE))
+        .max_frame_size(Some(MAX_WS_MESSAGE_SIZE))
+}
 
 fn ensure_rustls_crypto_provider() {
     use std::sync::Once;
@@ -139,7 +150,8 @@ pub(crate) async fn connect(
         let request = build_tunnel_request(&connect_url, connection_type)?;
         trace!(?request);
 
-        let error = match connect_async(request).await {
+        let error = match connect_async_with_config(request, Some(websocket_config()), false).await
+        {
             Ok((ws_stream, response)) => {
                 debug!(?response, "Connected to tunnel server");
                 if response.status() != StatusCode::SWITCHING_PROTOCOLS {
@@ -188,8 +200,47 @@ mod tests {
     use super::*;
     use crate::transport::cable::known_devices::{ClientPayload, ClientPayloadHint};
     use p256::NonZeroScalar;
+
     use rand::rngs::OsRng;
     use serde_bytes::ByteBuf;
+
+    #[test]
+    fn websocket_config_bounds_message_and_frame_size() {
+        let config = websocket_config();
+        assert_eq!(config.max_message_size, Some(MAX_WS_MESSAGE_SIZE));
+        assert_eq!(config.max_frame_size, Some(MAX_WS_MESSAGE_SIZE));
+        let default = WebSocketConfig::default();
+        assert!(Some(MAX_WS_MESSAGE_SIZE) < default.max_message_size);
+        assert!(Some(MAX_WS_MESSAGE_SIZE) < default.max_frame_size);
+    }
+
+    #[test]
+    fn websocket_bound_matches_the_noise_message_ceiling() {
+        // snow rejects transport messages above 65535 bytes, so the bound
+        // admits every decryptable frame and nothing more.
+        let mut initiator = snow::Builder::new("Noise_NN_P256_AESGCM_SHA256".parse().unwrap())
+            .build_initiator()
+            .unwrap();
+        let mut responder = snow::Builder::new("Noise_NN_P256_AESGCM_SHA256".parse().unwrap())
+            .build_responder()
+            .unwrap();
+        let mut a = [0u8; 1024];
+        let mut b = [0u8; 1024];
+        let n = initiator.write_message(&[], &mut a).unwrap();
+        responder.read_message(&a[..n], &mut b).unwrap();
+        let n = responder.write_message(&[], &mut a).unwrap();
+        initiator.read_message(&a[..n], &mut b).unwrap();
+        let mut responder = responder.into_transport_mode().unwrap();
+        let mut out = vec![0u8; MAX_WS_MESSAGE_SIZE + 1];
+        assert!(matches!(
+            responder.read_message(&vec![0u8; MAX_WS_MESSAGE_SIZE + 1], &mut out),
+            Err(snow::Error::Input)
+        ));
+        assert!(matches!(
+            responder.read_message(&vec![0u8; MAX_WS_MESSAGE_SIZE], &mut out),
+            Err(snow::Error::Decrypt)
+        ));
+    }
 
     fn known_device_connection_type(public_key: Vec<u8>) -> CableTunnelConnectionType {
         CableTunnelConnectionType::KnownDevice {

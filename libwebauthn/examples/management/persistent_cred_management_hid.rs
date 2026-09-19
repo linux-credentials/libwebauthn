@@ -42,6 +42,7 @@ pub async fn main() -> Result<(), WebAuthnError<HidError>> {
         // token through it. The same settings apply to any transport.
         let settings = ChannelSettings {
             persistent_token_store: Some(store.clone()),
+            ..Default::default()
         };
         let mut channel = device.channel(settings).await?;
         let state_recv = channel.get_ux_update_receiver();

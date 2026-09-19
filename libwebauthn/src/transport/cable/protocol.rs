@@ -2,6 +2,7 @@
 //! hybrid transport. Runs over any [`CableDataChannel`].
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use hmac::{Hmac, Mac};
 use p256::{ecdh, NonZeroScalar};
@@ -20,13 +21,26 @@ use super::known_devices::ClientPayload;
 use super::known_devices::{CableKnownDeviceInfo, CableKnownDeviceInfoStore};
 use crate::proto::ctap2::cbor::{self, CborRequest, CborResponse, Value};
 use crate::proto::ctap2::{Ctap2CommandCode, Ctap2GetInfoResponse};
-use crate::transport::cable::connection_stages::TunnelConnectionInput;
+use crate::transport::cable::channel::ConnectionState;
+use crate::transport::cable::connection_stages::{
+    next_teardown, TunnelConnectionInput, UxUpdateSender,
+};
 use crate::transport::cable::error::CableError;
 use crate::transport::cable::known_devices::CableKnownDeviceId;
+use crate::transport::cable::linger::{CableLingerConfig, LingerParams, Teardown};
 
 const P256_X962_LENGTH: usize = 65;
 const MAX_CBOR_SIZE: usize = 1024 * 1024;
 const PADDING_GRANULARITY: usize = 32;
+
+/// Bounds every outbound send, so a dead socket cannot stall teardown.
+const SEND_TIMEOUT: Duration = Duration::from_secs(5);
+/// Poll granularity of the linger receive, so the deadline and teardown are re-checked.
+const LINGER_RECV_POLL: Duration = Duration::from_secs(30);
+/// Bounds the processing of one linger frame, including the caller's store write.
+const STORE_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+/// Consecutive undecryptable frames before a lingering connection gives up.
+const DECRYPT_FAILURE_BUDGET: u32 = 3;
 
 const CABLE_PROLOGUE_STATE_ASSISTED: &[u8] = &[0u8];
 const CABLE_PROLOGUE_QR_INITIATED: &[u8] = &[1u8];
@@ -46,9 +60,6 @@ impl CableTunnelMessage {
     }
     pub fn from_slice(slice: &[u8]) -> Result<Self, CableError> {
         let (type_byte, payload) = slice.split_first().ok_or(CableError::InvalidFraming)?;
-        if payload.is_empty() {
-            return Err(CableError::InvalidFraming);
-        }
 
         let message_type = match *type_byte {
             0 => CableTunnelMessageType::Shutdown,
@@ -58,6 +69,11 @@ impl CableTunnelMessage {
                 return Err(CableError::InvalidFraming);
             }
         };
+
+        // Shutdown is the type byte alone. Ctap and Update must carry a payload.
+        if payload.is_empty() && message_type != CableTunnelMessageType::Shutdown {
+            return Err(CableError::InvalidFraming);
+        }
 
         Ok(Self {
             message_type,
@@ -107,7 +123,7 @@ pub(crate) struct CableLinkingInfo {
 }
 
 #[repr(u8)]
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 enum CableTunnelMessageType {
     Shutdown = 0,
     Ctap = 1,
@@ -275,28 +291,66 @@ pub(crate) async fn do_handshake(
 
 /// Returns `Ok(())` on a clean close and `Err(_)` on any fault that leaves
 /// the encrypted channel unusable; callers surface `Err(_)` via `send_error`.
-pub(crate) async fn connection(mut input: TunnelConnectionInput) -> Result<(), CableError> {
-    let get_info_response_serialized: Vec<u8> = match input.data_channel.recv().await {
-        Ok(Some(message)) => match connection_recv_initial(message, &mut input.noise_state).await {
-            Ok(initial) => initial,
-            Err(e) => {
-                error!(?e, "Failed to process initial message");
-                return Err(e);
-            }
-        },
-        Ok(None) => {
-            error!("Connection closed before initial message was received");
-            return Err(CableError::ConnectionLost);
-        }
-        Err(e) => {
-            error!(?e, "Failed to read initial message");
-            return Err(e);
+pub(crate) async fn connection(
+    mut input: TunnelConnectionInput,
+    ux_sender: &dyn UxUpdateSender,
+) -> Result<(), CableError> {
+    // The secure channel exists, so a graceful teardown before the initial
+    // message still gets a courtesy Shutdown.
+    let get_info_response_serialized: Vec<u8> = loop {
+        tokio::select! {
+            biased;
+            intent = next_teardown(&mut input.teardown_rx) => match intent {
+                Teardown::Close | Teardown::Linger => {
+                    send_shutdown_bounded(&mut *input.data_channel, &mut input.noise_state).await;
+                    return Ok(());
+                }
+                Teardown::Cancel => return Ok(()),
+                Teardown::Active => continue,
+            },
+            result = input.data_channel.recv() => match result {
+                Ok(Some(message)) => {
+                    match connection_recv_initial(message, &mut input.noise_state).await {
+                        Ok(initial) => break initial,
+                        Err(e) => {
+                            error!(?e, "Failed to process initial message");
+                            return Err(e);
+                        }
+                    }
+                }
+                Ok(None) => {
+                    error!("Connection closed before initial message was received");
+                    return Err(CableError::ConnectionLost);
+                }
+                Err(e) => {
+                    error!(?e, "Failed to read initial message");
+                    return Err(e);
+                }
+            },
         }
     };
     debug!(?get_info_response_serialized, "Received initial message");
 
     loop {
         tokio::select! {
+            biased;
+            intent = next_teardown(&mut input.teardown_rx) => match intent {
+                Teardown::Close => {
+                    debug!("Channel close requested, sending Shutdown control frame");
+                    send_shutdown_bounded(&mut *input.data_channel, &mut input.noise_state).await;
+                    return Ok(());
+                }
+                Teardown::Linger => {
+                    debug!("Channel linger requested, sending Shutdown control frame");
+                    send_shutdown_bounded(&mut *input.data_channel, &mut input.noise_state).await;
+                    break;
+                }
+                Teardown::Cancel => {
+                    debug!("Channel cancelled, dropping the connection");
+                    return Ok(());
+                }
+                Teardown::Active => {}
+            },
             result = input.data_channel.recv() => {
                 match result {
                     Ok(Some(message)) => {
@@ -343,20 +397,165 @@ pub(crate) async fn connection(mut input: TunnelConnectionInput) -> Result<(), C
                     }
                     _ => {
                         debug!(?request.command, "Sending CBOR request");
-                        if let Err(e) = connection_send(
+                        let send = connection_send(
                             request,
                             &mut *input.data_channel,
                             &mut input.noise_state,
-                        )
-                        .await
-                        {
-                            error!(?e, "Fatal error sending CBOR request");
-                            return Err(e);
+                        );
+                        match tokio::time::timeout(SEND_TIMEOUT, send).await {
+                            Ok(Ok(())) => {}
+                            Ok(Err(e)) => {
+                                error!(?e, "Fatal error sending CBOR request");
+                                return Err(e);
+                            }
+                            Err(_) => {
+                                error!("Timed out sending CBOR request");
+                                return Err(CableError::Timeout);
+                            }
                         }
                     }
                 }
             }
         };
+    }
+
+    // Only a QR-initiated connection with a store can use a linking update.
+    let eligible = matches!(
+        input.connection_type,
+        CableTunnelConnectionType::QrCode { .. }
+    ) && input.known_device_store.is_some();
+    match input.linger.take() {
+        Some(params) if eligible && params.guard.is_live() => {
+            linger(input, params, ux_sender).await
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Outcome of one frame received while lingering.
+enum LingerStep {
+    Keep,
+    PeerClosed,
+}
+
+/// Keeps receiving after Shutdown to capture a late linking update. Detached
+/// from the channel, so every await is bounded and the whole phase sits under
+/// an absolute ceiling of [`CableLingerConfig::HARD_CAP`].
+async fn linger(
+    mut input: TunnelConnectionInput,
+    params: LingerParams,
+    ux_sender: &dyn UxUpdateSender,
+) {
+    ux_sender
+        .set_connection_state(ConnectionState::Lingering)
+        .await;
+    debug!(linger_duration = ?params.linger_duration, "Lingering for a late linking update");
+
+    let now = tokio::time::Instant::now();
+    let deadline = now + params.linger_duration;
+    let hard_cap = now + CableLingerConfig::HARD_CAP;
+    let mut decrypt_failures = 0u32;
+
+    let run = async {
+        loop {
+            tokio::select! {
+                biased;
+                _ = next_teardown(&mut input.teardown_rx) => {
+                    debug!("Linger cancelled");
+                    break;
+                }
+                _ = tokio::time::sleep_until(deadline) => {
+                    debug!("Linger window elapsed");
+                    break;
+                }
+                received = tokio::time::timeout(LINGER_RECV_POLL, input.data_channel.recv()) => {
+                    let frame = match received {
+                        Err(_elapsed) => continue,
+                        Ok(Ok(Some(frame))) => frame,
+                        Ok(Ok(None)) | Ok(Err(_)) => {
+                            debug!("Peer closed the connection while lingering");
+                            break;
+                        }
+                    };
+                    let step = linger_recv(
+                        &input.connection_type,
+                        &input.tunnel_domain,
+                        &input.known_device_store,
+                        frame,
+                        &mut input.noise_state,
+                    );
+                    match tokio::time::timeout(STORE_WRITE_TIMEOUT, step).await {
+                        Ok(Ok(LingerStep::Keep)) => decrypt_failures = 0,
+                        Ok(Ok(LingerStep::PeerClosed)) => break,
+                        // A desynced peer fails every following frame. Anything
+                        // else that decrypts is merely ignored.
+                        Ok(Err(CableError::EncryptionFailed)) => {
+                            decrypt_failures += 1;
+                            warn!(decrypt_failures, "Undecryptable frame while lingering");
+                            if decrypt_failures >= DECRYPT_FAILURE_BUDGET {
+                                break;
+                            }
+                        }
+                        Ok(Err(e)) => debug!(?e, "Ignoring undecodable frame while lingering"),
+                        Err(_elapsed) => {
+                            warn!("Timed out processing a frame while lingering");
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    };
+    if tokio::time::timeout_at(hard_cap, run).await.is_err() {
+        warn!("Linger hit the hard cap");
+    }
+    // The registry guard drops with `params` here, deregistering the connection.
+    drop(params);
+}
+
+/// Processes one frame received while lingering. Only a linking update has
+/// any effect. Nothing is ever forwarded to the CBOR receiver.
+async fn linger_recv(
+    connection_type: &CableTunnelConnectionType,
+    tunnel_domain: &str,
+    known_device_store: &Option<Arc<dyn CableKnownDeviceInfoStore>>,
+    encrypted_frame: Vec<u8>,
+    noise_state: &mut TunnelNoiseState,
+) -> Result<LingerStep, CableError> {
+    let decrypted_frame = decrypt_frame(encrypted_frame, noise_state).await?;
+    let cable_message = CableTunnelMessage::from_slice(&decrypted_frame)?;
+    match cable_message.message_type {
+        CableTunnelMessageType::Shutdown => Ok(LingerStep::PeerClosed),
+        CableTunnelMessageType::Ctap => {
+            debug!("Ignoring CTAP frame while lingering");
+            Ok(LingerStep::Keep)
+        }
+        CableTunnelMessageType::Update => {
+            handle_update_message(
+                connection_type,
+                tunnel_domain,
+                known_device_store,
+                &cable_message.payload,
+                &noise_state.handshake_hash,
+            )
+            .await;
+            Ok(LingerStep::Keep)
+        }
+    }
+}
+
+/// Best-effort Shutdown on a graceful teardown. A failure or timeout is
+/// logged and otherwise ignored, since the connection is going away anyway.
+async fn send_shutdown_bounded(
+    data_channel: &mut dyn CableDataChannel,
+    noise_state: &mut TunnelNoiseState,
+) {
+    let send = connection_send_shutdown(data_channel, noise_state);
+    match tokio::time::timeout(SEND_TIMEOUT, send).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => warn!(?e, "Failed to send Shutdown control frame"),
+        Err(_) => warn!("Timed out sending Shutdown control frame"),
     }
 }
 
@@ -378,16 +577,47 @@ async fn connection_send(
     }
     trace!(?cbor_request, cbor_request_len = cbor_request.len());
 
-    let extra_bytes = PADDING_GRANULARITY - (cbor_request.len() % PADDING_GRANULARITY);
-    let padded_len = cbor_request.len() + extra_bytes;
+    send_tunnel_frame(
+        CableTunnelMessageType::Ctap,
+        &cbor_request,
+        data_channel,
+        noise_state,
+    )
+    .await
+}
 
-    let mut padded_cbor_request = cbor_request.clone();
-    padded_cbor_request.resize(padded_len, 0u8);
-    if let Some(last) = padded_cbor_request.last_mut() {
+/// Sends an empty `Shutdown` control frame over the encrypted channel.
+async fn connection_send_shutdown(
+    data_channel: &mut dyn CableDataChannel,
+    noise_state: &mut TunnelNoiseState,
+) -> Result<(), CableError> {
+    debug!("Sending Shutdown control frame");
+    send_tunnel_frame(
+        CableTunnelMessageType::Shutdown,
+        &[],
+        data_channel,
+        noise_state,
+    )
+    .await
+}
+
+/// Pads `payload`, wraps it in a `CableTunnelMessage`, encrypts it, and sends it.
+async fn send_tunnel_frame(
+    message_type: CableTunnelMessageType,
+    payload: &[u8],
+    data_channel: &mut dyn CableDataChannel,
+    noise_state: &mut TunnelNoiseState,
+) -> Result<(), CableError> {
+    let extra_bytes = PADDING_GRANULARITY - (payload.len() % PADDING_GRANULARITY);
+    let padded_len = payload.len() + extra_bytes;
+
+    let mut padded_payload = payload.to_vec();
+    padded_payload.resize(padded_len, 0u8);
+    if let Some(last) = padded_payload.last_mut() {
         *last = (extra_bytes - 1) as u8;
     }
 
-    let frame = CableTunnelMessage::new(CableTunnelMessageType::Ctap, &padded_cbor_request);
+    let frame = CableTunnelMessage::new(message_type, &padded_payload);
     let frame_serialized = frame.to_vec();
     trace!(?frame_serialized);
 
@@ -588,46 +818,69 @@ async fn connection_recv(
             Ok(RecvOutcome::Continue)
         }
         CableTunnelMessageType::Update => {
-            // Malformed or unsigned update: log, drop the update, keep the channel.
-            let maybe_update_message = match connection_recv_update(&cable_message.payload).await {
-                Ok(m) => m,
-                Err(e) => {
-                    warn!(?e, "Malformed update message; ignoring");
-                    return Ok(RecvOutcome::Continue);
-                }
-            };
-
-            let Some(linking_info) = maybe_update_message else {
-                warn!("Ignoring update message without linking info");
-                return Ok(RecvOutcome::Continue);
-            };
-
-            let CableTunnelConnectionType::QrCode { private_key, .. } = connection_type else {
-                warn!("Ignoring update message for non-QR code connection");
-                return Ok(RecvOutcome::Continue);
-            };
-
-            debug!("Received update message with linking info");
-            trace!(?linking_info);
-
-            match known_device_store {
-                Some(store) => {
-                    apply_linking_update(
-                        store,
-                        private_key,
-                        tunnel_domain,
-                        &linking_info,
-                        &noise_state.handshake_hash,
-                    )
-                    .await;
-                }
-                None => {
-                    warn!("Ignoring update message without a device store");
-                }
-            };
+            let update = handle_update_message(
+                connection_type,
+                tunnel_domain,
+                known_device_store,
+                &cable_message.payload,
+                &noise_state.handshake_hash,
+            );
+            if tokio::time::timeout(STORE_WRITE_TIMEOUT, update)
+                .await
+                .is_err()
+            {
+                warn!("Timed out storing a linking update; ignoring it");
+            }
             Ok(RecvOutcome::Continue)
         }
     }
+}
+
+/// Applies a linking update to the store. Malformed, unsigned, non-QR or
+/// store-less updates are logged and dropped without affecting the channel.
+async fn handle_update_message(
+    connection_type: &CableTunnelConnectionType,
+    tunnel_domain: &str,
+    known_device_store: &Option<Arc<dyn CableKnownDeviceInfoStore>>,
+    payload: &[u8],
+    handshake_hash: &[u8],
+) {
+    let maybe_update_message = match connection_recv_update(payload).await {
+        Ok(m) => m,
+        Err(e) => {
+            warn!(?e, "Malformed update message; ignoring");
+            return;
+        }
+    };
+
+    let Some(linking_info) = maybe_update_message else {
+        warn!("Ignoring update message without linking info");
+        return;
+    };
+
+    let CableTunnelConnectionType::QrCode { private_key, .. } = connection_type else {
+        warn!("Ignoring update message for non-QR code connection");
+        return;
+    };
+
+    debug!("Received update message with linking info");
+    trace!(?linking_info);
+
+    match known_device_store {
+        Some(store) => {
+            apply_linking_update(
+                store,
+                private_key,
+                tunnel_domain,
+                &linking_info,
+                handshake_hash,
+            )
+            .await;
+        }
+        None => {
+            warn!("Ignoring update message without a device store");
+        }
+    };
 }
 
 /// Stores the update only on a valid signature; invalid updates are dropped without evicting.
@@ -774,6 +1027,37 @@ mod tests {
     }
 
     #[test]
+    fn from_slice_accepts_type_only_shutdown() {
+        let message = CableTunnelMessage::from_slice(&[0]).unwrap();
+        assert_eq!(message.message_type, CableTunnelMessageType::Shutdown);
+        assert!(message.payload.is_empty());
+    }
+
+    #[test]
+    fn from_slice_rejects_empty_ctap_and_update() {
+        assert!(matches!(
+            CableTunnelMessage::from_slice(&[1]),
+            Err(CableError::InvalidFraming)
+        ));
+        assert!(matches!(
+            CableTunnelMessage::from_slice(&[2]),
+            Err(CableError::InvalidFraming)
+        ));
+    }
+
+    #[test]
+    fn from_slice_rejects_empty_frame_and_unknown_type() {
+        assert!(matches!(
+            CableTunnelMessage::from_slice(&[]),
+            Err(CableError::InvalidFraming)
+        ));
+        assert!(matches!(
+            CableTunnelMessage::from_slice(&[3, 0]),
+            Err(CableError::InvalidFraming)
+        ));
+    }
+
+    #[test]
     fn strip_frame_padding_rejects_empty() {
         let result = strip_frame_padding(Vec::new());
         assert!(matches!(result, Err(CableError::InvalidFraming)));
@@ -793,5 +1077,814 @@ mod tests {
         let frame = vec![0xAA, 0xBB, 0xCC, 0xDD, 0x00, 0x00, 0x00, 0x03];
         let stripped = strip_frame_padding(frame).unwrap();
         assert_eq!(stripped, vec![0xAA, 0xBB, 0xCC, 0xDD]);
+    }
+
+    use serde_indexed::SerializeIndexed;
+    use tokio::sync::{mpsc, watch};
+
+    use crate::transport::cable::channel::{CableUxUpdate, ConnectionState};
+    use crate::transport::cable::linger::CableLingerRegistry;
+
+    const DEFAULT_LINGER: Duration = CableLingerConfig::DEFAULT_DURATION;
+    const HARD_CAP: Duration = CableLingerConfig::HARD_CAP;
+
+    /// In-memory data channel: records outbound frames and replays queued inbound ones.
+    struct TestDataChannel {
+        inbound: mpsc::UnboundedReceiver<Vec<u8>>,
+        outbound: mpsc::UnboundedSender<Vec<u8>>,
+    }
+
+    #[async_trait]
+    impl CableDataChannel for TestDataChannel {
+        async fn send(&mut self, message: &[u8]) -> Result<(), CableError> {
+            let _ = self.outbound.send(message.to_vec());
+            Ok(())
+        }
+
+        async fn recv(&mut self) -> Result<Option<Vec<u8>>, CableError> {
+            Ok(self.inbound.recv().await)
+        }
+    }
+
+    /// A data channel whose sends never complete, like a stalled socket.
+    struct WedgedSendChannel {
+        inbound: mpsc::UnboundedReceiver<Vec<u8>>,
+    }
+
+    #[async_trait]
+    impl CableDataChannel for WedgedSendChannel {
+        async fn send(&mut self, _message: &[u8]) -> Result<(), CableError> {
+            std::future::pending().await
+        }
+
+        async fn recv(&mut self) -> Result<Option<Vec<u8>>, CableError> {
+            Ok(self.inbound.recv().await)
+        }
+    }
+
+    /// Publishes connection states on a watch so tests can observe phases.
+    struct TestUxSender {
+        state_tx: watch::Sender<ConnectionState>,
+    }
+
+    #[async_trait]
+    impl UxUpdateSender for TestUxSender {
+        async fn send_update(&self, _update: CableUxUpdate) {}
+        async fn send_error(&self, _error: CableError) {
+            let _ = self.state_tx.send(ConnectionState::Terminated);
+        }
+        async fn set_connection_state(&self, state: ConnectionState) {
+            let _ = self.state_tx.send(state);
+        }
+    }
+
+    /// Two Noise transport states that can encrypt/decrypt to each other.
+    fn paired_transport_states() -> (TransportState, TransportState) {
+        let mut initiator = Builder::new("Noise_NN_P256_AESGCM_SHA256".parse().unwrap())
+            .build_initiator()
+            .unwrap();
+        let mut responder = Builder::new("Noise_NN_P256_AESGCM_SHA256".parse().unwrap())
+            .build_responder()
+            .unwrap();
+        let mut a = [0u8; 1024];
+        let mut b = [0u8; 1024];
+        let n = initiator.write_message(&[], &mut a).unwrap();
+        responder.read_message(&a[..n], &mut b).unwrap();
+        let n = responder.write_message(&[], &mut a).unwrap();
+        initiator.read_message(&a[..n], &mut b).unwrap();
+        (
+            initiator.into_transport_mode().unwrap(),
+            responder.into_transport_mode().unwrap(),
+        )
+    }
+
+    fn pad(mut payload: Vec<u8>) -> Vec<u8> {
+        let extra = PADDING_GRANULARITY - (payload.len() % PADDING_GRANULARITY);
+        let new_len = payload.len() + extra;
+        payload.resize(new_len, 0u8);
+        *payload.last_mut().unwrap() = (extra - 1) as u8;
+        payload
+    }
+
+    fn encrypt(state: &mut TransportState, plaintext: &[u8]) -> Vec<u8> {
+        let mut out = vec![0u8; plaintext.len() + 64];
+        let n = state.write_message(plaintext, &mut out).unwrap();
+        out.truncate(n);
+        out
+    }
+
+    fn decrypt(state: &mut TransportState, ciphertext: &[u8]) -> Vec<u8> {
+        let mut out = vec![0u8; ciphertext.len() + 64];
+        let n = state.read_message(ciphertext, &mut out).unwrap();
+        out.truncate(n);
+        out
+    }
+
+    #[derive(SerializeIndexed)]
+    struct TestInitialMessage {
+        #[serde(index = 0x01)]
+        info: ByteBuf,
+    }
+
+    /// Encrypted initial post-handshake message carrying a minimal GetInfo.
+    fn encrypted_initial_message(responder: &mut TransportState) -> Vec<u8> {
+        let get_info = Ctap2GetInfoResponse {
+            versions: vec!["FIDO_2_0".to_string()],
+            aaguid: ByteBuf::from(vec![0u8; 16]),
+            ..Default::default()
+        };
+        let initial = TestInitialMessage {
+            info: ByteBuf::from(cbor::to_vec(&get_info).unwrap()),
+        };
+        encrypt(responder, &pad(cbor::to_vec(&initial).unwrap()))
+    }
+
+    fn qr_connection_type() -> CableTunnelConnectionType {
+        qr_connection_type_with(NonZeroScalar::random(&mut OsRng))
+    }
+
+    fn qr_connection_type_with(private_key: NonZeroScalar) -> CableTunnelConnectionType {
+        CableTunnelConnectionType::QrCode {
+            routing_id: "000000".to_string(),
+            tunnel_id: "00000000000000000000000000000000".to_string(),
+            private_key,
+        }
+    }
+
+    fn known_device_connection_type() -> CableTunnelConnectionType {
+        CableTunnelConnectionType::KnownDevice {
+            contact_id: "contact".to_string(),
+            authenticator_public_key: vec![0u8; 65],
+            client_payload: ClientPayload {
+                link_id: ByteBuf::from(vec![0u8; 8]),
+                client_nonce: ByteBuf::from(vec![0u8; 16]),
+                hint: crate::transport::cable::known_devices::ClientPayloadHint::GetAssertion,
+            },
+        }
+    }
+
+    /// A linking update signed by a fresh authenticator key for the QR
+    /// private key of the connection. Returns the plaintext tunnel frame and
+    /// the known device id the store will see.
+    fn signed_update_payload(
+        qr_private_key: &NonZeroScalar,
+        handshake_hash: &[u8],
+    ) -> (Vec<u8>, CableKnownDeviceId) {
+        let authenticator_secret = SecretKey::random(&mut OsRng);
+        let authenticator_public_key = authenticator_secret
+            .public_key()
+            .to_encoded_point(false)
+            .as_bytes()
+            .to_vec();
+        let shared_secret = ecdh::diffie_hellman(
+            qr_private_key,
+            authenticator_secret.public_key().as_affine(),
+        )
+        .raw_secret_bytes()
+        .to_vec();
+        let mut hmac = Hmac::<Sha256>::new_from_slice(&shared_secret).unwrap();
+        hmac.update(handshake_hash);
+        let signature = hmac.finalize().into_bytes().to_vec();
+
+        let mut info = BTreeMap::new();
+        info.insert(Value::Integer(1), Value::Bytes(vec![0u8; 4]));
+        info.insert(Value::Integer(2), Value::Bytes(vec![0u8; 8]));
+        info.insert(Value::Integer(3), Value::Bytes(vec![0u8; 32]));
+        info.insert(
+            Value::Integer(4),
+            Value::Bytes(authenticator_public_key.clone()),
+        );
+        info.insert(Value::Integer(5), Value::Text("alice's phone".to_string()));
+        info.insert(Value::Integer(6), Value::Bytes(signature));
+        let mut update = BTreeMap::new();
+        update.insert(Value::Integer(1), Value::Map(info));
+
+        let mut payload = vec![CableTunnelMessageType::Update as u8];
+        payload.extend(serde_cbor::to_vec(&Value::Map(update)).unwrap());
+        (payload, hex::encode(&authenticator_public_key))
+    }
+
+    /// Reports every stored device on a channel so tests can await the write.
+    #[derive(Debug)]
+    struct NotifyingStore {
+        puts: mpsc::UnboundedSender<CableKnownDeviceId>,
+    }
+
+    #[async_trait]
+    impl CableKnownDeviceInfoStore for NotifyingStore {
+        async fn put_known_device(
+            &self,
+            device_id: &CableKnownDeviceId,
+            _device: &CableKnownDeviceInfo,
+        ) {
+            let _ = self.puts.send(device_id.clone());
+        }
+        async fn delete_known_device(&self, _device_id: &CableKnownDeviceId) {}
+    }
+
+    /// A store whose writes never complete.
+    #[derive(Debug)]
+    struct WedgedStore;
+
+    #[async_trait]
+    impl CableKnownDeviceInfoStore for WedgedStore {
+        async fn put_known_device(
+            &self,
+            _device_id: &CableKnownDeviceId,
+            _device: &CableKnownDeviceInfo,
+        ) {
+            std::future::pending::<()>().await;
+        }
+        async fn delete_known_device(&self, _device_id: &CableKnownDeviceId) {}
+    }
+
+    /// Decrypts an outbound frame and returns its tunnel message type byte.
+    fn outbound_message_type(frame: &[u8], responder: &mut TransportState) -> u8 {
+        let stripped = strip_frame_padding(decrypt(responder, frame)).unwrap();
+        *stripped.first().unwrap()
+    }
+
+    /// The peer side of a post-handshake connection plus every caller-side handle.
+    struct Harness {
+        responder: TransportState,
+        inbound_tx: mpsc::UnboundedSender<Vec<u8>>,
+        outbound_rx: mpsc::UnboundedReceiver<Vec<u8>>,
+        cbor_tx_send: mpsc::Sender<CborRequest>,
+        cbor_rx_recv: mpsc::Receiver<CborResponse>,
+        teardown_tx: Arc<watch::Sender<Teardown>>,
+        state_rx: watch::Receiver<ConnectionState>,
+        input: Option<TunnelConnectionInput>,
+        ux_sender: Option<TestUxSender>,
+    }
+
+    impl Harness {
+        fn new(connection_type: CableTunnelConnectionType) -> Self {
+            let (initiator, responder) = paired_transport_states();
+            let (inbound_tx, inbound_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+            let (outbound_tx, outbound_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+            let (cbor_tx_send, cbor_tx_recv) = mpsc::channel::<CborRequest>(4);
+            let (cbor_rx_send, cbor_rx_recv) = mpsc::channel::<CborResponse>(4);
+            let (teardown_tx, teardown_rx) = watch::channel(Teardown::Active);
+            let (state_tx, state_rx) = watch::channel(ConnectionState::Connected);
+            let input = TunnelConnectionInput {
+                connection_type,
+                tunnel_domain: "cable.example.com".to_string(),
+                known_device_store: None,
+                data_channel: Box::new(TestDataChannel {
+                    inbound: inbound_rx,
+                    outbound: outbound_tx,
+                }),
+                noise_state: TunnelNoiseState {
+                    transport_state: initiator,
+                    handshake_hash: vec![0u8; 32],
+                },
+                cbor_tx_recv,
+                cbor_rx_send,
+                teardown_rx,
+                linger: None,
+            };
+            Self {
+                responder,
+                inbound_tx,
+                outbound_rx,
+                cbor_tx_send,
+                cbor_rx_recv,
+                teardown_tx: Arc::new(teardown_tx),
+                state_rx,
+                input: Some(input),
+                ux_sender: Some(TestUxSender { state_tx }),
+            }
+        }
+
+        fn qr() -> Self {
+            Self::new(qr_connection_type())
+        }
+
+        fn input_mut(&mut self) -> &mut TunnelConnectionInput {
+            self.input.as_mut().expect("not spawned yet")
+        }
+
+        fn with_store(mut self, store: Arc<dyn CableKnownDeviceInfoStore>) -> Self {
+            self.input_mut().known_device_store = Some(store);
+            self
+        }
+
+        /// Replaces the data channel with one whose sends stall forever.
+        fn with_wedged_send(mut self) -> Self {
+            let (inbound_tx, inbound_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+            self.inbound_tx = inbound_tx;
+            self.input_mut().data_channel = Box::new(WedgedSendChannel {
+                inbound: inbound_rx,
+            });
+            self
+        }
+
+        /// Registers the connection with `registry` as an eligible lingerer.
+        fn with_linger(
+            mut self,
+            registry: &CableLingerRegistry,
+            linger_duration: Duration,
+        ) -> Self {
+            let guard = registry.register(self.teardown_tx.clone());
+            self.input_mut().linger = Some(LingerParams {
+                linger_duration,
+                guard,
+            });
+            self
+        }
+
+        async fn wait_for_state(&mut self, state: ConnectionState) {
+            self.state_rx
+                .wait_for(|current| *current == state)
+                .await
+                .expect("state sender alive");
+        }
+
+        /// Round-trips a cached GetInfo, proving the loop has consumed the
+        /// initial message and is in its active phase.
+        async fn await_active(&mut self) {
+            self.cbor_tx_send
+                .send(CborRequest::new(Ctap2CommandCode::AuthenticatorGetInfo))
+                .await
+                .unwrap();
+            self.cbor_rx_recv
+                .recv()
+                .await
+                .expect("cached GetInfo response");
+        }
+
+        /// Sends the Linger intent from the active phase and waits for the
+        /// Shutdown that precedes the linger.
+        async fn start_linger(&mut self) {
+            self.await_active().await;
+            self.teardown(Teardown::Linger);
+            assert_eq!(
+                self.next_outbound_type().await,
+                CableTunnelMessageType::Shutdown as u8
+            );
+        }
+
+        /// Queues the peer's initial message, as sent right after the handshake.
+        fn send_initial_message(&mut self) {
+            let frame = encrypted_initial_message(&mut self.responder);
+            self.inbound_tx.send(frame).unwrap();
+        }
+
+        fn send_peer_frame(&mut self, plaintext: Vec<u8>) {
+            let frame = encrypt(&mut self.responder, &pad(plaintext));
+            self.inbound_tx.send(frame).unwrap();
+        }
+
+        /// Runs the connection loop on its own task.
+        fn spawn(&mut self) -> tokio::task::JoinHandle<Result<(), CableError>> {
+            let input = self.input.take().expect("spawned once");
+            let ux_sender = self.ux_sender.take().expect("spawned once");
+            tokio::spawn(async move { connection(input, &ux_sender).await })
+        }
+
+        fn teardown(&self, intent: Teardown) {
+            self.teardown_tx.send_replace(intent);
+        }
+
+        async fn next_outbound_type(&mut self) -> u8 {
+            let frame = self.outbound_rx.recv().await.expect("an outbound frame");
+            outbound_message_type(&frame, &mut self.responder)
+        }
+    }
+
+    #[tokio::test]
+    async fn connection_sends_shutdown_on_close() {
+        let mut h = Harness::qr();
+        h.send_initial_message();
+        let handle = h.spawn();
+
+        h.await_active().await;
+        h.teardown(Teardown::Close);
+
+        assert_eq!(
+            h.next_outbound_type().await,
+            CableTunnelMessageType::Shutdown as u8
+        );
+        assert!(handle.await.unwrap().is_ok());
+        assert!(h.outbound_rx.try_recv().is_err(), "exactly one Shutdown");
+    }
+
+    #[tokio::test]
+    async fn cancel_sends_nothing() {
+        let mut h = Harness::qr();
+        h.send_initial_message();
+        let handle = h.spawn();
+
+        h.await_active().await;
+        h.teardown(Teardown::Cancel);
+
+        assert!(handle.await.unwrap().is_ok());
+        assert!(h.outbound_rx.try_recv().is_err(), "no Shutdown on cancel");
+    }
+
+    #[tokio::test]
+    async fn close_before_initial_message_sends_shutdown() {
+        let mut h = Harness::qr();
+        let handle = h.spawn();
+
+        // The peer never sends its initial message; the loop must still
+        // honour the close promptly and say goodbye.
+        h.teardown(Teardown::Close);
+
+        assert_eq!(
+            h.next_outbound_type().await,
+            CableTunnelMessageType::Shutdown as u8
+        );
+        assert!(handle.await.unwrap().is_ok());
+    }
+
+    #[tokio::test]
+    async fn cancel_before_initial_message_terminates_silently() {
+        let mut h = Harness::qr();
+        let handle = h.spawn();
+
+        h.teardown(Teardown::Cancel);
+
+        assert!(handle.await.unwrap().is_ok());
+        assert!(h.outbound_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn every_sender_gone_counts_as_cancel() {
+        let mut h = Harness::qr();
+        h.send_initial_message();
+        let handle = h.spawn();
+
+        drop(h.teardown_tx);
+
+        assert!(handle.await.unwrap().is_ok());
+        assert!(h.outbound_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn peer_shutdown_ends_connection_cleanly() {
+        let mut h = Harness::qr();
+        h.send_initial_message();
+        // A type-only Shutdown frame from the peer, padded like any other frame.
+        h.send_peer_frame(vec![CableTunnelMessageType::Shutdown as u8]);
+        let handle = h.spawn();
+
+        assert!(handle.await.unwrap().is_ok());
+        assert!(
+            h.outbound_rx.try_recv().is_err(),
+            "no frame is sent in reply"
+        );
+    }
+
+    #[tokio::test]
+    async fn ctap_request_is_forwarded_and_response_delivered() {
+        let mut h = Harness::qr();
+        h.send_initial_message();
+        let handle = h.spawn();
+
+        h.cbor_tx_send
+            .send(CborRequest::new(Ctap2CommandCode::AuthenticatorClientPin))
+            .await
+            .unwrap();
+        assert_eq!(
+            h.next_outbound_type().await,
+            CableTunnelMessageType::Ctap as u8
+        );
+
+        // A CTAP response frame: [Ctap type byte][CTAP status OK].
+        h.send_peer_frame(vec![CableTunnelMessageType::Ctap as u8, 0x00]);
+        h.cbor_rx_recv.recv().await.expect("a CTAP response");
+
+        h.teardown(Teardown::Cancel);
+        assert!(handle.await.unwrap().is_ok());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn linger_captures_a_late_linking_update() {
+        let qr_private_key = NonZeroScalar::random(&mut OsRng);
+        let (puts_tx, mut puts_rx) = mpsc::unbounded_channel();
+        let registry = CableLingerRegistry::new();
+        let mut h = Harness::new(qr_connection_type_with(qr_private_key))
+            .with_store(Arc::new(NotifyingStore { puts: puts_tx }))
+            .with_linger(&registry, DEFAULT_LINGER);
+        h.send_initial_message();
+        let handle = h.spawn();
+
+        h.start_linger().await;
+        h.wait_for_state(ConnectionState::Lingering).await;
+
+        let (payload, device_id) = signed_update_payload(&qr_private_key, &[0u8; 32]);
+        h.send_peer_frame(payload);
+        assert_eq!(puts_rx.recv().await.unwrap(), device_id);
+        assert!(
+            h.cbor_rx_recv.try_recv().is_err(),
+            "nothing reaches the CBOR receiver"
+        );
+
+        h.teardown(Teardown::Cancel);
+        assert!(handle.await.unwrap().is_ok());
+        assert_eq!(registry.lingering_count(), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn linger_window_elapses() {
+        let registry = CableLingerRegistry::new();
+        let mut h = Harness::qr()
+            .with_store(Arc::new(RecordingStore::default()))
+            .with_linger(&registry, Duration::from_secs(10));
+        h.send_initial_message();
+        let handle = h.spawn();
+
+        h.start_linger().await;
+        h.wait_for_state(ConnectionState::Lingering).await;
+        let started = tokio::time::Instant::now();
+
+        assert!(handle.await.unwrap().is_ok());
+        assert_eq!(started.elapsed(), Duration::from_secs(10));
+        assert_eq!(registry.lingering_count(), 0);
+        assert!(h.outbound_rx.try_recv().is_err(), "no second Shutdown");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn hard_cap_bounds_an_overlong_window() {
+        let registry = CableLingerRegistry::new();
+        let mut h = Harness::qr()
+            .with_store(Arc::new(RecordingStore::default()))
+            .with_linger(&registry, HARD_CAP * 2);
+        h.send_initial_message();
+        let handle = h.spawn();
+
+        h.start_linger().await;
+        h.wait_for_state(ConnectionState::Lingering).await;
+        let started = tokio::time::Instant::now();
+
+        assert!(handle.await.unwrap().is_ok());
+        assert_eq!(started.elapsed(), HARD_CAP);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn close_lingering_evicts_a_lingerer() {
+        let registry = CableLingerRegistry::new();
+        let mut h = Harness::qr()
+            .with_store(Arc::new(RecordingStore::default()))
+            .with_linger(&registry, DEFAULT_LINGER);
+        h.send_initial_message();
+        let handle = h.spawn();
+
+        h.start_linger().await;
+        h.wait_for_state(ConnectionState::Lingering).await;
+        assert_eq!(registry.lingering_count(), 1);
+
+        let started = tokio::time::Instant::now();
+        assert_eq!(registry.close_lingering(), 1);
+        assert!(handle.await.unwrap().is_ok());
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert_eq!(registry.lingering_count(), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn wedged_store_write_is_preempted() {
+        let qr_private_key = NonZeroScalar::random(&mut OsRng);
+        let registry = CableLingerRegistry::new();
+        let mut h = Harness::new(qr_connection_type_with(qr_private_key))
+            .with_store(Arc::new(WedgedStore))
+            .with_linger(&registry, DEFAULT_LINGER);
+        h.send_initial_message();
+        let handle = h.spawn();
+
+        h.start_linger().await;
+        h.wait_for_state(ConnectionState::Lingering).await;
+        let started = tokio::time::Instant::now();
+
+        let (payload, _) = signed_update_payload(&qr_private_key, &[0u8; 32]);
+        h.send_peer_frame(payload);
+
+        assert!(handle.await.unwrap().is_ok());
+        assert_eq!(started.elapsed(), STORE_WRITE_TIMEOUT);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn decrypt_failure_budget_ends_the_linger() {
+        let registry = CableLingerRegistry::new();
+        let mut h = Harness::qr()
+            .with_store(Arc::new(RecordingStore::default()))
+            .with_linger(&registry, DEFAULT_LINGER);
+        h.send_initial_message();
+        let handle = h.spawn();
+
+        h.start_linger().await;
+        h.wait_for_state(ConnectionState::Lingering).await;
+
+        for _ in 0..DECRYPT_FAILURE_BUDGET {
+            h.inbound_tx.send(vec![0xFFu8; 48]).unwrap();
+        }
+        let started = tokio::time::Instant::now();
+        assert!(handle.await.unwrap().is_ok());
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn peer_shutdown_ends_the_linger() {
+        let registry = CableLingerRegistry::new();
+        let mut h = Harness::qr()
+            .with_store(Arc::new(RecordingStore::default()))
+            .with_linger(&registry, DEFAULT_LINGER);
+        h.send_initial_message();
+        let handle = h.spawn();
+
+        h.start_linger().await;
+        h.wait_for_state(ConnectionState::Lingering).await;
+
+        h.send_peer_frame(vec![CableTunnelMessageType::Shutdown as u8]);
+        let started = tokio::time::Instant::now();
+        assert!(handle.await.unwrap().is_ok());
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn ctap_frames_are_ignored_while_lingering() {
+        let registry = CableLingerRegistry::new();
+        let mut h = Harness::qr()
+            .with_store(Arc::new(RecordingStore::default()))
+            .with_linger(&registry, Duration::from_secs(10));
+        h.send_initial_message();
+        let handle = h.spawn();
+
+        h.start_linger().await;
+        h.wait_for_state(ConnectionState::Lingering).await;
+
+        let started = tokio::time::Instant::now();
+        h.send_peer_frame(vec![CableTunnelMessageType::Ctap as u8, 0x00]);
+        assert!(handle.await.unwrap().is_ok());
+        assert_eq!(started.elapsed(), Duration::from_secs(10));
+        assert!(h.cbor_rx_recv.try_recv().is_err());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn linger_without_a_store_is_a_close() {
+        let registry = CableLingerRegistry::new();
+        let mut h = Harness::qr().with_linger(&registry, DEFAULT_LINGER);
+        h.send_initial_message();
+        let handle = h.spawn();
+
+        h.start_linger().await;
+        assert!(handle.await.unwrap().is_ok());
+        assert_ne!(*h.state_rx.borrow(), ConnectionState::Lingering);
+        assert_eq!(registry.lingering_count(), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn known_device_connection_never_lingers() {
+        let registry = CableLingerRegistry::new();
+        let mut h = Harness::new(known_device_connection_type())
+            .with_store(Arc::new(RecordingStore::default()))
+            .with_linger(&registry, DEFAULT_LINGER);
+        h.send_initial_message();
+        let handle = h.spawn();
+
+        h.start_linger().await;
+        assert!(handle.await.unwrap().is_ok());
+        assert_ne!(*h.state_rx.borrow(), ConnectionState::Lingering);
+        assert_eq!(registry.lingering_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn linger_before_the_initial_message_is_a_close() {
+        let registry = CableLingerRegistry::new();
+        let mut h = Harness::qr()
+            .with_store(Arc::new(RecordingStore::default()))
+            .with_linger(&registry, DEFAULT_LINGER);
+        let handle = h.spawn();
+
+        h.teardown(Teardown::Linger);
+        assert_eq!(
+            h.next_outbound_type().await,
+            CableTunnelMessageType::Shutdown as u8
+        );
+        assert!(handle.await.unwrap().is_ok());
+        assert_ne!(*h.state_rx.borrow(), ConnectionState::Lingering);
+        assert_eq!(registry.lingering_count(), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn wedged_store_write_in_the_active_phase_does_not_block_close() {
+        let qr_private_key = NonZeroScalar::random(&mut OsRng);
+        let mut h =
+            Harness::new(qr_connection_type_with(qr_private_key)).with_store(Arc::new(WedgedStore));
+        h.send_initial_message();
+        let handle = h.spawn();
+        h.await_active().await;
+
+        let (payload, _) = signed_update_payload(&qr_private_key, &[0u8; 32]);
+        h.send_peer_frame(payload);
+        tokio::task::yield_now().await;
+        let started = tokio::time::Instant::now();
+        h.teardown(Teardown::Close);
+
+        assert_eq!(
+            h.next_outbound_type().await,
+            CableTunnelMessageType::Shutdown as u8
+        );
+        assert!(handle.await.unwrap().is_ok());
+        assert_eq!(started.elapsed(), STORE_WRITE_TIMEOUT);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn close_with_a_wedged_socket_terminates_at_send_timeout() {
+        let mut h = Harness::qr().with_wedged_send();
+        h.send_initial_message();
+        let handle = h.spawn();
+        h.await_active().await;
+
+        let started = tokio::time::Instant::now();
+        h.teardown(Teardown::Close);
+        assert!(handle.await.unwrap().is_ok());
+        assert_eq!(started.elapsed(), SEND_TIMEOUT);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cbor_send_on_a_wedged_socket_fails_at_send_timeout() {
+        let mut h = Harness::qr().with_wedged_send();
+        h.send_initial_message();
+        let handle = h.spawn();
+        h.await_active().await;
+
+        let started = tokio::time::Instant::now();
+        h.cbor_tx_send
+            .send(CborRequest::new(Ctap2CommandCode::AuthenticatorClientPin))
+            .await
+            .unwrap();
+        assert!(matches!(handle.await.unwrap(), Err(CableError::Timeout)));
+        assert_eq!(started.elapsed(), SEND_TIMEOUT);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn decrypt_failures_below_the_budget_keep_the_linger_alive() {
+        let qr_private_key = NonZeroScalar::random(&mut OsRng);
+        let (puts_tx, mut puts_rx) = mpsc::unbounded_channel();
+        let registry = CableLingerRegistry::new();
+        let mut h = Harness::new(qr_connection_type_with(qr_private_key))
+            .with_store(Arc::new(NotifyingStore { puts: puts_tx }))
+            .with_linger(&registry, DEFAULT_LINGER);
+        h.send_initial_message();
+        let handle = h.spawn();
+
+        h.start_linger().await;
+        h.wait_for_state(ConnectionState::Lingering).await;
+
+        for _ in 0..DECRYPT_FAILURE_BUDGET - 1 {
+            h.inbound_tx.send(vec![0xFFu8; 48]).unwrap();
+        }
+        // A good frame resets the count and is still applied.
+        let (payload, device_id) = signed_update_payload(&qr_private_key, &[0u8; 32]);
+        h.send_peer_frame(payload);
+        assert_eq!(puts_rx.recv().await.unwrap(), device_id);
+        assert_eq!(registry.lingering_count(), 1);
+
+        for _ in 0..DECRYPT_FAILURE_BUDGET - 1 {
+            h.inbound_tx.send(vec![0xFFu8; 48]).unwrap();
+        }
+        tokio::task::yield_now().await;
+        assert_eq!(registry.lingering_count(), 1, "still under the budget");
+
+        h.inbound_tx.send(vec![0xFFu8; 48]).unwrap();
+        assert!(handle.await.unwrap().is_ok());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn unknown_frame_types_are_ignored_while_lingering() {
+        let registry = CableLingerRegistry::new();
+        let mut h = Harness::qr()
+            .with_store(Arc::new(RecordingStore::default()))
+            .with_linger(&registry, Duration::from_secs(10));
+        h.send_initial_message();
+        let handle = h.spawn();
+
+        h.start_linger().await;
+        h.wait_for_state(ConnectionState::Lingering).await;
+
+        let started = tokio::time::Instant::now();
+        for _ in 0..DECRYPT_FAILURE_BUDGET + 1 {
+            // Decrypts fine, unknown type byte (e.g. a CTAP 2.3 JSON frame).
+            h.send_peer_frame(vec![3, 0x00]);
+        }
+        assert!(handle.await.unwrap().is_ok());
+        assert_eq!(started.elapsed(), Duration::from_secs(10));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn linger_with_a_dropped_registry_is_a_close() {
+        let registry = CableLingerRegistry::new();
+        let mut h = Harness::qr()
+            .with_store(Arc::new(RecordingStore::default()))
+            .with_linger(&registry, DEFAULT_LINGER);
+        h.send_initial_message();
+        let handle = h.spawn();
+        h.await_active().await;
+
+        drop(registry);
+        h.start_linger().await;
+        assert!(handle.await.unwrap().is_ok());
+        assert_ne!(*h.state_rx.borrow(), ConnectionState::Lingering);
     }
 }

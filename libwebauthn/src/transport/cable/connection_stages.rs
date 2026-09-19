@@ -9,12 +9,14 @@ use super::crypto::{derive, KeyPurpose};
 use super::data_channel::{CableDataChannel, WebSocketDataChannel};
 use super::known_devices::{CableKnownDevice, CableKnownDeviceInfoStore, ClientNonce};
 use super::l2cap::L2capDataChannel;
+use super::linger::{LingerParams, Teardown};
 use super::protocol::{self, CableTunnelConnectionType, TunnelNoiseState};
 use super::qr_code_device::CableQrCodeDevice;
 use super::tunnel;
 use crate::proto::ctap2::cbor::{CborRequest, CborResponse};
 use crate::transport::ble::btleplug::FidoDevice;
 use crate::transport::cable::error::CableError;
+use std::future::Future;
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -201,6 +203,9 @@ pub(crate) struct TunnelConnectionInput {
     pub noise_state: TunnelNoiseState,
     pub cbor_tx_recv: mpsc::Receiver<CborRequest>,
     pub cbor_rx_send: mpsc::Sender<CborResponse>,
+    pub teardown_rx: watch::Receiver<Teardown>,
+    /// Present only when this connection may linger after Shutdown.
+    pub linger: Option<LingerParams>,
 }
 
 impl TunnelConnectionInput {
@@ -209,6 +214,8 @@ impl TunnelConnectionInput {
         known_device_store: Option<Arc<dyn CableKnownDeviceInfoStore>>,
         cbor_tx_recv: mpsc::Receiver<CborRequest>,
         cbor_rx_send: mpsc::Sender<CborResponse>,
+        teardown_rx: watch::Receiver<Teardown>,
+        linger: Option<LingerParams>,
     ) -> Self {
         Self {
             connection_type: handshake_output.connection_type,
@@ -218,7 +225,32 @@ impl TunnelConnectionInput {
             noise_state: handshake_output.noise_state,
             cbor_tx_recv,
             cbor_rx_send,
+            teardown_rx,
+            linger,
         }
+    }
+}
+
+/// Waits for the next teardown intent. Every sender gone counts as a cancel,
+/// since nobody is left to ask for a graceful close.
+pub(crate) async fn next_teardown(teardown_rx: &mut watch::Receiver<Teardown>) -> Teardown {
+    match teardown_rx.changed().await {
+        Ok(()) => *teardown_rx.borrow_and_update(),
+        Err(_) => Teardown::Cancel,
+    }
+}
+
+/// Drives the connect and handshake stages until they complete or the caller
+/// tears the channel down. There is no secure channel yet, so any intent
+/// simply drops the in-flight future.
+pub(crate) async fn until_teardown<F: Future>(
+    fut: F,
+    teardown_rx: &mut watch::Receiver<Teardown>,
+) -> Option<F::Output> {
+    tokio::select! {
+        biased;
+        _ = next_teardown(teardown_rx) => None,
+        output = fut => Some(output),
     }
 }
 
@@ -394,4 +426,39 @@ pub(crate) fn decode_tunnel_domain_from_advert(
             error!({ encoded = %advert.encoded_tunnel_server_domain }, "Failed to decode tunnel server domain");
             CableError::InvalidFraming
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn until_teardown_drops_a_pending_connect_on_any_intent() {
+        let (tx, mut rx) = watch::channel(Teardown::Active);
+        let started = tokio::time::Instant::now();
+        let connect = until_teardown(std::future::pending::<()>(), &mut rx);
+        tx.send_replace(Teardown::Close);
+        assert!(connect.await.is_none());
+        assert_eq!(started.elapsed(), std::time::Duration::ZERO);
+    }
+
+    #[tokio::test]
+    async fn until_teardown_yields_the_output_when_undisturbed() {
+        let (_tx, mut rx) = watch::channel(Teardown::Active);
+        assert_eq!(until_teardown(async { 7 }, &mut rx).await, Some(7));
+    }
+
+    #[tokio::test]
+    async fn until_teardown_prefers_an_intent_over_a_ready_connect() {
+        let (tx, mut rx) = watch::channel(Teardown::Active);
+        tx.send_replace(Teardown::Cancel);
+        assert_eq!(until_teardown(async { 7 }, &mut rx).await, None);
+    }
+
+    #[tokio::test]
+    async fn next_teardown_treats_a_dropped_sender_as_cancel() {
+        let (tx, mut rx) = watch::channel(Teardown::Active);
+        drop(tx);
+        assert_eq!(next_teardown(&mut rx).await, Teardown::Cancel);
+    }
 }

@@ -10,6 +10,7 @@ use crate::proto::{
     ctap1::apdu::{ApduRequest, ApduResponse},
     ctap2::cbor::{CborRequest, CborResponse},
 };
+use crate::transport::cable::CableLingerConfig;
 use crate::webauthn::error::WebAuthnError;
 use crate::Transport;
 use crate::UvUpdate;
@@ -37,6 +38,13 @@ pub struct ChannelSettings {
     /// credential management reuses a stored token across sessions instead of
     /// re-prompting for the PIN. See [`PersistentTokenStore`].
     pub persistent_token_store: Option<Arc<dyn PersistentTokenStore>>,
+    /// Opt-in to keeping a hybrid connection open after the ceremony to capture
+    /// a late linking update. Enables close-on-new for this channel and lets
+    /// it linger when the caller closes it with
+    /// [`CableClose::Linger`](crate::transport::cable::CableClose::Linger)
+    /// afterwards. An immediate close or a drop captures nothing. `None`
+    /// disables it. Ignored by the other transports.
+    pub cable_linger: Option<CableLingerConfig>,
 }
 
 #[async_trait]
@@ -71,7 +79,19 @@ pub trait Channel: Send + Sync + Display + Ctap2AuthTokenStore {
         &self,
     ) -> Result<SupportedProtocols, WebAuthnError<Self::TransportError>>;
     async fn status(&self) -> ChannelStatus;
+
+    /// Graceful close. Hybrid sends its protocol-level goodbye and returns
+    /// once the connection has been torn down (see
+    /// [`CableChannel::close`](crate::transport::cable::channel::CableChannel::close)
+    /// for the lingering variant). HID, BLE and NFC release the link when the
+    /// channel is dropped, so this is a no-op there.
     async fn close(&mut self);
+
+    /// Hard abort without a protocol-level goodbye. Falls back to
+    /// [`close`](Self::close), so it is a no-op on HID, BLE and NFC.
+    async fn cancel(&mut self) {
+        self.close().await
+    }
 
     /// The transport this channel speaks over. Drives the registration response
     /// `transports` member and the `authenticatorAttachment` of both registration
