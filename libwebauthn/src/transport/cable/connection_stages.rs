@@ -1,6 +1,6 @@
 use ::btleplug::api::{AddressType, BDAddr};
 use async_trait::async_trait;
-use tokio::sync::{broadcast, mpsc, watch};
+use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tracing::{debug, error, info, instrument, trace, warn};
 
 use super::advertisement::{await_advertisement, DecryptedAdvert};
@@ -201,6 +201,8 @@ pub(crate) struct TunnelConnectionInput {
     pub noise_state: TunnelNoiseState,
     pub cbor_tx_recv: mpsc::Receiver<CborRequest>,
     pub cbor_rx_send: mpsc::Sender<CborResponse>,
+    /// Fires when the channel is closed.
+    pub shutdown_recv: oneshot::Receiver<()>,
 }
 
 impl TunnelConnectionInput {
@@ -209,6 +211,7 @@ impl TunnelConnectionInput {
         known_device_store: Option<Arc<dyn CableKnownDeviceInfoStore>>,
         cbor_tx_recv: mpsc::Receiver<CborRequest>,
         cbor_rx_send: mpsc::Sender<CborResponse>,
+        shutdown_recv: oneshot::Receiver<()>,
     ) -> Self {
         Self {
             connection_type: handshake_output.connection_type,
@@ -218,6 +221,7 @@ impl TunnelConnectionInput {
             noise_state: handshake_output.noise_state,
             cbor_tx_recv,
             cbor_rx_send,
+            shutdown_recv,
         }
     }
 }

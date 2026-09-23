@@ -11,7 +11,7 @@ use serde::Serialize;
 use serde_bytes::ByteArray;
 use serde_indexed::SerializeIndexed;
 use serde_repr::Serialize_repr;
-use tokio::sync::{broadcast, mpsc, watch};
+use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tokio::task;
 use tracing::instrument;
 
@@ -247,6 +247,7 @@ impl<'d> Device<'d, Cable, CableChannel> for CableQrCodeDevice {
         let (ux_update_sender, _) = broadcast::channel(16);
         let (cbor_tx_send, cbor_tx_recv) = mpsc::channel(16);
         let (cbor_rx_send, cbor_rx_recv) = mpsc::channel(16);
+        let (shutdown_sender, shutdown_recv) = oneshot::channel();
         let (connection_state_sender, connection_state_receiver) =
             watch::channel(ConnectionState::Connecting);
 
@@ -270,6 +271,7 @@ impl<'d> Device<'d, Cable, CableChannel> for CableQrCodeDevice {
                 qr_device.store,
                 cbor_tx_recv,
                 cbor_rx_send,
+                shutdown_recv,
             );
             match protocol::connection(tunnel_input).await {
                 Ok(()) => {
@@ -291,6 +293,7 @@ impl<'d> Device<'d, Cable, CableChannel> for CableQrCodeDevice {
             ux_update_sender,
             connection_state_receiver,
             persistent_token_store: settings.persistent_token_store,
+            shutdown_sender: Some(shutdown_sender),
         })
     }
 
