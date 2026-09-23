@@ -922,7 +922,7 @@ mod tests {
             ))
             .await
             .unwrap();
-        while sent.lock().unwrap().len() < 1 {
+        while sent.lock().unwrap().is_empty() {
             tokio::task::yield_now().await;
         }
 
