@@ -850,6 +850,99 @@ mod tests {
         }
     }
 
+    /// A data channel the test scripts: inbound messages come from `inbox`
+    /// (closing it is the peer closing), outbound ones are recorded.
+    struct ScriptedChannel {
+        inbox: tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>,
+        sent: Arc<Mutex<Vec<Vec<u8>>>>,
+    }
+
+    #[async_trait]
+    impl CableDataChannel for ScriptedChannel {
+        async fn send(&mut self, message: &[u8]) -> Result<(), CableError> {
+            self.sent.lock().unwrap().push(message.to_vec());
+            Ok(())
+        }
+        async fn recv(&mut self) -> Result<Option<Vec<u8>>, CableError> {
+            Ok(self.inbox.recv().await)
+        }
+    }
+
+    /// The phone's post-handshake message: `{1: getInfo}` with a minimal
+    /// getInfo (`{1: ["FIDO_2_0"], 3: aaguid}`), plus the zero-padding marker.
+    fn initial_message_plaintext() -> Vec<u8> {
+        let mut get_info = vec![0xA2, 0x01, 0x81, 0x68];
+        get_info.extend_from_slice(b"FIDO_2_0");
+        get_info.extend_from_slice(&[0x03, 0x50]);
+        get_info.extend_from_slice(&[0u8; 16]);
+        let mut initial = vec![0xA1, 0x01, 0x58, get_info.len() as u8];
+        initial.extend_from_slice(&get_info);
+        initial.push(0x00);
+        initial
+    }
+
+    #[tokio::test]
+    async fn closing_while_a_request_is_pending_sends_one_shutdown_and_ends_when_the_peer_closes() {
+        let (desktop, mut phone) = noise_pair();
+        let (inbox_tx, inbox) = tokio::sync::mpsc::unbounded_channel();
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let (cbor_tx, cbor_tx_recv) = tokio::sync::mpsc::channel(4);
+        let (cbor_rx_send, _cbor_rx_recv) = tokio::sync::mpsc::channel(4);
+        let (shutdown, shutdown_recv) = tokio::sync::oneshot::channel();
+        let input = TunnelConnectionInput {
+            connection_type: CableTunnelConnectionType::QrCode {
+                routing_id: "000000".into(),
+                tunnel_id: "00".repeat(16),
+                private_key: NonZeroScalar::random(&mut OsRng),
+            },
+            tunnel_domain: "cable.example.com".into(),
+            known_device_store: None,
+            data_channel: Box::new(ScriptedChannel {
+                inbox,
+                sent: Arc::clone(&sent),
+            }),
+            noise_state: desktop,
+            cbor_tx_recv,
+            cbor_rx_send,
+            shutdown_recv,
+        };
+        let task = tokio::spawn(connection(input));
+
+        // The phone says hello, the desktop sends a request, and the phone
+        // is still working on it (a chooser or a fingerprint prompt).
+        let mut frame = vec![0u8; 1024];
+        let len = phone
+            .transport_state
+            .write_message(&initial_message_plaintext(), &mut frame)
+            .unwrap();
+        inbox_tx.send(frame[..len].to_vec()).unwrap();
+        cbor_tx
+            .send(CborRequest::new(
+                Ctap2CommandCode::AuthenticatorGetAssertion,
+            ))
+            .await
+            .unwrap();
+        while sent.lock().unwrap().len() < 1 {
+            tokio::task::yield_now().await;
+        }
+
+        // The person cancels on the desktop.
+        shutdown.send(()).unwrap();
+        while sent.lock().unwrap().len() < 2 {
+            tokio::task::yield_now().await;
+        }
+        assert!(!task.is_finished(), "waits for the phone to close first");
+        drop(inbox_tx); // the phone closes its side
+        assert!(task.await.unwrap().is_ok(), "a clean close, not an error");
+
+        let frames = sent.lock().unwrap().clone();
+        assert_eq!(frames.len(), 2, "the request, then exactly one more frame");
+        let request = decrypt_frame(frames[0].clone(), &mut phone).await.unwrap();
+        assert_eq!(request[0], CableTunnelMessageType::Ctap as u8);
+        let shutdown = decrypt_frame(frames[1].clone(), &mut phone).await.unwrap();
+        assert_eq!(shutdown, vec![0u8], "the second frame is Shutdown");
+    }
+
     #[test]
     fn a_bare_shutdown_parses_and_other_empty_messages_do_not() {
         let message = CableTunnelMessage::from_slice(&[0]).unwrap();
