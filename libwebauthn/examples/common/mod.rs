@@ -9,7 +9,7 @@
 use std::io::{self, Write};
 
 use libwebauthn::pin::{PinNotSetReason, PinRequestReason};
-use libwebauthn::transport::cable::channel::{CableUpdate, CableUxUpdate};
+use libwebauthn::transport::hybrid::channel::{CableUpdate, CableUxUpdate};
 use libwebauthn::UvUpdate;
 use text_io::read;
 use tokio::sync::broadcast::Receiver;

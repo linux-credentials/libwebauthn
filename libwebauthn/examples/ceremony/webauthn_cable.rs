@@ -3,8 +3,8 @@
 //! MakeCredential only.
 use std::error::Error;
 
-use libwebauthn::transport::cable::is_available;
-use libwebauthn::transport::cable::qr_code_device::{
+use libwebauthn::transport::hybrid::is_available;
+use libwebauthn::transport::hybrid::qr_code_device::{
     CableQrCodeDevice, CableTransports, QrCodeOperationHint,
 };
 use qrcode::render::unicode;

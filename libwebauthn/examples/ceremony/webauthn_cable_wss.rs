@@ -2,11 +2,11 @@ use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
 
-use libwebauthn::transport::cable::is_available;
-use libwebauthn::transport::cable::known_devices::{
+use libwebauthn::transport::hybrid::is_available;
+use libwebauthn::transport::hybrid::known_devices::{
     CableKnownDevice, ClientPayloadHint, EphemeralDeviceInfoStore,
 };
-use libwebauthn::transport::cable::qr_code_device::{
+use libwebauthn::transport::hybrid::qr_code_device::{
     CableQrCodeDevice, CableTransports, QrCodeOperationHint,
 };
 use qrcode::render::unicode;
@@ -17,7 +17,7 @@ use libwebauthn::ops::webauthn::{
     GetAssertionRequest, JsonFormat, MakeCredentialRequest, OriginValidation, RelatedOrigins,
     RequestOrigin, RequestSettings, SystemPublicSuffixList, WebAuthnIDLResponse as _,
 };
-use libwebauthn::transport::cable::channel::CableChannel;
+use libwebauthn::transport::hybrid::channel::CableChannel;
 use libwebauthn::transport::{Channel as _, ChannelSettings, Device};
 use libwebauthn::webauthn::WebAuthn;
 

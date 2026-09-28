@@ -22,9 +22,9 @@ use libwebauthn::proto::ctap2::{
     Ctap2CredentialType, Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialRpEntity,
     Ctap2PublicKeyCredentialType, Ctap2PublicKeyCredentialUserEntity,
 };
-use libwebauthn::transport::cable::channel::CableChannel;
-use libwebauthn::transport::cable::is_available;
-use libwebauthn::transport::cable::qr_code_device::{
+use libwebauthn::transport::hybrid::channel::CableChannel;
+use libwebauthn::transport::hybrid::is_available;
+use libwebauthn::transport::hybrid::qr_code_device::{
     CableQrCodeDevice, CableTransports, QrCodeOperationHint,
 };
 use libwebauthn::transport::{Channel as _, ChannelSettings, Device};
