@@ -3,9 +3,9 @@
 //! MakeCredential only.
 use std::error::Error;
 
-use libwebauthn::transport::cable::is_available;
-use libwebauthn::transport::cable::qr_code_device::{
-    CableQrCodeDevice, CableTransports, QrCodeOperationHint,
+use libwebauthn::transport::hybrid::is_available;
+use libwebauthn::transport::hybrid::qr_code_device::{
+    PxpQrCodeDevice, PxpTransports, QrCodeOperationHint,
 };
 use qrcode::render::unicode;
 use qrcode::QrCode;
@@ -65,9 +65,9 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         },
     };
 
-    let mut device: CableQrCodeDevice = CableQrCodeDevice::new_transient(
+    let mut device: PxpQrCodeDevice = PxpQrCodeDevice::new_transient(
         QrCodeOperationHint::MakeCredential,
-        CableTransports::CloudAssistedOrLocal,
+        PxpTransports::CloudAssistedOrLocal,
     )?;
 
     println!("Created QR code, awaiting for advertisement.");
@@ -83,7 +83,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
     println!("Channel established {:?}", channel);
 
     let state_recv = channel.get_ux_update_receiver();
-    tokio::spawn(common::handle_cable_updates(state_recv));
+    tokio::spawn(common::handle_hybrid_updates(state_recv));
 
     let request =
         MakeCredentialRequest::prepare(&request_origin, MAKE_CREDENTIAL_REQUEST, &settings)

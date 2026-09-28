@@ -2,43 +2,33 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::sync::Arc;
 
-use crate::transport::cable::channel::ConnectionState;
-use crate::transport::cable::connection_stages::{
+use crate::connection_stages::{
     connection_stage, handshake_stage, proximity_check_stage, ConnectionInput, HandshakeInput,
-    HandshakeOutput, MpscUxUpdateSender, ProximityCheckInput, TunnelConnectionInput,
-    UxUpdateSender,
+    HandshakeOutput, MpscUxUpdateSender, ProximityCheckInput,
 };
-
-use crate::transport::cable::error::CableError;
-use crate::transport::ChannelSettings;
-use crate::transport::Device;
-use crate::webauthn::error::WebAuthnError;
+use crate::error::PxpError;
 
 use async_trait::async_trait;
 use futures::lock::Mutex;
 use serde::Serialize;
 use serde_bytes::ByteBuf;
 use serde_indexed::SerializeIndexed;
-use tokio::sync::{broadcast, mpsc, watch};
-use tokio::task;
 use tracing::{debug, instrument, trace};
 
-use super::channel::CableChannel;
-use super::protocol::{self, CableLinkingInfo};
-use super::Cable;
+use super::protocol::PxpLinkingInfo;
 
 #[async_trait]
-pub trait CableKnownDeviceInfoStore: Debug + Send + Sync {
+pub trait PxpKnownDeviceInfoStore: Debug + Send + Sync {
     /// Called whenever a known device should be added or updated.
-    async fn put_known_device(&self, device_id: &CableKnownDeviceId, device: &CableKnownDeviceInfo);
+    async fn put_known_device(&self, device_id: &PxpKnownDeviceId, device: &PxpKnownDeviceInfo);
     /// Called whenever a known device becomes permanently unavailable.
-    async fn delete_known_device(&self, device_id: &CableKnownDeviceId);
+    async fn delete_known_device(&self, device_id: &PxpKnownDeviceId);
 }
 
 /// An in-memory store for testing purposes.
 #[derive(Debug, Default, Clone)]
 pub struct EphemeralDeviceInfoStore {
-    pub known_devices: Arc<Mutex<HashMap<CableKnownDeviceId, CableKnownDeviceInfo>>>,
+    pub known_devices: Arc<Mutex<HashMap<PxpKnownDeviceId, PxpKnownDeviceInfo>>>,
 }
 
 impl EphemeralDeviceInfoStore {
@@ -48,7 +38,7 @@ impl EphemeralDeviceInfoStore {
         }
     }
 
-    pub async fn list_all(&self) -> Vec<(CableKnownDeviceId, CableKnownDeviceInfo)> {
+    pub async fn list_all(&self) -> Vec<(PxpKnownDeviceId, PxpKnownDeviceInfo)> {
         debug!("Listing all known devices");
         let known_devices = self.known_devices.lock().await;
         known_devices
@@ -61,29 +51,25 @@ impl EphemeralDeviceInfoStore {
 unsafe impl Send for EphemeralDeviceInfoStore {}
 
 #[async_trait]
-impl CableKnownDeviceInfoStore for EphemeralDeviceInfoStore {
-    async fn put_known_device(
-        &self,
-        device_id: &CableKnownDeviceId,
-        device: &CableKnownDeviceInfo,
-    ) {
+impl PxpKnownDeviceInfoStore for EphemeralDeviceInfoStore {
+    async fn put_known_device(&self, device_id: &PxpKnownDeviceId, device: &PxpKnownDeviceInfo) {
         debug!(?device_id, "Inserting or updating known device");
         trace!(?device);
         let mut known_devices = self.known_devices.lock().await;
         known_devices.insert(device_id.clone(), device.clone());
     }
 
-    async fn delete_known_device(&self, device_id: &CableKnownDeviceId) {
+    async fn delete_known_device(&self, device_id: &PxpKnownDeviceId) {
         debug!(?device_id, "Deleting known device");
         let mut known_devices = self.known_devices.lock().await;
         known_devices.remove(device_id);
     }
 }
 
-pub type CableKnownDeviceId = String;
+pub type PxpKnownDeviceId = String;
 
 #[derive(Debug, Clone)]
-pub struct CableKnownDeviceInfo {
+pub struct PxpKnownDeviceInfo {
     pub contact_id: Vec<u8>,
     pub link_id: [u8; 8],
     pub link_secret: [u8; 32],
@@ -92,34 +78,34 @@ pub struct CableKnownDeviceInfo {
     pub tunnel_domain: String,
 }
 
-impl From<&CableLinkingInfo> for CableKnownDeviceId {
-    fn from(linking_info: &CableLinkingInfo) -> Self {
+impl From<&PxpLinkingInfo> for PxpKnownDeviceId {
+    fn from(linking_info: &PxpLinkingInfo) -> Self {
         hex::encode(linking_info.authenticator_public_key.as_slice())
     }
 }
 
-impl CableKnownDeviceInfo {
+impl PxpKnownDeviceInfo {
     pub(crate) fn new(
         tunnel_domain: &str,
-        linking_info: &CableLinkingInfo,
-    ) -> Result<Self, CableError> {
+        linking_info: &PxpLinkingInfo,
+    ) -> Result<Self, PxpError> {
         let info = Self {
             contact_id: linking_info.contact_id.to_vec(),
             link_id: linking_info
                 .link_id
                 .clone()
                 .try_into()
-                .map_err(|_| CableError::InvalidFraming)?,
+                .map_err(|_| PxpError::InvalidFraming)?,
             link_secret: linking_info
                 .link_secret
                 .clone()
                 .try_into()
-                .map_err(|_| CableError::InvalidFraming)?,
+                .map_err(|_| PxpError::InvalidFraming)?,
             public_key: linking_info
                 .authenticator_public_key
                 .clone()
                 .try_into()
-                .map_err(|_| CableError::InvalidFraming)?,
+                .map_err(|_| PxpError::InvalidFraming)?,
             name: linking_info.authenticator_name.clone(),
             tunnel_domain: tunnel_domain.to_string(),
         };
@@ -128,13 +114,13 @@ impl CableKnownDeviceInfo {
 }
 
 #[derive(Debug, Clone)]
-pub struct CableKnownDevice {
+pub struct PxpKnownDevice {
     pub hint: ClientPayloadHint,
-    pub device_info: CableKnownDeviceInfo,
-    pub(crate) store: Arc<dyn CableKnownDeviceInfoStore>,
+    pub device_info: PxpKnownDeviceInfo,
+    pub(crate) store: Arc<dyn PxpKnownDeviceInfoStore>,
 }
 
-impl Display for CableKnownDevice {
+impl Display for PxpKnownDevice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -145,16 +131,16 @@ impl Display for CableKnownDevice {
     }
 }
 
-unsafe impl Send for CableKnownDevice {}
-unsafe impl Sync for CableKnownDevice {}
+unsafe impl Send for PxpKnownDevice {}
+unsafe impl Sync for PxpKnownDevice {}
 
-impl CableKnownDevice {
+impl PxpKnownDevice {
     pub async fn new(
         hint: ClientPayloadHint,
-        device_info: &CableKnownDeviceInfo,
-        store: Arc<dyn CableKnownDeviceInfoStore>,
-    ) -> Result<CableKnownDevice, CableError> {
-        let device = CableKnownDevice {
+        device_info: &PxpKnownDeviceInfo,
+        store: Arc<dyn PxpKnownDeviceInfoStore>,
+    ) -> Result<PxpKnownDevice, PxpError> {
+        let device = PxpKnownDevice {
             hint,
             device_info: device_info.clone(),
             store,
@@ -163,10 +149,10 @@ impl CableKnownDevice {
     }
 
     #[instrument(skip_all, err)]
-    async fn connection(
-        known_device: &CableKnownDevice,
-        ux_sender: &super::connection_stages::MpscUxUpdateSender,
-    ) -> Result<HandshakeOutput, CableError> {
+    pub(crate) async fn connection(
+        known_device: &PxpKnownDevice,
+        ux_sender: &MpscUxUpdateSender,
+    ) -> Result<HandshakeOutput, PxpError> {
         let client_nonce = rand::random::<ClientNonce>();
 
         // Stage 1: Connection (no proximity check needed for known devices)
@@ -187,66 +173,6 @@ impl CableKnownDevice {
         let handshake_output = handshake_stage(handshake_input, ux_sender).await?;
 
         Ok(handshake_output)
-    }
-}
-
-#[async_trait]
-impl<'d> Device<'d, Cable, CableChannel> for CableKnownDevice {
-    async fn channel(
-        &'d mut self,
-        settings: ChannelSettings,
-    ) -> Result<CableChannel, WebAuthnError<CableError>> {
-        debug!(?self.device_info.tunnel_domain, "Creating channel to tunnel server");
-
-        let (ux_update_sender, _) = broadcast::channel(16);
-        let (cbor_tx_send, cbor_tx_recv) = mpsc::channel(16);
-        let (cbor_rx_send, cbor_rx_recv) = mpsc::channel(16);
-        let (connection_state_sender, connection_state_receiver) =
-            watch::channel(ConnectionState::Connecting);
-
-        let ux_update_sender_clone = ux_update_sender.clone();
-        let known_device: CableKnownDevice = self.clone();
-
-        let handle_connection = task::spawn(async move {
-            let ux_sender =
-                MpscUxUpdateSender::new(ux_update_sender_clone, connection_state_sender);
-
-            let handshake_output = match Self::connection(&known_device, &ux_sender).await {
-                Ok(handshake_output) => handshake_output,
-                Err(e) => {
-                    ux_sender.send_error(e).await;
-                    return;
-                }
-            };
-
-            let tunnel_input = TunnelConnectionInput::from_handshake_output(
-                handshake_output,
-                Some(known_device.store),
-                cbor_tx_recv,
-                cbor_rx_send,
-            );
-
-            match protocol::connection(tunnel_input).await {
-                Ok(()) => {
-                    ux_sender
-                        .set_connection_state(ConnectionState::Terminated)
-                        .await;
-                }
-                Err(e) => {
-                    // send_error already transitions to Terminated.
-                    ux_sender.send_error(e).await;
-                }
-            }
-        });
-
-        Ok(CableChannel {
-            handle_connection,
-            cbor_sender: cbor_tx_send,
-            cbor_receiver: cbor_rx_recv,
-            ux_update_sender,
-            connection_state_receiver,
-            persistent_token_store: settings.persistent_token_store,
-        })
     }
 }
 
@@ -275,7 +201,7 @@ pub enum ClientPayloadHint {
 
 #[cfg(test)]
 mod tests {
-    use crate::transport::cable::tunnel::KNOWN_TUNNEL_DOMAINS;
+    use crate::tunnel::KNOWN_TUNNEL_DOMAINS;
 
     #[test]
     fn known_tunnels_domains_count() {

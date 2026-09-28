@@ -14,9 +14,9 @@
 pub(crate) mod error;
 
 pub mod ble;
-pub mod cable;
 pub mod device;
 pub mod hid;
+pub mod hybrid;
 #[cfg(test)]
 /// A mock channel that can be used in tests to
 /// queue expected requests and responses in unittests

@@ -9,11 +9,11 @@ use tracing::{debug, error, trace};
 use tungstenite::client::IntoClientRequest;
 use url::Url;
 
-use super::error::CableTunnelError;
-use super::known_devices::CableKnownDeviceId;
-use super::protocol::CableTunnelConnectionType;
-use crate::proto::ctap2::cbor;
-use crate::transport::cable::error::CableError;
+use super::error::PxpTunnelError;
+use super::known_devices::PxpKnownDeviceId;
+use super::protocol::PxpTunnelConnectionType;
+use crate::cbor;
+use crate::error::PxpError;
 
 const MAX_TUNNEL_REDIRECTS: usize = 5;
 
@@ -65,13 +65,13 @@ pub fn decode_tunnel_server_domain(encoded: u16) -> Option<String> {
 /// Builds the tunnel request, re-attaching the fido.cable and client-payload headers.
 pub(crate) fn build_tunnel_request(
     url: &str,
-    connection_type: &CableTunnelConnectionType,
-) -> Result<Request, CableError> {
-    let mut request = url.into_client_request().map_err(CableError::from)?;
+    connection_type: &PxpTunnelConnectionType,
+) -> Result<Request, PxpError> {
+    let mut request = url.into_client_request().map_err(PxpError::from)?;
     let headers = request.headers_mut();
     headers.insert("Sec-WebSocket-Protocol", "fido.cable".parse()?);
 
-    if let CableTunnelConnectionType::KnownDevice { client_payload, .. } = connection_type {
+    if let PxpTunnelConnectionType::KnownDevice { client_payload, .. } = connection_type {
         let client_payload = cbor::to_vec(client_payload)?;
         headers.insert(
             "X-caBLE-Client-Payload",
@@ -82,30 +82,30 @@ pub(crate) fn build_tunnel_request(
 }
 
 /// Resolves a redirect Location, which may be relative, against the current URL.
-fn resolve_redirect_target(base: &str, location: &str) -> Result<String, CableError> {
+fn resolve_redirect_target(base: &str, location: &str) -> Result<String, PxpError> {
     let base = Url::parse(base)?;
     let target = base.join(location)?;
     Ok(target.to_string())
 }
 
 /// Maps a non-101 tunnel handshake status to a transport error, distinguishing 410 Gone.
-fn tunnel_status_error(status: StatusCode) -> CableError {
+fn tunnel_status_error(status: StatusCode) -> PxpError {
     if status == StatusCode::GONE {
-        CableTunnelError::Gone.into()
+        PxpTunnelError::Gone.into()
     } else {
-        CableTunnelError::UnexpectedStatus(status.as_u16()).into()
+        PxpTunnelError::UnexpectedStatus(status.as_u16()).into()
     }
 }
 
 /// The known-device id to forget on a 410 Gone, for a known-device connection.
 pub(crate) fn known_device_id_to_forget(
-    error: &CableError,
-    connection_type: &CableTunnelConnectionType,
-) -> Option<CableKnownDeviceId> {
+    error: &PxpError,
+    connection_type: &PxpTunnelConnectionType,
+) -> Option<PxpKnownDeviceId> {
     match (error, connection_type) {
         (
-            CableError::CableTunnel(CableTunnelError::Gone),
-            CableTunnelConnectionType::KnownDevice {
+            PxpError::PxpTunnel(PxpTunnelError::Gone),
+            PxpTunnelConnectionType::KnownDevice {
                 authenticator_public_key,
                 ..
             },
@@ -116,12 +116,12 @@ pub(crate) fn known_device_id_to_forget(
 
 pub(crate) async fn connect(
     tunnel_domain: &str,
-    connection_type: &CableTunnelConnectionType,
-) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>, CableError> {
+    connection_type: &PxpTunnelConnectionType,
+) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>, PxpError> {
     ensure_rustls_crypto_provider();
 
     let mut connect_url = match connection_type {
-        CableTunnelConnectionType::QrCode {
+        PxpTunnelConnectionType::QrCode {
             routing_id,
             tunnel_id,
             ..
@@ -129,7 +129,7 @@ pub(crate) async fn connect(
             "wss://{}/cable/connect/{}/{}",
             tunnel_domain, routing_id, tunnel_id
         ),
-        CableTunnelConnectionType::KnownDevice { contact_id, .. } => {
+        PxpTunnelConnectionType::KnownDevice { contact_id, .. } => {
             format!("wss://{}/cable/contact/{}", tunnel_domain, contact_id)
         }
     };
@@ -144,7 +144,7 @@ pub(crate) async fn connect(
                 debug!(?response, "Connected to tunnel server");
                 if response.status() != StatusCode::SWITCHING_PROTOCOLS {
                     error!(?response, "Failed to switch to websocket protocol");
-                    return Err(CableError::ConnectionFailed);
+                    return Err(PxpError::ConnectionFailed);
                 }
                 debug!("Tunnel server returned success");
                 return Ok(ws_stream);
@@ -156,7 +156,7 @@ pub(crate) async fn connect(
             TungsteniteError::Http(response) => response,
             error => {
                 error!(?error, "Failed to connect to tunnel server");
-                return Err(CableError::from(error));
+                return Err(PxpError::from(error));
             }
         };
 
@@ -168,7 +168,7 @@ pub(crate) async fn connect(
                 .and_then(|value| value.to_str().ok())
             else {
                 error!(?status, "Tunnel redirect missing a usable Location header");
-                return Err(CableError::ConnectionFailed);
+                return Err(PxpError::ConnectionFailed);
             };
             connect_url = resolve_redirect_target(&connect_url, location)?;
             debug!(?connect_url, "Following tunnel redirect");
@@ -180,19 +180,19 @@ pub(crate) async fn connect(
     }
 
     error!("Exceeded the maximum number of tunnel redirects");
-    Err(CableTunnelError::TooManyRedirects.into())
+    Err(PxpTunnelError::TooManyRedirects.into())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transport::cable::known_devices::{ClientPayload, ClientPayloadHint};
+    use crate::known_devices::{ClientPayload, ClientPayloadHint};
     use p256::NonZeroScalar;
     use rand::rngs::OsRng;
     use serde_bytes::ByteBuf;
 
-    fn known_device_connection_type(public_key: Vec<u8>) -> CableTunnelConnectionType {
-        CableTunnelConnectionType::KnownDevice {
+    fn known_device_connection_type(public_key: Vec<u8>) -> PxpTunnelConnectionType {
+        PxpTunnelConnectionType::KnownDevice {
             contact_id: "contact-id".to_string(),
             authenticator_public_key: public_key,
             client_payload: ClientPayload {
@@ -203,8 +203,8 @@ mod tests {
         }
     }
 
-    fn qr_connection_type() -> CableTunnelConnectionType {
-        CableTunnelConnectionType::QrCode {
+    fn qr_connection_type() -> PxpTunnelConnectionType {
+        PxpTunnelConnectionType::QrCode {
             routing_id: "aabbcc".to_string(),
             tunnel_id: "00112233445566778899aabbccddeeff".to_string(),
             private_key: NonZeroScalar::random(&mut OsRng),
@@ -281,10 +281,7 @@ mod tests {
         let public_key = vec![7u8; 65];
         let connection_type = known_device_connection_type(public_key.clone());
         assert_eq!(
-            known_device_id_to_forget(
-                &CableError::CableTunnel(CableTunnelError::Gone),
-                &connection_type
-            ),
+            known_device_id_to_forget(&PxpError::PxpTunnel(PxpTunnelError::Gone), &connection_type),
             Some(hex::encode(&public_key))
         );
     }
@@ -293,10 +290,7 @@ mod tests {
     fn gone_does_not_forget_qr_code() {
         let connection_type = qr_connection_type();
         assert_eq!(
-            known_device_id_to_forget(
-                &CableError::CableTunnel(CableTunnelError::Gone),
-                &connection_type
-            ),
+            known_device_id_to_forget(&PxpError::PxpTunnel(PxpTunnelError::Gone), &connection_type),
             None
         );
     }
@@ -305,7 +299,7 @@ mod tests {
     fn non_gone_error_does_not_forget_known_device() {
         let connection_type = known_device_connection_type(vec![7u8; 65]);
         assert_eq!(
-            known_device_id_to_forget(&CableError::ConnectionFailed, &connection_type),
+            known_device_id_to_forget(&PxpError::ConnectionFailed, &connection_type),
             None
         );
     }
@@ -314,11 +308,11 @@ mod tests {
     fn gone_status_maps_to_distinct_error() {
         assert!(matches!(
             tunnel_status_error(StatusCode::GONE),
-            CableError::CableTunnel(CableTunnelError::Gone)
+            PxpError::PxpTunnel(PxpTunnelError::Gone)
         ));
         assert!(matches!(
             tunnel_status_error(StatusCode::BAD_GATEWAY),
-            CableError::CableTunnel(CableTunnelError::UnexpectedStatus(502))
+            PxpError::PxpTunnel(PxpTunnelError::UnexpectedStatus(502))
         ));
     }
 }

@@ -2,12 +2,12 @@ use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
 
-use libwebauthn::transport::cable::is_available;
-use libwebauthn::transport::cable::known_devices::{
-    CableKnownDevice, ClientPayloadHint, EphemeralDeviceInfoStore,
+use libwebauthn::transport::hybrid::is_available;
+use libwebauthn::transport::hybrid::known_devices::{
+    ClientPayloadHint, EphemeralDeviceInfoStore, PxpKnownDevice,
 };
-use libwebauthn::transport::cable::qr_code_device::{
-    CableQrCodeDevice, CableTransports, QrCodeOperationHint,
+use libwebauthn::transport::hybrid::qr_code_device::{
+    PxpQrCodeDevice, PxpTransports, QrCodeOperationHint,
 };
 use qrcode::render::unicode;
 use qrcode::QrCode;
@@ -17,7 +17,7 @@ use libwebauthn::ops::webauthn::{
     GetAssertionRequest, JsonFormat, MakeCredentialRequest, OriginValidation, RelatedOrigins,
     RequestOrigin, RequestSettings, SystemPublicSuffixList, WebAuthnIDLResponse as _,
 };
-use libwebauthn::transport::cable::channel::CableChannel;
+use libwebauthn::transport::hybrid::channel::HybridChannel;
 use libwebauthn::transport::{Channel as _, ChannelSettings, Device};
 use libwebauthn::webauthn::WebAuthn;
 
@@ -74,10 +74,10 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
     );
 
     {
-        let mut device: CableQrCodeDevice = CableQrCodeDevice::new_persistent(
+        let mut device: PxpQrCodeDevice = PxpQrCodeDevice::new_persistent(
             QrCodeOperationHint::MakeCredential,
             device_info_store.clone(),
-            CableTransports::CloudAssistedOnly,
+            PxpTransports::CloudAssistedOnly,
         )?;
 
         println!("Created QR code, awaiting for advertisement.");
@@ -93,7 +93,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         println!("Channel established {:?}", channel);
 
         let state_recv = channel.get_ux_update_receiver();
-        tokio::spawn(common::handle_cable_updates(state_recv));
+        tokio::spawn(common::handle_hybrid_updates(state_recv));
 
         let request = MakeCredentialRequest::prepare(
             &request_origin,
@@ -124,7 +124,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
     let all_devices = device_info_store.list_all().await;
     if let Some((_, known_device_info)) = all_devices.first() {
         println!("Reconnecting state-assisted to known device...");
-        let mut known_device: CableKnownDevice = CableKnownDevice::new(
+        let mut known_device: PxpKnownDevice = PxpKnownDevice::new(
             ClientPayloadHint::GetAssertion,
             known_device_info,
             device_info_store.clone(),
@@ -139,10 +139,10 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         run_get_assertion(&mut channel, &request_origin, &psl).await?;
     } else {
         println!("No known devices (peer did not offer linking). Falling back to QR.");
-        let mut device: CableQrCodeDevice = CableQrCodeDevice::new_persistent(
+        let mut device: PxpQrCodeDevice = PxpQrCodeDevice::new_persistent(
             QrCodeOperationHint::GetAssertionRequest,
             device_info_store.clone(),
-            CableTransports::CloudAssistedOnly,
+            PxpTransports::CloudAssistedOnly,
         )?;
         let qr_code = QrCode::new(device.qr_code.to_string()).unwrap();
         let image = qr_code
@@ -160,12 +160,12 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
 }
 
 async fn run_get_assertion(
-    channel: &mut CableChannel,
+    channel: &mut HybridChannel,
     request_origin: &RequestOrigin,
     psl: &SystemPublicSuffixList,
 ) -> Result<(), Box<dyn Error>> {
     let state_recv = channel.get_ux_update_receiver();
-    tokio::spawn(common::handle_cable_updates(state_recv));
+    tokio::spawn(common::handle_hybrid_updates(state_recv));
 
     let request = GetAssertionRequest::prepare(
         request_origin,

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["libwebauthn", "libwebauthn-tests"]
+members = ["libwebauthn", "libwebauthn-pxp", "libwebauthn-tests"]
 
 # The trussed ecosystem is currently a bit messy, so we have to do some patching of the versions
 [patch.crates-io]
