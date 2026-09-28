@@ -1,11 +1,11 @@
 use aes::cipher::{generic_array::GenericArray, BlockDecrypt, KeyInit};
 use aes::{Aes256, Block};
 use hkdf::Hkdf;
+use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use tracing::{instrument, warn};
 
-use crate::pin::hmac_sha256;
-use crate::transport::cable::error::CableError;
+use crate::error::CableError;
 
 pub enum KeyPurpose {
     EIDKey = 1,
@@ -25,6 +25,13 @@ pub fn derive(
     hkdf.expand(&purpose32, &mut output)
         .map_err(|_| CableError::InvalidKey)?;
     Ok(output)
+}
+
+pub(crate) fn hmac_sha256(key: &[u8], message: &[u8]) -> Result<Vec<u8>, CableError> {
+    let mut hmac =
+        <Hmac<Sha256> as Mac>::new_from_slice(key).map_err(|_| CableError::InvalidKey)?;
+    hmac.update(message);
+    Ok(hmac.finalize().into_bytes().to_vec())
 }
 
 fn reserved_bits_are_zero(plaintext: &[u8]) -> bool {
@@ -74,9 +81,9 @@ pub fn trial_decrypt_advert(eid_key: &[u8], candidate_advert: &[u8]) -> Option<[
 #[cfg(test)]
 mod tests {
     use super::derive;
+    use super::hmac_sha256;
     use super::trial_decrypt_advert;
     use super::KeyPurpose;
-    use crate::pin::hmac_sha256;
     use aes::cipher::{generic_array::GenericArray, BlockEncrypt, KeyInit};
     use aes::{Aes256, Block};
 

@@ -9,7 +9,7 @@ use tokio::time::Instant;
 use tracing::{debug, error, warn};
 
 use super::data_channel::CableDataChannel;
-use crate::transport::cable::error::CableError;
+use crate::error::CableError;
 
 /// End-of-Message sequence terminating every L2CAP message (CRLF).
 const EOM: [u8; 2] = [0x0D, 0x0A];

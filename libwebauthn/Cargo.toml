@@ -93,16 +93,10 @@ cbc = { version = "0.1", features = ["alloc"] }
 hkdf = "0.12"
 zeroize = { version = "1.8", features = ["derive"] }
 text_io = "0.1"
-tungstenite = { version = "0.26.2" }
-tokio-tungstenite = { version = "0.26", features = [
-    "rustls-tls-native-roots",
-] }
-rustls = { version = "0.23.27", default-features = false, features = ["ring"] }
 tokio-stream = "0.1"
-snow = { version = "0.10", features = ["use-p256"] }
 ctap-types = { version = "0.4.0" }
 btleplug = "0.11.7"
-bluer = { version = "0.17", default-features = false, features = ["l2cap"] }
+libwebauthn-pxp = { version = "0.10.0", path = "../libwebauthn-pxp" }
 thiserror = "2.0.12"
 serde_json = "1.0.141"
 apdu-core = { version = "0.4.0", optional = true }

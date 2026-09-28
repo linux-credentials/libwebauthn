@@ -12,8 +12,8 @@ use url::Url;
 use super::error::CableTunnelError;
 use super::known_devices::CableKnownDeviceId;
 use super::protocol::CableTunnelConnectionType;
-use crate::proto::ctap2::cbor;
-use crate::transport::cable::error::CableError;
+use crate::cbor;
+use crate::error::CableError;
 
 const MAX_TUNNEL_REDIRECTS: usize = 5;
 
@@ -186,7 +186,7 @@ pub(crate) async fn connect(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transport::cable::known_devices::{ClientPayload, ClientPayloadHint};
+    use crate::known_devices::{ClientPayload, ClientPayloadHint};
     use p256::NonZeroScalar;
     use rand::rngs::OsRng;
     use serde_bytes::ByteBuf;

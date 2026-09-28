@@ -5,9 +5,7 @@ use std::sync::Arc;
 use tokio_tungstenite::tungstenite::http::header::InvalidHeaderValue;
 use tokio_tungstenite::tungstenite::Error as TungsteniteError;
 
-use crate::proto::ctap2::cbor::CborError;
-
-/// caBLE transport error. `Clone` because it rides the [`CableUpdate`] UX
+/// caBLE transport error. `Clone` because it rides the [`CableUpdate`](crate::CableUpdate) UX
 /// broadcast stream, which requires `Clone`; non-`Clone` native causes
 /// (`snow`, `io`, `tungstenite`, `serde_cbor`, `http`) are kept behind an
 /// `Arc` rather than flattened.
@@ -21,7 +19,7 @@ pub enum CableError {
     #[error("websocket error: {0}")]
     WebSocket(Arc<TungsteniteError>),
     #[error("cbor error: {0}")]
-    Cbor(Arc<CborError>),
+    Cbor(Arc<serde_cbor_2::Error>),
     #[error("url parse error: {0}")]
     Url(#[from] url::ParseError),
     #[error("uuid parse error: {0}")]
@@ -74,8 +72,8 @@ impl From<InvalidHeaderValue> for CableError {
     }
 }
 
-impl From<CborError> for CableError {
-    fn from(error: CborError) -> Self {
+impl From<serde_cbor_2::Error> for CableError {
+    fn from(error: serde_cbor_2::Error) -> Self {
         CableError::Cbor(Arc::new(error))
     }
 }

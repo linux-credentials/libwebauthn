@@ -3,8 +3,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use tokio::sync::{broadcast, mpsc, watch};
-use tokio::{task, time};
+use libwebauthn_pxp::TunnelHandle;
+use tokio::sync::broadcast;
+use tokio::time;
 use tracing::error;
 
 use crate::pin::persistent_token::PersistentTokenStore;
@@ -12,7 +13,6 @@ use crate::proto::{
     ctap1::apdu::{ApduRequest, ApduResponse},
     ctap2::cbor::{CborRequest, CborResponse},
 };
-use crate::transport::cable::error::CableError;
 use crate::transport::AuthTokenData;
 use crate::transport::{
     channel::ChannelStatus, device::SupportedProtocols, Channel, Ctap2AuthTokenStore,
@@ -21,18 +21,11 @@ use crate::webauthn::error::WebAuthnError;
 use crate::Transport;
 use crate::UvUpdate;
 
+use super::error::CableError;
 use super::known_devices::CableKnownDevice;
 use super::qr_code_device::CableQrCodeDevice;
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum ConnectionState {
-    /// Connection is being established (proximity check, connecting, authenticating)
-    Connecting,
-    /// Connection is fully established and ready for operations
-    Connected,
-    /// Connection has terminated
-    Terminated,
-}
+pub use libwebauthn_pxp::{CableUpdate, ConnectionState};
 
 #[derive(Debug)]
 pub enum CableChannelDevice<'d> {
@@ -42,44 +35,9 @@ pub enum CableChannelDevice<'d> {
 
 #[derive(Debug)]
 pub struct CableChannel {
-    pub(crate) handle_connection: task::JoinHandle<()>,
-    pub(crate) cbor_sender: mpsc::Sender<CborRequest>,
-    pub(crate) cbor_receiver: mpsc::Receiver<CborResponse>,
+    pub(crate) tunnel: TunnelHandle,
     pub(crate) ux_update_sender: broadcast::Sender<CableUxUpdate>,
-    pub(crate) connection_state_receiver: watch::Receiver<ConnectionState>,
     pub(crate) persistent_token_store: Option<Arc<dyn PersistentTokenStore>>,
-}
-
-impl CableChannel {
-    async fn wait_for_connection(&self) -> Result<(), CableError> {
-        let mut rx = self.connection_state_receiver.clone();
-
-        // If already connected, return immediately
-        if *rx.borrow() == ConnectionState::Connected {
-            return Ok(());
-        }
-
-        // If already terminated, return error immediately. Mirror the
-        // post-`changed()` branch below so that an early-terminated channel
-        // surfaces the same variant as one that terminates while we wait;
-        // the caller can't observe the timing difference and the asymmetry
-        // was accidental.
-        if *rx.borrow() == ConnectionState::Terminated {
-            return Err(CableError::ConnectionFailed);
-        }
-
-        // Wait for state change
-        while rx.changed().await.is_ok() {
-            match *rx.borrow() {
-                ConnectionState::Connected => return Ok(()),
-                ConnectionState::Terminated => return Err(CableError::ConnectionFailed),
-                ConnectionState::Connecting => continue,
-            }
-        }
-
-        // If the sender was dropped, consider it a failure
-        Err(CableError::ConnectionLost)
-    }
 }
 
 impl Display for CableChannel {
@@ -88,30 +46,10 @@ impl Display for CableChannel {
     }
 }
 
-impl Drop for CableChannel {
-    fn drop(&mut self) {
-        self.handle_connection.abort();
-    }
-}
-
 #[derive(Debug, Clone)]
 pub enum CableUxUpdate {
     UvUpdate(UvUpdate),
     CableUpdate(CableUpdate),
-}
-
-#[derive(Debug, Clone)]
-pub enum CableUpdate {
-    /// Waiting for proximity check user interaction (eg. scan a QR code, or confirm on the device).
-    ProximityCheck,
-    /// Connecting to the tunnel server.
-    Connecting,
-    /// Connected to the tunnel server, authenticating the channel.
-    Authenticating,
-    /// Connected to the authenticator device via the tunnel server.
-    Connected,
-    /// The connection to the authenticator device has failed.
-    Error(CableError),
 }
 
 impl From<UvUpdate> for CableUxUpdate {
@@ -134,7 +72,7 @@ impl Channel for CableChannel {
     }
 
     async fn status(&self) -> ChannelStatus {
-        match self.handle_connection.is_finished() {
+        match self.tunnel.task.is_finished() {
             true => ChannelStatus::Closed,
             false => ChannelStatus::Ready,
         }
@@ -164,10 +102,11 @@ impl Channel for CableChannel {
         timeout: Duration,
     ) -> Result<(), CableError> {
         // First, wait for connection to be established (no timeout for handshake)
-        self.wait_for_connection().await?;
+        self.tunnel.wait_for_connection().await?;
 
         // Now apply timeout only to the actual CBOR operation
-        match time::timeout(timeout, self.cbor_sender.send(request.clone())).await {
+        let frame = request.ctap_hid_data();
+        match time::timeout(timeout, self.tunnel.ctap_sender.send(frame)).await {
             Ok(Ok(_)) => Ok(()),
             Ok(Err(error)) => {
                 error!(%error, "CBOR request send failure");
@@ -182,11 +121,14 @@ impl Channel for CableChannel {
 
     async fn cbor_recv(&mut self, timeout: Duration) -> Result<CborResponse, CableError> {
         // First, wait for connection to be established (no timeout for handshake)
-        self.wait_for_connection().await?;
+        self.tunnel.wait_for_connection().await?;
 
         // Now apply timeout only to the actual CBOR operation
-        match time::timeout(timeout, self.cbor_receiver.recv()).await {
-            Ok(Some(response)) => Ok(response),
+        match time::timeout(timeout, self.tunnel.ctap_receiver.recv()).await {
+            Ok(Some(frame)) => CborResponse::try_from(&frame).map_err(|e| {
+                error!(%e, "Malformed CTAP response frame");
+                CableError::InvalidFraming
+            }),
             Ok(None) => Err(CableError::TransportUnavailable),
             Err(elapsed) => {
                 error!({ %elapsed, ?timeout }, "CBOR response recv timeout");
