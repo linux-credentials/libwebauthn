@@ -6,7 +6,7 @@ use crate::connection_stages::{
     connection_stage, handshake_stage, proximity_check_stage, ConnectionInput, HandshakeInput,
     HandshakeOutput, MpscUxUpdateSender, ProximityCheckInput,
 };
-use crate::error::CableError;
+use crate::error::PxpError;
 
 use async_trait::async_trait;
 use futures::lock::Mutex;
@@ -15,20 +15,20 @@ use serde_bytes::ByteBuf;
 use serde_indexed::SerializeIndexed;
 use tracing::{debug, instrument, trace};
 
-use super::protocol::CableLinkingInfo;
+use super::protocol::PxpLinkingInfo;
 
 #[async_trait]
-pub trait CableKnownDeviceInfoStore: Debug + Send + Sync {
+pub trait PxpKnownDeviceInfoStore: Debug + Send + Sync {
     /// Called whenever a known device should be added or updated.
-    async fn put_known_device(&self, device_id: &CableKnownDeviceId, device: &CableKnownDeviceInfo);
+    async fn put_known_device(&self, device_id: &PxpKnownDeviceId, device: &PxpKnownDeviceInfo);
     /// Called whenever a known device becomes permanently unavailable.
-    async fn delete_known_device(&self, device_id: &CableKnownDeviceId);
+    async fn delete_known_device(&self, device_id: &PxpKnownDeviceId);
 }
 
 /// An in-memory store for testing purposes.
 #[derive(Debug, Default, Clone)]
 pub struct EphemeralDeviceInfoStore {
-    pub known_devices: Arc<Mutex<HashMap<CableKnownDeviceId, CableKnownDeviceInfo>>>,
+    pub known_devices: Arc<Mutex<HashMap<PxpKnownDeviceId, PxpKnownDeviceInfo>>>,
 }
 
 impl EphemeralDeviceInfoStore {
@@ -38,7 +38,7 @@ impl EphemeralDeviceInfoStore {
         }
     }
 
-    pub async fn list_all(&self) -> Vec<(CableKnownDeviceId, CableKnownDeviceInfo)> {
+    pub async fn list_all(&self) -> Vec<(PxpKnownDeviceId, PxpKnownDeviceInfo)> {
         debug!("Listing all known devices");
         let known_devices = self.known_devices.lock().await;
         known_devices
@@ -51,29 +51,25 @@ impl EphemeralDeviceInfoStore {
 unsafe impl Send for EphemeralDeviceInfoStore {}
 
 #[async_trait]
-impl CableKnownDeviceInfoStore for EphemeralDeviceInfoStore {
-    async fn put_known_device(
-        &self,
-        device_id: &CableKnownDeviceId,
-        device: &CableKnownDeviceInfo,
-    ) {
+impl PxpKnownDeviceInfoStore for EphemeralDeviceInfoStore {
+    async fn put_known_device(&self, device_id: &PxpKnownDeviceId, device: &PxpKnownDeviceInfo) {
         debug!(?device_id, "Inserting or updating known device");
         trace!(?device);
         let mut known_devices = self.known_devices.lock().await;
         known_devices.insert(device_id.clone(), device.clone());
     }
 
-    async fn delete_known_device(&self, device_id: &CableKnownDeviceId) {
+    async fn delete_known_device(&self, device_id: &PxpKnownDeviceId) {
         debug!(?device_id, "Deleting known device");
         let mut known_devices = self.known_devices.lock().await;
         known_devices.remove(device_id);
     }
 }
 
-pub type CableKnownDeviceId = String;
+pub type PxpKnownDeviceId = String;
 
 #[derive(Debug, Clone)]
-pub struct CableKnownDeviceInfo {
+pub struct PxpKnownDeviceInfo {
     pub contact_id: Vec<u8>,
     pub link_id: [u8; 8],
     pub link_secret: [u8; 32],
@@ -82,34 +78,34 @@ pub struct CableKnownDeviceInfo {
     pub tunnel_domain: String,
 }
 
-impl From<&CableLinkingInfo> for CableKnownDeviceId {
-    fn from(linking_info: &CableLinkingInfo) -> Self {
+impl From<&PxpLinkingInfo> for PxpKnownDeviceId {
+    fn from(linking_info: &PxpLinkingInfo) -> Self {
         hex::encode(linking_info.authenticator_public_key.as_slice())
     }
 }
 
-impl CableKnownDeviceInfo {
+impl PxpKnownDeviceInfo {
     pub(crate) fn new(
         tunnel_domain: &str,
-        linking_info: &CableLinkingInfo,
-    ) -> Result<Self, CableError> {
+        linking_info: &PxpLinkingInfo,
+    ) -> Result<Self, PxpError> {
         let info = Self {
             contact_id: linking_info.contact_id.to_vec(),
             link_id: linking_info
                 .link_id
                 .clone()
                 .try_into()
-                .map_err(|_| CableError::InvalidFraming)?,
+                .map_err(|_| PxpError::InvalidFraming)?,
             link_secret: linking_info
                 .link_secret
                 .clone()
                 .try_into()
-                .map_err(|_| CableError::InvalidFraming)?,
+                .map_err(|_| PxpError::InvalidFraming)?,
             public_key: linking_info
                 .authenticator_public_key
                 .clone()
                 .try_into()
-                .map_err(|_| CableError::InvalidFraming)?,
+                .map_err(|_| PxpError::InvalidFraming)?,
             name: linking_info.authenticator_name.clone(),
             tunnel_domain: tunnel_domain.to_string(),
         };
@@ -118,13 +114,13 @@ impl CableKnownDeviceInfo {
 }
 
 #[derive(Debug, Clone)]
-pub struct CableKnownDevice {
+pub struct PxpKnownDevice {
     pub hint: ClientPayloadHint,
-    pub device_info: CableKnownDeviceInfo,
-    pub(crate) store: Arc<dyn CableKnownDeviceInfoStore>,
+    pub device_info: PxpKnownDeviceInfo,
+    pub(crate) store: Arc<dyn PxpKnownDeviceInfoStore>,
 }
 
-impl Display for CableKnownDevice {
+impl Display for PxpKnownDevice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -135,16 +131,16 @@ impl Display for CableKnownDevice {
     }
 }
 
-unsafe impl Send for CableKnownDevice {}
-unsafe impl Sync for CableKnownDevice {}
+unsafe impl Send for PxpKnownDevice {}
+unsafe impl Sync for PxpKnownDevice {}
 
-impl CableKnownDevice {
+impl PxpKnownDevice {
     pub async fn new(
         hint: ClientPayloadHint,
-        device_info: &CableKnownDeviceInfo,
-        store: Arc<dyn CableKnownDeviceInfoStore>,
-    ) -> Result<CableKnownDevice, CableError> {
-        let device = CableKnownDevice {
+        device_info: &PxpKnownDeviceInfo,
+        store: Arc<dyn PxpKnownDeviceInfoStore>,
+    ) -> Result<PxpKnownDevice, PxpError> {
+        let device = PxpKnownDevice {
             hint,
             device_info: device_info.clone(),
             store,
@@ -154,9 +150,9 @@ impl CableKnownDevice {
 
     #[instrument(skip_all, err)]
     pub(crate) async fn connection(
-        known_device: &CableKnownDevice,
+        known_device: &PxpKnownDevice,
         ux_sender: &MpscUxUpdateSender,
-    ) -> Result<HandshakeOutput, CableError> {
+    ) -> Result<HandshakeOutput, PxpError> {
         let client_nonce = rand::random::<ClientNonce>();
 
         // Stage 1: Connection (no proximity check needed for known devices)

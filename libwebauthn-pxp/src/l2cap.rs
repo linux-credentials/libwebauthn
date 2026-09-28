@@ -1,4 +1,4 @@
-//! [`CableDataChannel`] over a direct BLE L2CAP connection-oriented channel.
+//! [`PxpDataChannel`] over a direct BLE L2CAP connection-oriented channel.
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -8,8 +8,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::time::Instant;
 use tracing::{debug, error, warn};
 
-use super::data_channel::CableDataChannel;
-use crate::error::CableError;
+use super::data_channel::PxpDataChannel;
+use crate::error::PxpError;
 
 /// Size of the big-endian length prefix preceding every L2CAP message payload.
 const LENGTH_PREFIX_LEN: usize = 4;
@@ -20,7 +20,7 @@ const LENGTH_PREFIX_LEN: usize = 4;
 const MTU_READY_TIMEOUT: Duration = Duration::from_secs(2);
 const MTU_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
-/// [`CableDataChannel`] over the insecure L2CAP CoC socket the CMHD opens for CTAP 2.3 hybrid.
+/// [`PxpDataChannel`] over the insecure L2CAP CoC socket the CMHD opens for CTAP 2.3 hybrid.
 /// Every message is prefixed with its 4-byte big-endian payload length per the
 /// CTAP 2.3 hybrid draft.
 pub(crate) struct L2capDataChannel {
@@ -41,7 +41,7 @@ impl L2capDataChannel {
         addr: BDAddr,
         addr_type: Option<AddressType>,
         psm: u16,
-    ) -> Result<Self, CableError> {
+    ) -> Result<Self, PxpError> {
         let (addr, addr_type) = bdaddr_to_bluer(addr, addr_type)?;
 
         let stream =
@@ -49,7 +49,7 @@ impl L2capDataChannel {
                 .await
                 .map_err(|e| {
                     error!(?e, %addr, psm, "Failed to connect L2CAP CoC");
-                    CableError::from(e)
+                    PxpError::from(e)
                 })?;
 
         await_send_mtu(&stream).await;
@@ -86,14 +86,14 @@ async fn await_send_mtu(stream: &bluer::l2cap::Stream) {
 }
 
 #[async_trait]
-impl CableDataChannel for L2capDataChannel {
-    async fn send(&mut self, message: &[u8]) -> Result<(), CableError> {
+impl PxpDataChannel for L2capDataChannel {
+    async fn send(&mut self, message: &[u8]) -> Result<(), PxpError> {
         let len = u32::try_from(message.len()).map_err(|_| {
             error!(
                 len = message.len(),
                 "L2CAP message too large for length prefix"
             );
-            CableError::InvalidFraming
+            PxpError::InvalidFraming
         })?;
         // Single write so the prefix and payload aren't split into separate SDUs.
         let mut frame = Vec::with_capacity(LENGTH_PREFIX_LEN + message.len());
@@ -101,12 +101,12 @@ impl CableDataChannel for L2capDataChannel {
         frame.extend_from_slice(message);
         self.stream.write_all(&frame).await.map_err(|e| {
             error!(?e, "Failed to write L2CAP message");
-            CableError::from(e)
+            PxpError::from(e)
         })?;
         Ok(())
     }
 
-    async fn recv(&mut self) -> Result<Option<Vec<u8>>, CableError> {
+    async fn recv(&mut self) -> Result<Option<Vec<u8>>, PxpError> {
         loop {
             if let Some(message) = split_next_message(&mut self.read_buf) {
                 return Ok(Some(message));
@@ -129,7 +129,7 @@ impl CableDataChannel for L2capDataChannel {
                 }
                 Err(e) => {
                     error!(?e, "Failed to read L2CAP message");
-                    return Err(CableError::from(e));
+                    return Err(PxpError::from(e));
                 }
             };
             if n == 0 {
@@ -138,7 +138,7 @@ impl CableDataChannel for L2capDataChannel {
                     return Ok(None);
                 }
                 error!(buffered = self.read_buf.len(), "L2CAP closed mid-message");
-                return Err(CableError::ConnectionLost);
+                return Err(PxpError::ConnectionLost);
             }
             self.read_buf
                 .extend_from_slice(chunk.get(..n).unwrap_or(&[]));
@@ -163,10 +163,10 @@ fn split_next_message(buf: &mut Vec<u8>) -> Option<Vec<u8>> {
 fn bdaddr_to_bluer(
     addr: BDAddr,
     addr_type: Option<AddressType>,
-) -> Result<(bluer::Address, bluer::AddressType), CableError> {
+) -> Result<(bluer::Address, bluer::AddressType), PxpError> {
     let addr = bluer::Address::from_str(&addr.to_string()).map_err(|e| {
         error!(?e, "Failed to parse Bluetooth address");
-        CableError::InvalidEndpoint
+        PxpError::InvalidEndpoint
     })?;
     let addr_type = match addr_type {
         Some(AddressType::Public) => bluer::AddressType::LePublic,

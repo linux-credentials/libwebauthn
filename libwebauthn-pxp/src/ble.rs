@@ -9,20 +9,20 @@ use futures::{Stream, StreamExt};
 use tracing::{debug, instrument, trace, warn, Level};
 use uuid::Uuid;
 
-use crate::error::CableError;
+use crate::error::PxpError;
 
 /// TODO(#86): Support multiple adapters.
-async fn get_adapter() -> Result<Adapter, CableError> {
+async fn get_adapter() -> Result<Adapter, PxpError> {
     let manager = Manager::new()
         .await
-        .or(Err(CableError::TransportUnavailable))?;
+        .or(Err(PxpError::TransportUnavailable))?;
     manager
         .adapters()
         .await
-        .or(Err(CableError::TransportUnavailable))?
+        .or(Err(PxpError::TransportUnavailable))?
         .into_iter()
         .next()
-        .ok_or(CableError::TransportUnavailable)
+        .ok_or(PxpError::TransportUnavailable)
 }
 
 async fn on_peripheral_service_data(
@@ -48,17 +48,17 @@ async fn on_peripheral_service_data(
 #[instrument(level = Level::DEBUG, skip_all)]
 pub(crate) async fn start_discovery_for_service_data(
     uuids: &[Uuid],
-) -> Result<(Adapter, impl Stream<Item = (Peripheral, Vec<u8>)> + use<'_>), CableError> {
+) -> Result<(Adapter, impl Stream<Item = (Peripheral, Vec<u8>)> + use<'_>), PxpError> {
     let adapter = get_adapter().await?;
     let events = adapter
         .events()
         .await
-        .or(Err(CableError::TransportUnavailable))?;
+        .or(Err(PxpError::TransportUnavailable))?;
 
     adapter
         .start_scan(ScanFilter::default())
         .await
-        .or(Err(CableError::TransportUnavailable))?;
+        .or(Err(PxpError::TransportUnavailable))?;
 
     let scan_adapter = adapter.clone();
     let stream = events.filter_map(move |event| {
@@ -78,9 +78,9 @@ pub(crate) async fn start_discovery_for_service_data(
 
 pub(crate) async fn get_properties(
     peripheral: &Peripheral,
-) -> Result<Option<PeripheralProperties>, CableError> {
+) -> Result<Option<PeripheralProperties>, PxpError> {
     peripheral
         .properties()
         .await
-        .or(Err(CableError::TransportUnavailable))
+        .or(Err(PxpError::TransportUnavailable))
 }

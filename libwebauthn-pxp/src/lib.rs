@@ -38,6 +38,6 @@ pub mod qr_code_device;
 pub mod tunnel;
 
 pub use connection::{
-    connect, CableUpdate, ConnectTarget, ConnectionState, TunnelHandle, UpdateSink,
+    connect, ConnectTarget, ConnectionState, PxpUpdate, TunnelHandle, UpdateSink,
 };
 pub use digit_encode::digit_encode;

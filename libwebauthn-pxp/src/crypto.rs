@@ -5,7 +5,7 @@ use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use tracing::{instrument, warn};
 
-use crate::error::CableError;
+use crate::error::PxpError;
 
 pub enum KeyPurpose {
     EIDKey = 1,
@@ -17,19 +17,18 @@ pub fn derive(
     secret: &[u8],
     salt: Option<&[u8]>,
     purpose: KeyPurpose,
-) -> Result<[u8; 64], CableError> {
+) -> Result<[u8; 64], PxpError> {
     let purpose32 = [purpose as u8, 0, 0, 0];
 
     let hkdf = Hkdf::<Sha256>::new(salt, secret);
     let mut output = [0u8; 64];
     hkdf.expand(&purpose32, &mut output)
-        .map_err(|_| CableError::InvalidKey)?;
+        .map_err(|_| PxpError::InvalidKey)?;
     Ok(output)
 }
 
-pub(crate) fn hmac_sha256(key: &[u8], message: &[u8]) -> Result<Vec<u8>, CableError> {
-    let mut hmac =
-        <Hmac<Sha256> as Mac>::new_from_slice(key).map_err(|_| CableError::InvalidKey)?;
+pub(crate) fn hmac_sha256(key: &[u8], message: &[u8]) -> Result<Vec<u8>, PxpError> {
+    let mut hmac = <Hmac<Sha256> as Mac>::new_from_slice(key).map_err(|_| PxpError::InvalidKey)?;
     hmac.update(message);
     Ok(hmac.finalize().into_bytes().to_vec())
 }
