@@ -1,10 +1,10 @@
-use ::btleplug::api::{AddressType, BDAddr};
+use ::btleplug::api::{AddressType, BDAddr, PeripheralProperties};
 use async_trait::async_trait;
-use tokio::sync::{broadcast, mpsc, watch};
+use tokio::sync::{mpsc, watch};
 use tracing::{debug, error, info, instrument, trace, warn};
 
 use super::advertisement::{await_advertisement, DecryptedAdvert};
-use super::channel::{CableUpdate, CableUxUpdate, ConnectionState};
+use super::connection::{CableUpdate, ConnectionState, UpdateSink};
 use super::crypto::{derive, KeyPurpose};
 use super::data_channel::{CableDataChannel, WebSocketDataChannel};
 use super::known_devices::{CableKnownDevice, CableKnownDeviceInfoStore, ClientNonce};
@@ -12,9 +12,7 @@ use super::l2cap::L2capDataChannel;
 use super::protocol::{self, CableTunnelConnectionType, TunnelNoiseState};
 use super::qr_code_device::CableQrCodeDevice;
 use super::tunnel;
-use crate::proto::ctap2::cbor::{CborRequest, CborResponse};
-use crate::transport::ble::btleplug::FidoDevice;
-use crate::transport::cable::error::CableError;
+use crate::error::CableError;
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -47,7 +45,7 @@ impl ProximityCheckInput {
 
 #[derive(Debug)]
 pub(crate) struct ProximityCheckOutput {
-    pub device: FidoDevice,
+    pub device: PeripheralProperties,
     pub advert: DecryptedAdvert,
 }
 
@@ -99,8 +97,8 @@ impl ConnectionInput {
             .as_ref()
             .and_then(|suffix| suffix.ble_psm())
             .map(|psm| BleConnectionParams {
-                address: proximity_output.device.properties.address,
-                address_type: proximity_output.device.properties.address_type,
+                address: proximity_output.device.address,
+                address_type: proximity_output.device.address_type,
                 psm,
             });
 
@@ -199,16 +197,16 @@ pub(crate) struct TunnelConnectionInput {
     pub known_device_store: Option<Arc<dyn CableKnownDeviceInfoStore>>,
     pub data_channel: Box<dyn CableDataChannel>,
     pub noise_state: TunnelNoiseState,
-    pub cbor_tx_recv: mpsc::Receiver<CborRequest>,
-    pub cbor_rx_send: mpsc::Sender<CborResponse>,
+    pub ctap_tx_recv: mpsc::Receiver<Vec<u8>>,
+    pub ctap_rx_send: mpsc::Sender<Vec<u8>>,
 }
 
 impl TunnelConnectionInput {
     pub fn from_handshake_output(
         handshake_output: HandshakeOutput,
         known_device_store: Option<Arc<dyn CableKnownDeviceInfoStore>>,
-        cbor_tx_recv: mpsc::Receiver<CborRequest>,
-        cbor_rx_send: mpsc::Sender<CborResponse>,
+        ctap_tx_recv: mpsc::Receiver<Vec<u8>>,
+        ctap_rx_send: mpsc::Sender<Vec<u8>>,
     ) -> Self {
         Self {
             connection_type: handshake_output.connection_type,
@@ -216,27 +214,27 @@ impl TunnelConnectionInput {
             known_device_store,
             data_channel: handshake_output.data_channel,
             noise_state: handshake_output.noise_state,
-            cbor_tx_recv,
-            cbor_rx_send,
+            ctap_tx_recv,
+            ctap_rx_send,
         }
     }
 }
 
 #[async_trait]
 pub(crate) trait UxUpdateSender: Send + Sync {
-    async fn send_update(&self, update: CableUxUpdate);
+    async fn send_update(&self, update: CableUpdate);
     async fn send_error(&self, error: CableError);
     async fn set_connection_state(&self, state: ConnectionState);
 }
 
 pub(crate) struct MpscUxUpdateSender {
-    sender: broadcast::Sender<CableUxUpdate>,
+    sender: Box<dyn UpdateSink>,
     connection_state_tx: watch::Sender<ConnectionState>,
 }
 
 impl MpscUxUpdateSender {
     pub fn new(
-        sender: broadcast::Sender<CableUxUpdate>,
+        sender: Box<dyn UpdateSink>,
         connection_state_tx: watch::Sender<ConnectionState>,
     ) -> Self {
         Self {
@@ -249,16 +247,13 @@ impl MpscUxUpdateSender {
 #[async_trait]
 impl UxUpdateSender for MpscUxUpdateSender {
     #[instrument(skip(self))]
-    async fn send_update(&self, update: CableUxUpdate) {
+    async fn send_update(&self, update: CableUpdate) {
         trace!("Sending UX update");
-        if let Err(err) = self.sender.send(update) {
-            warn!(?err, "No receivers found for UX update.");
-        }
+        self.sender.send_update(update);
     }
 
     async fn send_error(&self, error: CableError) {
-        self.send_update(CableUxUpdate::CableUpdate(CableUpdate::Error(error)))
-            .await;
+        self.send_update(CableUpdate::Error(error)).await;
         let _ = self.connection_state_tx.send(ConnectionState::Terminated);
     }
 
@@ -274,9 +269,7 @@ pub(crate) async fn proximity_check_stage(
 ) -> Result<ProximityCheckOutput, CableError> {
     debug!("Starting proximity check stage");
 
-    ux_sender
-        .send_update(CableUxUpdate::CableUpdate(CableUpdate::ProximityCheck))
-        .await;
+    ux_sender.send_update(CableUpdate::ProximityCheck).await;
 
     let (device, advert) = await_advertisement(&input.eid_key).await?;
 
@@ -291,9 +284,7 @@ pub(crate) async fn connection_stage(
 ) -> Result<ConnectionOutput, CableError> {
     debug!(?input.tunnel_domain, "Starting connection stage");
 
-    ux_sender
-        .send_update(CableUxUpdate::CableUpdate(CableUpdate::Connecting))
-        .await;
+    ux_sender.send_update(CableUpdate::Connecting).await;
 
     let data_channel = connect_data_channel(&input).await?;
 
@@ -354,18 +345,14 @@ pub(crate) async fn handshake_stage(
 ) -> Result<HandshakeOutput, CableError> {
     debug!("Starting handshake stage");
 
-    ux_sender
-        .send_update(CableUxUpdate::CableUpdate(CableUpdate::Authenticating))
-        .await;
+    ux_sender.send_update(CableUpdate::Authenticating).await;
 
     let mut data_channel = input.data_channel;
     let noise_state =
         protocol::do_handshake(&mut *data_channel, input.psk, &input.connection_type).await?;
 
     debug!("Handshake stage completed successfully");
-    ux_sender
-        .send_update(CableUxUpdate::CableUpdate(CableUpdate::Connected))
-        .await;
+    ux_sender.send_update(CableUpdate::Connected).await;
 
     ux_sender
         .set_connection_state(ConnectionState::Connected)

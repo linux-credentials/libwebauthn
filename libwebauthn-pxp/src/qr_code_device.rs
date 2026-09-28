@@ -2,7 +2,6 @@ use std::fmt::{Debug, Display};
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use async_trait::async_trait;
 use p256::elliptic_curve::sec1::ToEncodedPoint;
 use p256::{NonZeroScalar, SecretKey};
 use rand::rngs::OsRng;
@@ -11,24 +10,17 @@ use serde::Serialize;
 use serde_bytes::ByteArray;
 use serde_indexed::SerializeIndexed;
 use serde_repr::Serialize_repr;
-use tokio::sync::{broadcast, mpsc, watch};
-use tokio::task;
 use tracing::instrument;
 
 use super::connection_stages::{
     connection_stage, handshake_stage, proximity_check_stage, ConnectionInput, HandshakeInput,
-    MpscUxUpdateSender, ProximityCheckInput, TunnelConnectionInput, UxUpdateSender,
+    MpscUxUpdateSender, ProximityCheckInput,
 };
 use super::known_devices::CableKnownDeviceInfoStore;
-use super::protocol;
 use super::tunnel::KNOWN_TUNNEL_DOMAINS;
-use super::{channel::CableChannel, channel::ConnectionState, Cable};
-use crate::proto::ctap2::cbor;
-use crate::transport::cable::digit_encode;
-use crate::transport::cable::error::CableError;
-use crate::transport::ChannelSettings;
-use crate::transport::Device;
-use crate::webauthn::error::WebAuthnError;
+use crate::cbor;
+use crate::digit_encode;
+use crate::error::CableError;
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq)]
 pub enum QrCodeOperationHint {
@@ -211,7 +203,7 @@ impl CableQrCodeDevice {
     }
 
     #[instrument(skip_all, err)]
-    async fn connection(
+    pub(crate) async fn connection(
         qr_device: &CableQrCodeDevice,
         ux_sender: &MpscUxUpdateSender,
     ) -> Result<super::connection_stages::HandshakeOutput, CableError> {
@@ -236,68 +228,6 @@ impl Display for CableQrCodeDevice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "CableQrCodeDevice")
     }
-}
-
-#[async_trait]
-impl<'d> Device<'d, Cable, CableChannel> for CableQrCodeDevice {
-    async fn channel(
-        &'d mut self,
-        settings: ChannelSettings,
-    ) -> Result<CableChannel, WebAuthnError<CableError>> {
-        let (ux_update_sender, _) = broadcast::channel(16);
-        let (cbor_tx_send, cbor_tx_recv) = mpsc::channel(16);
-        let (cbor_rx_send, cbor_rx_recv) = mpsc::channel(16);
-        let (connection_state_sender, connection_state_receiver) =
-            watch::channel(ConnectionState::Connecting);
-
-        let ux_update_sender_clone = ux_update_sender.clone();
-        let qr_device = self.clone();
-
-        let handle_connection = task::spawn(async move {
-            let ux_sender =
-                MpscUxUpdateSender::new(ux_update_sender_clone.clone(), connection_state_sender);
-
-            let handshake_output = match Self::connection(&qr_device, &ux_sender).await {
-                Ok(handshake_output) => handshake_output,
-                Err(e) => {
-                    ux_sender.send_error(e).await;
-                    return;
-                }
-            };
-
-            let tunnel_input = TunnelConnectionInput::from_handshake_output(
-                handshake_output,
-                qr_device.store,
-                cbor_tx_recv,
-                cbor_rx_send,
-            );
-            match protocol::connection(tunnel_input).await {
-                Ok(()) => {
-                    ux_sender
-                        .set_connection_state(ConnectionState::Terminated)
-                        .await;
-                }
-                Err(e) => {
-                    // send_error already transitions to Terminated.
-                    ux_sender.send_error(e).await;
-                }
-            }
-        });
-
-        Ok(CableChannel {
-            handle_connection,
-            cbor_sender: cbor_tx_send,
-            cbor_receiver: cbor_rx_recv,
-            ux_update_sender,
-            connection_state_receiver,
-            persistent_token_store: settings.persistent_token_store,
-        })
-    }
-
-    // #[instrument(skip_all)]
-    // async fn supported_protocols(&mut self) -> Result<SupportedProtocols, Error> {
-    //     Ok(SupportedProtocols::fido2_only())
-    // }
 }
 
 #[cfg(test)]

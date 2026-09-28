@@ -9,7 +9,7 @@ use tokio::time::Instant;
 use tracing::{debug, error, warn};
 
 use super::data_channel::CableDataChannel;
-use crate::transport::cable::error::CableError;
+use crate::error::CableError;
 
 /// Size of the big-endian length prefix preceding every L2CAP message payload.
 const LENGTH_PREFIX_LEN: usize = 4;

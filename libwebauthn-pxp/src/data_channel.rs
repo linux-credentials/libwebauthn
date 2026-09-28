@@ -6,7 +6,7 @@ use tokio_tungstenite::tungstenite::{Error, Message};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use tracing::error;
 
-use crate::transport::cable::error::CableError;
+use crate::error::CableError;
 
 /// A bidirectional channel carrying discrete protocol messages: the Noise
 /// handshake messages, then the encrypted CTAP frames. caBLE rides this over a

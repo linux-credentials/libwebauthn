@@ -18,11 +18,11 @@ use tracing::{debug, error, trace, warn};
 use super::data_channel::CableDataChannel;
 use super::known_devices::ClientPayload;
 use super::known_devices::{CableKnownDeviceInfo, CableKnownDeviceInfoStore};
-use crate::proto::ctap2::cbor::{self, CborRequest, CborResponse, Value};
-use crate::proto::ctap2::{Ctap2CommandCode, Ctap2GetInfoResponse};
-use crate::transport::cable::connection_stages::TunnelConnectionInput;
-use crate::transport::cable::error::CableError;
-use crate::transport::cable::known_devices::CableKnownDeviceId;
+use crate::cbor::{self, Value};
+use crate::connection_stages::TunnelConnectionInput;
+use crate::error::CableError;
+use crate::get_info::GetInfoResponse;
+use crate::known_devices::CableKnownDeviceId;
 
 const P256_X962_LENGTH: usize = 65;
 const MAX_CBOR_SIZE: usize = 1024 * 1024;
@@ -30,6 +30,12 @@ const PADDING_GRANULARITY: usize = 32;
 
 const CABLE_PROLOGUE_STATE_ASSISTED: &[u8] = &[0u8];
 const CABLE_PROLOGUE_QR_INITIATED: &[u8] = &[1u8];
+
+/// CTAP2 authenticatorGetInfo command byte. The only CTAP fact PXP relies on:
+/// the post-handshake message already carries the getInfo response.
+const CTAP2_GET_INFO: u8 = 0x04;
+/// CTAP2 success status byte, prefixed to the cached getInfo response.
+const CTAP2_OK: u8 = 0x00;
 
 #[derive(Debug, Clone)]
 struct CableTunnelMessage {
@@ -83,9 +89,27 @@ struct CableInitialMessage {
     #[serde(index = 0x01)]
     pub info: ByteBuf,
 
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "SupportedFeatures::is_default")]
     #[serde(index = 0x03)]
-    pub _supported_features: Option<Vec<String>>,
+    pub supported_features: SupportedFeatures,
+}
+
+/// Post-handshake message key 3. Its absence MUST be treated as `["ctap"]`.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(transparent)]
+struct SupportedFeatures(Vec<String>);
+
+impl Default for SupportedFeatures {
+    fn default() -> Self {
+        Self(vec!["ctap".to_string()])
+    }
+}
+
+impl SupportedFeatures {
+    #[allow(dead_code)]
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -307,7 +331,7 @@ pub(crate) async fn connection(mut input: TunnelConnectionInput) -> Result<(), C
                             &input.tunnel_domain,
                             &input.known_device_store,
                             message,
-                            &input.cbor_rx_send,
+                            &input.ctap_rx_send,
                             &mut input.noise_state,
                         )
                         .await
@@ -330,19 +354,20 @@ pub(crate) async fn connection(mut input: TunnelConnectionInput) -> Result<(), C
                     }
                 }
             }
-            Some(request) = input.cbor_tx_recv.recv() => {
-                match request.command {
+            Some(request) = input.ctap_tx_recv.recv() => {
+                match request.first() {
                     // Optimisation: respond to GetInfo requests immediately with the cached response
-                    Ctap2CommandCode::AuthenticatorGetInfo => {
+                    Some(&CTAP2_GET_INFO) => {
                         debug!("Responding to GetInfo request with cached response");
-                        let response = CborResponse::new_success_from_slice(&get_info_response_serialized);
-                        if let Err(e) = input.cbor_rx_send.send(response).await {
-                            error!(?e, "CBOR response receiver dropped");
+                        let mut response = vec![CTAP2_OK];
+                        response.extend_from_slice(&get_info_response_serialized);
+                        if let Err(e) = input.ctap_rx_send.send(response).await {
+                            error!(?e, "CTAP response receiver dropped");
                             return Err(CableError::ConnectionFailed);
                         }
                     }
-                    _ => {
-                        debug!(?request.command, "Sending CBOR request");
+                    command => {
+                        debug!(?command, "Sending CTAP request");
                         if let Err(e) = connection_send(
                             request,
                             &mut *input.data_channel,
@@ -361,14 +386,11 @@ pub(crate) async fn connection(mut input: TunnelConnectionInput) -> Result<(), C
 }
 
 async fn connection_send(
-    request: CborRequest,
+    cbor_request: Vec<u8>,
     data_channel: &mut dyn CableDataChannel,
     noise_state: &mut TunnelNoiseState,
 ) -> Result<(), CableError> {
     debug!("Sending CBOR request");
-    trace!(?request);
-
-    let cbor_request = request.raw_long().map_err(CableError::from)?;
     if cbor_request.len() > MAX_CBOR_SIZE {
         error!(
             cbor_request_len = cbor_request.len(),
@@ -481,13 +503,12 @@ async fn connection_recv_initial(
         }
     };
 
-    let _: Ctap2GetInfoResponse = match cbor::from_slice(&initial_message.info) {
-        Ok(get_info_response) => get_info_response,
-        Err(e) => {
-            error!(?e, "Failed to decode GetInfo response");
-            return Err(CableError::InvalidFraming);
-        }
-    };
+    if let Err(e) = cbor::from_slice::<GetInfoResponse>(&initial_message.info) {
+        error!(?e, "Failed to decode GetInfo response");
+        return Err(CableError::InvalidFraming);
+    }
+
+    debug!(?initial_message.supported_features, "Received post-handshake message");
 
     Ok(initial_message.info.to_vec())
 }
@@ -560,7 +581,7 @@ async fn connection_recv(
     tunnel_domain: &str,
     known_device_store: &Option<Arc<dyn CableKnownDeviceInfoStore>>,
     encrypted_frame: Vec<u8>,
-    cbor_rx_send: &Sender<CborResponse>,
+    ctap_rx_send: &Sender<Vec<u8>>,
     noise_state: &mut TunnelNoiseState,
 ) -> Result<RecvOutcome, CableError> {
     let decrypted_frame = decrypt_frame(encrypted_frame, noise_state).await?;
@@ -575,14 +596,10 @@ async fn connection_recv(
             Ok(RecvOutcome::PeerShutdown)
         }
         CableTunnelMessageType::Ctap => {
-            let cbor_response: CborResponse = (&cable_message.payload.to_vec())
-                .try_into()
-                .or(Err(CableError::InvalidFraming))?;
-
-            debug!("Received CBOR response");
-            trace!(?cbor_response);
-            cbor_rx_send
-                .send(cbor_response)
+            debug!("Received CTAP response");
+            trace!(?cable_message.payload);
+            ctap_rx_send
+                .send(cable_message.payload.into_vec())
                 .await
                 .or(Err(CableError::ConnectionFailed))?;
             Ok(RecvOutcome::Continue)
@@ -771,6 +788,14 @@ mod tests {
             recording.puts.lock().expect("puts").is_empty(),
             "invalid update must not store anything"
         );
+    }
+
+    #[test]
+    fn absent_supported_features_defaults_to_ctap() {
+        let map = BTreeMap::from([(Value::Integer(1), Value::Bytes(vec![]))]);
+        let bytes = cbor::to_vec(&map).unwrap();
+        let message: CableInitialMessage = cbor::from_slice(&bytes).unwrap();
+        assert_eq!(message.supported_features.0, vec!["ctap"]);
     }
 
     #[test]
