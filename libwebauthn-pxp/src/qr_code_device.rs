@@ -16,11 +16,11 @@ use super::connection_stages::{
     connection_stage, handshake_stage, proximity_check_stage, ConnectionInput, HandshakeInput,
     MpscUxUpdateSender, ProximityCheckInput,
 };
-use super::known_devices::CableKnownDeviceInfoStore;
+use super::known_devices::PxpKnownDeviceInfoStore;
 use super::tunnel::KNOWN_TUNNEL_DOMAINS;
 use crate::cbor;
 use crate::digit_encode;
-use crate::error::CableError;
+use crate::error::PxpError;
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq)]
 pub enum QrCodeOperationHint {
@@ -33,14 +33,14 @@ pub enum QrCodeOperationHint {
 /// One of the data transfer channels listed in QR code key 6.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize_repr)]
 #[repr(u8)]
-pub(crate) enum CableTransportChannel {
+pub(crate) enum PxpTransportChannel {
     WebSocket = 0,
     Ble = 1,
 }
 
 /// Which hybrid transport(s) the QR code advertises support for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CableTransports {
+pub enum PxpTransports {
     /// caBLE v2 only: advertise the cloud-assisted WebSocket tunnel. Omits QR
     /// key 6, so the QR stays valid for legacy peers that read key 6 as a
     /// `supports_non_discoverable_mc` boolean and would hard-reject a CBOR
@@ -54,22 +54,22 @@ pub enum CableTransports {
     CloudAssistedOrLocal,
 }
 
-impl CableTransports {
+impl PxpTransports {
     /// CBOR form of QR key 6. `None` for `CloudAssistedOnly` so a legacy peer
     /// doesn't see an unexpected CBOR array where it wants a boolean.
-    pub(crate) fn to_qr_field(self) -> Option<Vec<CableTransportChannel>> {
+    pub(crate) fn to_qr_field(self) -> Option<Vec<PxpTransportChannel>> {
         match self {
             Self::CloudAssistedOnly => None,
             Self::CloudAssistedOrLocal => Some(vec![
-                CableTransportChannel::WebSocket,
-                CableTransportChannel::Ble,
+                PxpTransportChannel::WebSocket,
+                PxpTransportChannel::Ble,
             ]),
         }
     }
 }
 
 #[derive(Debug, Clone, SerializeIndexed)]
-pub struct CableQrCode {
+pub struct PxpQrCode {
     // Key 0: a 33-byte, P-256, X9.62, compressed public key.
     #[serde(index = 0x00)]
     pub public_key: ByteArray<33>,
@@ -102,15 +102,15 @@ pub struct CableQrCode {
     pub operation_hint: QrCodeOperationHint,
 
     /// Key 6: data transfer channels the client supports (CTAP 2.3 hybrid).
-    /// Set via [`CableTransports`] at construction time; stored here as a
+    /// Set via [`PxpTransports`] at construction time; stored here as a
     /// `Vec` for CBOR serialization. `None` omits key 6 entirely so the QR
     /// stays valid for caBLE v2 peers that interpret key 6 incompatibly.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(index = 0x06)]
-    pub(crate) transports: Option<Vec<CableTransportChannel>>,
+    pub(crate) transports: Option<Vec<PxpTransportChannel>>,
 }
 
-impl std::fmt::Display for CableQrCode {
+impl std::fmt::Display for PxpQrCode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let serialized = cbor::to_vec(&self).map_err(|_| std::fmt::Error)?;
         write!(f, "FIDO:/{}", digit_encode(&serialized))
@@ -120,41 +120,41 @@ impl std::fmt::Display for CableQrCode {
 /// Represents a new device which will connect by scanning a QR code.
 /// This could be a new device, or an ephmemeral device whose details were not stored.
 #[derive(Clone)]
-pub struct CableQrCodeDevice {
+pub struct PxpQrCodeDevice {
     /// The QR code to be scanned by the new authenticator.
-    pub qr_code: CableQrCode,
+    pub qr_code: PxpQrCode,
     /// An ephemeral private key, corresponding to the public key within the QR code.
     pub private_key: NonZeroScalar,
     /// An optional reference to the store. This may be None, if no persistence is desired.
-    pub(crate) store: Option<Arc<dyn CableKnownDeviceInfoStore>>,
+    pub(crate) store: Option<Arc<dyn PxpKnownDeviceInfoStore>>,
 }
 
-impl Debug for CableQrCodeDevice {
+impl Debug for PxpQrCodeDevice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CableQrCodeDevice")
+        f.debug_struct("PxpQrCodeDevice")
             .field("qr_code", &self.qr_code)
             .field("store", &self.store)
             .finish()
     }
 }
 
-impl CableQrCodeDevice {
+impl PxpQrCodeDevice {
     /// Generates a QR code, linking the provided known-device store. A device scanning
     /// this QR code may be persisted to the store after a successful connection.
     pub fn new_persistent(
         hint: QrCodeOperationHint,
-        store: Arc<dyn CableKnownDeviceInfoStore>,
-        transports: CableTransports,
-    ) -> Result<Self, CableError> {
+        store: Arc<dyn PxpKnownDeviceInfoStore>,
+        transports: PxpTransports,
+    ) -> Result<Self, PxpError> {
         Self::new(hint, true, Some(store), transports)
     }
 
     fn new(
         hint: QrCodeOperationHint,
         state_assisted: bool,
-        store: Option<Arc<dyn CableKnownDeviceInfoStore>>,
-        transports: CableTransports,
-    ) -> Result<Self, CableError> {
+        store: Option<Arc<dyn PxpKnownDeviceInfoStore>>,
+        transports: PxpTransports,
+    ) -> Result<Self, PxpError> {
         let private_key_scalar = NonZeroScalar::random(&mut OsRng);
         let private_key = SecretKey::from(private_key_scalar);
         let public_key: [u8; 33] = private_key
@@ -163,7 +163,7 @@ impl CableQrCodeDevice {
             .to_encoded_point(true)
             .as_bytes()
             .try_into()
-            .map_err(|_| CableError::InvalidKey)?;
+            .map_err(|_| PxpError::InvalidKey)?;
         let mut qr_secret = [0u8; 16];
         OsRng.fill_bytes(&mut qr_secret);
 
@@ -175,7 +175,7 @@ impl CableQrCodeDevice {
         let transports = transports.to_qr_field();
 
         Ok(Self {
-            qr_code: CableQrCode {
+            qr_code: PxpQrCode {
                 public_key: ByteArray::from(public_key),
                 qr_secret: ByteArray::from(qr_secret),
                 known_tunnel_domains_count: KNOWN_TUNNEL_DOMAINS.len() as u8,
@@ -192,21 +192,21 @@ impl CableQrCodeDevice {
     }
 }
 
-impl CableQrCodeDevice {
+impl PxpQrCodeDevice {
     /// Generates a QR code, without any known-device store. A device scanning this QR code
     /// will not be persisted.
     pub fn new_transient(
         hint: QrCodeOperationHint,
-        transports: CableTransports,
-    ) -> Result<Self, CableError> {
+        transports: PxpTransports,
+    ) -> Result<Self, PxpError> {
         Self::new(hint, false, None, transports)
     }
 
     #[instrument(skip_all, err)]
     pub(crate) async fn connection(
-        qr_device: &CableQrCodeDevice,
+        qr_device: &PxpQrCodeDevice,
         ux_sender: &MpscUxUpdateSender,
-    ) -> Result<super::connection_stages::HandshakeOutput, CableError> {
+    ) -> Result<super::connection_stages::HandshakeOutput, PxpError> {
         // Stage 1: Proximity check
         let proximity_input = ProximityCheckInput::new_for_qr_code(qr_device)?;
         let proximity_output = proximity_check_stage(proximity_input, ux_sender).await?;
@@ -224,9 +224,9 @@ impl CableQrCodeDevice {
     }
 }
 
-impl Display for CableQrCodeDevice {
+impl Display for PxpQrCodeDevice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "CableQrCodeDevice")
+        write!(f, "PxpQrCodeDevice")
     }
 }
 
@@ -235,18 +235,18 @@ mod tests {
     use super::*;
     use std::collections::BTreeMap;
 
-    // Downstream callers (e.g. credentialsd) move a CableQrCodeDevice across
+    // Downstream callers (e.g. credentialsd) move a PxpQrCodeDevice across
     // tokio::spawn boundaries, so both Send and Sync need to auto-derive.
     const _: fn() = || {
         fn assert_send_sync<T: Send + Sync>() {}
-        assert_send_sync::<CableQrCodeDevice>();
+        assert_send_sync::<PxpQrCodeDevice>();
     };
 
     #[test]
     fn qr_code_omits_key_6_for_cloud_assisted_only() {
-        let device = CableQrCodeDevice::new_transient(
+        let device = PxpQrCodeDevice::new_transient(
             QrCodeOperationHint::MakeCredential,
-            CableTransports::CloudAssistedOnly,
+            PxpTransports::CloudAssistedOnly,
         )
         .unwrap();
         let bytes = cbor::to_vec(&device.qr_code).unwrap();
@@ -256,9 +256,9 @@ mod tests {
 
     #[test]
     fn qr_code_encodes_key_6_for_cloud_assisted_or_local() {
-        let device = CableQrCodeDevice::new_transient(
+        let device = PxpQrCodeDevice::new_transient(
             QrCodeOperationHint::MakeCredential,
-            CableTransports::CloudAssistedOrLocal,
+            PxpTransports::CloudAssistedOrLocal,
         )
         .unwrap();
         let bytes = cbor::to_vec(&device.qr_code).unwrap();

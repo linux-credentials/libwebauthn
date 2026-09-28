@@ -21,53 +21,53 @@ use crate::webauthn::error::WebAuthnError;
 use crate::Transport;
 use crate::UvUpdate;
 
-use super::error::CableError;
-use super::known_devices::CableKnownDevice;
-use super::qr_code_device::CableQrCodeDevice;
+use super::error::PxpError;
+use super::known_devices::PxpKnownDevice;
+use super::qr_code_device::PxpQrCodeDevice;
 
-pub use libwebauthn_pxp::{CableUpdate, ConnectionState};
+pub use libwebauthn_pxp::{ConnectionState, PxpUpdate};
 
 #[derive(Debug)]
-pub enum CableChannelDevice<'d> {
-    QrCode(&'d CableQrCodeDevice),
-    Known(&'d CableKnownDevice),
+pub enum HybridChannelDevice<'d> {
+    QrCode(&'d PxpQrCodeDevice),
+    Known(&'d PxpKnownDevice),
 }
 
 #[derive(Debug)]
-pub struct CableChannel {
+pub struct HybridChannel {
     pub(crate) tunnel: TunnelHandle,
-    pub(crate) ux_update_sender: broadcast::Sender<CableUxUpdate>,
+    pub(crate) ux_update_sender: broadcast::Sender<HybridUxUpdate>,
     pub(crate) persistent_token_store: Option<Arc<dyn PersistentTokenStore>>,
 }
 
-impl Display for CableChannel {
+impl Display for HybridChannel {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "CableChannel")
+        write!(f, "HybridChannel")
     }
 }
 
 #[derive(Debug, Clone)]
-pub enum CableUxUpdate {
+pub enum HybridUxUpdate {
     UvUpdate(UvUpdate),
-    CableUpdate(CableUpdate),
+    PxpUpdate(PxpUpdate),
 }
 
-impl From<UvUpdate> for CableUxUpdate {
+impl From<UvUpdate> for HybridUxUpdate {
     fn from(update: UvUpdate) -> Self {
-        CableUxUpdate::UvUpdate(update)
+        HybridUxUpdate::UvUpdate(update)
     }
 }
 
 #[async_trait]
-impl Channel for CableChannel {
-    type UxUpdate = CableUxUpdate;
-    type TransportError = CableError;
+impl Channel for HybridChannel {
+    type UxUpdate = HybridUxUpdate;
+    type TransportError = PxpError;
 
     fn transport(&self) -> Transport {
         Transport::Hybrid
     }
 
-    async fn supported_protocols(&self) -> Result<SupportedProtocols, WebAuthnError<CableError>> {
+    async fn supported_protocols(&self) -> Result<SupportedProtocols, WebAuthnError<PxpError>> {
         Ok(SupportedProtocols::fido2_only())
     }
 
@@ -79,28 +79,28 @@ impl Channel for CableChannel {
     }
 
     async fn close(&mut self) {
-        // TODO Send CableTunnelMessageType#Shutdown and drop the connection
+        // TODO Send PxpTunnelMessageType#Shutdown and drop the connection
     }
 
     async fn apdu_send(
         &mut self,
         _request: &ApduRequest,
         _timeout: Duration,
-    ) -> Result<(), CableError> {
+    ) -> Result<(), PxpError> {
         error!("APDU send not supported in caBLE transport");
-        Err(CableError::TransportUnavailable)
+        Err(PxpError::TransportUnavailable)
     }
 
-    async fn apdu_recv(&mut self, _timeout: Duration) -> Result<ApduResponse, CableError> {
+    async fn apdu_recv(&mut self, _timeout: Duration) -> Result<ApduResponse, PxpError> {
         error!("APDU recv not supported in caBLE transport");
-        Err(CableError::TransportUnavailable)
+        Err(PxpError::TransportUnavailable)
     }
 
     async fn cbor_send(
         &mut self,
         request: &CborRequest,
         timeout: Duration,
-    ) -> Result<(), CableError> {
+    ) -> Result<(), PxpError> {
         // First, wait for connection to be established (no timeout for handshake)
         self.tunnel.wait_for_connection().await?;
 
@@ -110,16 +110,16 @@ impl Channel for CableChannel {
             Ok(Ok(_)) => Ok(()),
             Ok(Err(error)) => {
                 error!(%error, "CBOR request send failure");
-                Err(CableError::TransportUnavailable)
+                Err(PxpError::TransportUnavailable)
             }
             Err(elapsed) => {
                 error!({ %elapsed, ?timeout }, "CBOR request send timeout");
-                Err(CableError::Timeout)
+                Err(PxpError::Timeout)
             }
         }
     }
 
-    async fn cbor_recv(&mut self, timeout: Duration) -> Result<CborResponse, CableError> {
+    async fn cbor_recv(&mut self, timeout: Duration) -> Result<CborResponse, PxpError> {
         // First, wait for connection to be established (no timeout for handshake)
         self.tunnel.wait_for_connection().await?;
 
@@ -127,17 +127,17 @@ impl Channel for CableChannel {
         match time::timeout(timeout, self.tunnel.ctap_receiver.recv()).await {
             Ok(Some(frame)) => CborResponse::try_from(&frame).map_err(|e| {
                 error!(%e, "Malformed CTAP response frame");
-                CableError::InvalidFraming
+                PxpError::InvalidFraming
             }),
-            Ok(None) => Err(CableError::TransportUnavailable),
+            Ok(None) => Err(PxpError::TransportUnavailable),
             Err(elapsed) => {
                 error!({ %elapsed, ?timeout }, "CBOR response recv timeout");
-                Err(CableError::Timeout)
+                Err(PxpError::Timeout)
             }
         }
     }
 
-    fn get_ux_update_sender(&self) -> &broadcast::Sender<CableUxUpdate> {
+    fn get_ux_update_sender(&self) -> &broadcast::Sender<HybridUxUpdate> {
         &self.ux_update_sender
     }
 
@@ -147,7 +147,7 @@ impl Channel for CableChannel {
     }
 }
 
-impl Ctap2AuthTokenStore for CableChannel {
+impl Ctap2AuthTokenStore for HybridChannel {
     fn store_auth_data(&mut self, _auth_token_data: AuthTokenData) {}
 
     fn get_auth_data(&self) -> Option<&AuthTokenData> {

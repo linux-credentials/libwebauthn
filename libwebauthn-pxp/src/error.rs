@@ -5,13 +5,13 @@ use std::sync::Arc;
 use tokio_tungstenite::tungstenite::http::header::InvalidHeaderValue;
 use tokio_tungstenite::tungstenite::Error as TungsteniteError;
 
-/// caBLE transport error. `Clone` because it rides the [`CableUpdate`](crate::CableUpdate) UX
+/// caBLE transport error. `Clone` because it rides the [`PxpUpdate`](crate::PxpUpdate) UX
 /// broadcast stream, which requires `Clone`; non-`Clone` native causes
 /// (`snow`, `io`, `tungstenite`, `serde_cbor`, `http`) are kept behind an
 /// `Arc` rather than flattened.
 #[derive(thiserror::Error, Debug, Clone)]
 #[non_exhaustive]
-pub enum CableError {
+pub enum PxpError {
     #[error("noise protocol error: {0}")]
     Noise(Arc<snow::Error>),
     #[error("input/output error: {0}")]
@@ -27,7 +27,7 @@ pub enum CableError {
     #[error("invalid http header: {0}")]
     HttpHeader(Arc<InvalidHeaderValue>),
     #[error(transparent)]
-    CableTunnel(#[from] CableTunnelError),
+    PxpTunnel(#[from] PxpTunnelError),
     #[error("connection failed")]
     ConnectionFailed,
     #[error("connection lost")]
@@ -48,38 +48,38 @@ pub enum CableError {
     EncryptionFailed,
 }
 
-impl From<snow::Error> for CableError {
+impl From<snow::Error> for PxpError {
     fn from(error: snow::Error) -> Self {
-        CableError::Noise(Arc::new(error))
+        PxpError::Noise(Arc::new(error))
     }
 }
 
-impl From<std::io::Error> for CableError {
+impl From<std::io::Error> for PxpError {
     fn from(error: std::io::Error) -> Self {
-        CableError::Io(Arc::new(error))
+        PxpError::Io(Arc::new(error))
     }
 }
 
-impl From<TungsteniteError> for CableError {
+impl From<TungsteniteError> for PxpError {
     fn from(error: TungsteniteError) -> Self {
-        CableError::WebSocket(Arc::new(error))
+        PxpError::WebSocket(Arc::new(error))
     }
 }
 
-impl From<InvalidHeaderValue> for CableError {
+impl From<InvalidHeaderValue> for PxpError {
     fn from(error: InvalidHeaderValue) -> Self {
-        CableError::HttpHeader(Arc::new(error))
+        PxpError::HttpHeader(Arc::new(error))
     }
 }
 
-impl From<serde_cbor_2::Error> for CableError {
+impl From<serde_cbor_2::Error> for PxpError {
     fn from(error: serde_cbor_2::Error) -> Self {
-        CableError::Cbor(Arc::new(error))
+        PxpError::Cbor(Arc::new(error))
     }
 }
 
 #[derive(thiserror::Error, Debug, PartialEq, Clone)]
-pub enum CableTunnelError {
+pub enum PxpTunnelError {
     /// The tunnel server returned HTTP 410 Gone for the contacted resource.
     #[error("tunnel server reported the resource is gone (HTTP 410)")]
     Gone,

@@ -4,10 +4,10 @@ use tokio::sync::{mpsc, watch};
 use tokio::task;
 
 use crate::connection_stages::{MpscUxUpdateSender, TunnelConnectionInput, UxUpdateSender};
-use crate::error::CableError;
-use crate::known_devices::CableKnownDevice;
+use crate::error::PxpError;
+use crate::known_devices::PxpKnownDevice;
 use crate::protocol;
-use crate::qr_code_device::CableQrCodeDevice;
+use crate::qr_code_device::PxpQrCodeDevice;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConnectionState {
@@ -20,7 +20,7 @@ pub enum ConnectionState {
 }
 
 #[derive(Debug, Clone)]
-pub enum CableUpdate {
+pub enum PxpUpdate {
     /// Waiting for proximity check user interaction (eg. scan a QR code, or confirm on the device).
     ProximityCheck,
     /// Connecting to the tunnel server.
@@ -30,31 +30,31 @@ pub enum CableUpdate {
     /// Connected to the authenticator device via the tunnel server.
     Connected,
     /// The connection to the authenticator device has failed.
-    Error(CableError),
+    Error(PxpError),
 }
 
 /// Receives connection progress updates from the connection task.
 pub trait UpdateSink: Send + Sync + 'static {
-    fn send_update(&self, update: CableUpdate);
+    fn send_update(&self, update: PxpUpdate);
 }
 
 /// The CMHD to connect to.
 #[derive(Debug, Clone)]
 pub enum ConnectTarget {
     /// A new device, invoked by scanning a QR code.
-    QrCode(CableQrCodeDevice),
+    QrCode(PxpQrCodeDevice),
     /// A previously linked device, invoked state-assisted via the tunnel service.
-    Known(CableKnownDevice),
+    Known(PxpKnownDevice),
 }
 
-impl From<CableQrCodeDevice> for ConnectTarget {
-    fn from(device: CableQrCodeDevice) -> Self {
+impl From<PxpQrCodeDevice> for ConnectTarget {
+    fn from(device: PxpQrCodeDevice) -> Self {
         Self::QrCode(device)
     }
 }
 
-impl From<CableKnownDevice> for ConnectTarget {
-    fn from(device: CableKnownDevice) -> Self {
+impl From<PxpKnownDevice> for ConnectTarget {
+    fn from(device: PxpKnownDevice) -> Self {
         Self::Known(device)
     }
 }
@@ -73,7 +73,7 @@ pub struct TunnelHandle {
 
 impl TunnelHandle {
     /// Waits until the handshake completes, or fails if the connection terminates first.
-    pub async fn wait_for_connection(&self) -> Result<(), CableError> {
+    pub async fn wait_for_connection(&self) -> Result<(), PxpError> {
         let mut rx = self.connection_state.clone();
 
         // If already connected, return immediately
@@ -87,20 +87,20 @@ impl TunnelHandle {
         // the caller can't observe the timing difference and the asymmetry
         // was accidental.
         if *rx.borrow() == ConnectionState::Terminated {
-            return Err(CableError::ConnectionFailed);
+            return Err(PxpError::ConnectionFailed);
         }
 
         // Wait for state change
         while rx.changed().await.is_ok() {
             match *rx.borrow() {
                 ConnectionState::Connected => return Ok(()),
-                ConnectionState::Terminated => return Err(CableError::ConnectionFailed),
+                ConnectionState::Terminated => return Err(PxpError::ConnectionFailed),
                 ConnectionState::Connecting => continue,
             }
         }
 
         // If the sender was dropped, consider it a failure
-        Err(CableError::ConnectionLost)
+        Err(PxpError::ConnectionLost)
     }
 }
 
@@ -124,11 +124,11 @@ pub fn connect(target: impl Into<ConnectTarget>, updates: impl UpdateSink) -> Tu
 
         let (handshake_output, store) = match &target {
             ConnectTarget::QrCode(device) => (
-                CableQrCodeDevice::connection(device, &ux_sender).await,
+                PxpQrCodeDevice::connection(device, &ux_sender).await,
                 device.store.clone(),
             ),
             ConnectTarget::Known(device) => (
-                CableKnownDevice::connection(device, &ux_sender).await,
+                PxpKnownDevice::connection(device, &ux_sender).await,
                 Some(device.store.clone()),
             ),
         };

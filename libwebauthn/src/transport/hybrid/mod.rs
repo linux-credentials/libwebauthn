@@ -18,13 +18,13 @@ pub async fn is_available() -> bool {
     super::ble::is_available().await
 }
 
-pub struct Cable {}
-impl Transport for Cable {}
-unsafe impl Send for Cable {}
-unsafe impl Sync for Cable {}
+pub struct Hybrid {}
+impl Transport for Hybrid {}
+unsafe impl Send for Hybrid {}
+unsafe impl Sync for Hybrid {}
 
-impl Display for Cable {
+impl Display for Hybrid {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Cable")
+        write!(f, "Hybrid")
     }
 }

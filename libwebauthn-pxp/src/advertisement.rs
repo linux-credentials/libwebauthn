@@ -10,10 +10,10 @@ use uuid::Uuid;
 use crate::ble;
 use crate::cbor::Value;
 use crate::crypto::trial_decrypt_advert;
-use crate::error::CableError;
+use crate::error::PxpError;
 
-const CABLE_UUID_FIDO: &str = "0000fff9-0000-1000-8000-00805f9b34fb";
-const CABLE_UUID_GOOGLE: &str = "0000fde2-0000-1000-8000-00805f9b34fb";
+const PXP_UUID_FIDO: &str = "0000fff9-0000-1000-8000-00805f9b34fb";
+const PXP_UUID_GOOGLE: &str = "0000fde2-0000-1000-8000-00805f9b34fb";
 
 /// `transport_channel_identifier` for the BLE data channel.
 const TRANSPORT_CHANNEL_BLE: i128 = 1;
@@ -72,10 +72,10 @@ impl From<[u8; 16]> for DecryptedAdvert {
 #[instrument(skip_all, err)]
 pub(crate) async fn await_advertisement(
     eid_key: &[u8],
-) -> Result<(PeripheralProperties, DecryptedAdvert), CableError> {
+) -> Result<(PeripheralProperties, DecryptedAdvert), PxpError> {
     let uuids = &[
-        Uuid::parse_str(CABLE_UUID_FIDO)?,
-        Uuid::parse_str(CABLE_UUID_GOOGLE)?, // Deprecated, but may still be in use.
+        Uuid::parse_str(PXP_UUID_FIDO)?,
+        Uuid::parse_str(PXP_UUID_GOOGLE)?, // Deprecated, but may still be in use.
     ];
     let (adapter, stream) = ble::start_discovery_for_service_data(uuids).await?;
 
@@ -121,13 +121,13 @@ pub(crate) async fn await_advertisement(
         adapter
             .stop_scan()
             .await
-            .or(Err(CableError::TransportUnavailable))?;
+            .or(Err(PxpError::TransportUnavailable))?;
 
         return Ok((device, advert));
     }
 
     warn!("BLE advertisement discovery stream terminated");
-    Err(CableError::TransportUnavailable)
+    Err(PxpError::TransportUnavailable)
 }
 
 #[cfg(test)]
