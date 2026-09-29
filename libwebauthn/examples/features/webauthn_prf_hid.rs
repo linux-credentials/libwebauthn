@@ -343,6 +343,7 @@ async fn run_success_test(
         allow: vec![credential.clone()],
         user_verification: UserVerificationRequirement::Discouraged,
         extensions: Some(GetAssertionRequestExtensions {
+            hmac_get_secret: None,
             prf: Some(prf),
             ..Default::default()
         }),
@@ -375,6 +376,7 @@ async fn run_failed_test(
         allow: credential.map(|x| vec![x.clone()]).unwrap_or_default(),
         user_verification: UserVerificationRequirement::Discouraged,
         extensions: Some(GetAssertionRequestExtensions {
+            hmac_get_secret: None,
             prf: Some(prf),
             ..Default::default()
         }),

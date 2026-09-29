@@ -211,6 +211,15 @@ impl FromIdlModel<PublicKeyCredentialRequestOptionsJSON> for GetAssertionRequest
             None => None,
         };
 
+        let hmac_get_secret = match inner
+            .extensions
+            .as_ref()
+            .and_then(|e| e.hmac_get_secret.as_ref())
+        {
+            Some(hmac_json) => Some(HMACGetSecretInput::try_from(hmac_json.clone())?),
+            None => None,
+        };
+
         let large_blob = match inner
             .extensions
             .as_ref()
@@ -230,6 +239,7 @@ impl FromIdlModel<PublicKeyCredentialRequestOptionsJSON> for GetAssertionRequest
                     cred_blob: extensions_opt.cred_blob.unwrap_or(false),
                     large_blob: large_blob.clone(),
                     prf: prf.clone(),
+                    hmac_get_secret: hmac_get_secret.clone(),
                     appid: appid.clone(),
                 });
 
@@ -321,14 +331,14 @@ impl TryFrom<HmacGetSecretInputJson> for HMACGetSecretInput {
     fn try_from(value: HmacGetSecretInputJson) -> Result<Self, Self::Error> {
         let salt1 = value.salt1.as_slice().try_into().map_err(|_| {
             GetAssertionPrepareError::UnexpectedLengthError(
-                "extensions.hmacCreateSecret.salt1".to_string(),
+                "extensions.hmacGetSecret.salt1".to_string(),
                 value.salt1.as_slice().len(),
             )
         })?;
         let salt2 = match value.salt2 {
             Some(s) => Some(s.as_slice().try_into().map_err(|_| {
                 GetAssertionPrepareError::UnexpectedLengthError(
-                    "extensions.hmacCreateSecret.salt2".to_string(),
+                    "extensions.hmacGetSecret.salt2".to_string(),
                     s.as_slice().len(),
                 )
             })?),
@@ -388,6 +398,9 @@ pub struct GetAssertionRequestExtensions {
     pub cred_blob: bool,
     /// PRF extension input. At the CTAP level, this is converted to HMAC secret.
     pub prf: Option<PrfInput>,
+    /// hmacGetSecret extension input (the pre-PRF hmac-secret client extension): the raw
+    /// salts, sent as they are. Ignored when `prf` is also present.
+    pub hmac_get_secret: Option<HMACGetSecretInput>,
     pub large_blob: Option<GetAssertionLargeBlobExtension>,
     /// FIDO AppID extension (WebAuthn L3 §10.1.1). When the relying party has
     /// existing U2F credentials registered under a legacy AppID, this URL is
@@ -1408,6 +1421,7 @@ mod tests {
 
         let mut req = request_base();
         req.extensions = Some(GetAssertionRequestExtensions {
+            hmac_get_secret: None,
             cred_blob: false,
             prf: None,
             large_blob: None,
@@ -1462,6 +1476,48 @@ mod tests {
             .expect("extensions")
             .prf
             .expect("prf extension")
+    }
+
+    #[tokio::test]
+    async fn test_request_from_json_hmac_get_secret_extension() {
+        let request_origin: RequestOrigin = "https://example.org".parse().unwrap();
+        let salt = base64_url::encode(&[0x5Au8; 32]);
+        let req_json = json_field_add(
+            REQUEST_BASE_JSON,
+            "extensions",
+            &format!(r#"{{"hmacGetSecret":{{"salt1":"{salt}"}}}}"#),
+        );
+        let req = from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            RelatedOrigins::Disabled,
+            &req_json,
+        )
+        .await
+        .expect("request should parse");
+        let ext = req.extensions.expect("extensions");
+        assert!(ext.prf.is_none());
+        assert_eq!(
+            ext.hmac_get_secret,
+            Some(HMACGetSecretInput {
+                salt1: [0x5A; 32],
+                salt2: None,
+            })
+        );
+        // A salt that is not 32 bytes is refused.
+        let req_json = json_field_add(
+            REQUEST_BASE_JSON,
+            "extensions",
+            r#"{"hmacGetSecret":{"salt1":"AQID"}}"#,
+        );
+        assert!(from_json(
+            &request_origin,
+            &MockPublicSuffixList,
+            RelatedOrigins::Disabled,
+            &req_json,
+        )
+        .await
+        .is_err());
     }
 
     #[tokio::test]

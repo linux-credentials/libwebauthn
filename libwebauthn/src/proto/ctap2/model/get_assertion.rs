@@ -239,7 +239,11 @@ impl From<GetAssertionRequestExtensions> for Ctap2GetAssertionRequestExtensions 
             prf: None, // Set by convert_prf_to_native when the device advertises `prf`
             cred_blob: other.cred_blob,
             hmac_secret: None, // Gets calculated later
-            hmac_or_prf: other.prf.map(GetAssertionHmacOrPrfInput::Prf),
+            hmac_or_prf: other.prf.map(GetAssertionHmacOrPrfInput::Prf).or_else(|| {
+                other
+                    .hmac_get_secret
+                    .map(GetAssertionHmacOrPrfInput::HmacGetSecret)
+            }),
             large_blob_key: if needs_key { Some(true) } else { None },
             large_blob_write: is_write,
         }
@@ -720,20 +724,23 @@ impl Ctap2GetAssertionResponseExtensions {
             }
         });
 
-        let prf = decrypted_hmac.and_then(|decrypted| {
-            // At WebAuthn level, we only support PRF (not raw HMAC).
-            // The PRF input was converted to HMAC internally.
-            request
-                .extensions
-                .as_ref()
-                .and_then(|ext| ext.prf.as_ref())
-                .map(|_| GetAssertionPrfOutput {
+        // The answer goes back under the extension that asked: prf (whose input was
+        // converted to hmac-secret internally) or, failing that, hmacGetSecret.
+        let (prf, hmac_get_secret) = match (decrypted_hmac, request.extensions.as_ref()) {
+            (Some(decrypted), Some(ext)) if ext.prf.is_some() => (
+                Some(GetAssertionPrfOutput {
                     results: Some(PrfOutputValue {
                         first: decrypted.output1,
                         second: decrypted.output2,
                     }),
-                })
-        });
+                }),
+                None,
+            ),
+            (Some(decrypted), Some(ext)) if ext.hmac_get_secret.is_some() => {
+                (None, Some(decrypted))
+            }
+            _ => (None, None),
+        };
 
         // `blob` stays `None` until `authenticatorLargeBlobs` is wired up; returning
         // the raw `largeBlobKey` here would disclose the per-credential AES key to
@@ -758,7 +765,7 @@ impl Ctap2GetAssertionResponseExtensions {
             .map(|_| false);
 
         GetAssertionResponseUnsignedExtensions {
-            hmac_get_secret: None,
+            hmac_get_secret,
             large_blob,
             prf,
             appid,
@@ -769,6 +776,37 @@ impl Ctap2GetAssertionResponseExtensions {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn hmac_get_secret_input_is_sent_raw_and_answered_as_itself() {
+        let input = crate::ops::webauthn::HMACGetSecretInput {
+            salt1: [0x5A; 32],
+            salt2: None,
+        };
+        let ext = GetAssertionRequestExtensions {
+            hmac_get_secret: Some(input.clone()),
+            ..Default::default()
+        };
+        let ctap = Ctap2GetAssertionRequestExtensions::from(ext);
+        assert_eq!(
+            ctap.hmac_or_prf,
+            Some(GetAssertionHmacOrPrfInput::HmacGetSecret(input))
+        );
+        // prf wins when both are asked: the authenticator answers one hmac-secret.
+        let both = GetAssertionRequestExtensions {
+            hmac_get_secret: Some(crate::ops::webauthn::HMACGetSecretInput::default()),
+            prf: Some(crate::ops::webauthn::PrfInput {
+                eval: None,
+                eval_by_credential: Default::default(),
+            }),
+            ..Default::default()
+        };
+        assert!(matches!(
+            Ctap2GetAssertionRequestExtensions::from(both).hmac_or_prf,
+            Some(GetAssertionHmacOrPrfInput::Prf(_))
+        ));
+    }
     use super::*;
     use crate::fido::AuthenticatorDataFlags;
     use crate::proto::ctap2::Ctap2PublicKeyCredentialType;
@@ -870,6 +908,7 @@ mod tests {
 
         let mut request = make_request(vec![cred]);
         request.extensions = Some(GetAssertionRequestExtensions {
+            hmac_get_secret: None,
             cred_blob: false,
             prf: None,
             large_blob: Some(GetAssertionLargeBlobExtension::Read),
@@ -909,6 +948,7 @@ mod tests {
     ) -> GetAssertionRequest {
         let mut request = make_request(allow);
         request.extensions = Some(GetAssertionRequestExtensions {
+            hmac_get_secret: None,
             cred_blob: false,
             prf: Some(crate::ops::webauthn::PrfInput {
                 eval,

@@ -1011,6 +1011,7 @@ mod tests {
             top_origin: None,
             allow: vec![],
             extensions: Some(GetAssertionRequestExtensions {
+                hmac_get_secret: None,
                 appid: None,
                 cred_blob: false,
                 prf: None,
@@ -1051,6 +1052,7 @@ mod tests {
             top_origin: None,
             allow: vec![],
             extensions: Some(GetAssertionRequestExtensions {
+                hmac_get_secret: None,
                 appid: None,
                 cred_blob: false,
                 prf: None,
@@ -1152,6 +1154,7 @@ mod tests {
             top_origin: None,
             allow: vec![],
             extensions: Some(GetAssertionRequestExtensions {
+                hmac_get_secret: None,
                 appid: None,
                 cred_blob: false,
                 prf: None,

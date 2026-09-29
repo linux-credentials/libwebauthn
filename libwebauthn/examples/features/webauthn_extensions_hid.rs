@@ -90,6 +90,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             allow: vec![credential],
             user_verification: UserVerificationRequirement::Discouraged,
             extensions: Some(GetAssertionRequestExtensions {
+                hmac_get_secret: None,
                 cred_blob: true,
                 prf: Some(PrfInput {
                     eval: Some(PrfInputValue {

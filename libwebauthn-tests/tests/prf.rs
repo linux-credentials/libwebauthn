@@ -570,6 +570,7 @@ async fn run_success_test(
         allow: vec![credential.clone()],
         user_verification: UserVerificationRequirement::Preferred,
         extensions: Some(GetAssertionRequestExtensions {
+            hmac_get_secret: None,
             prf: Some(prf),
             ..Default::default()
         }),
@@ -638,6 +639,7 @@ async fn run_failed_test(
         allow: credential.map(|x| vec![x.clone()]).unwrap_or_default(),
         user_verification: UserVerificationRequirement::Discouraged,
         extensions: Some(GetAssertionRequestExtensions {
+            hmac_get_secret: None,
             prf: Some(prf),
             ..Default::default()
         }),
@@ -732,6 +734,7 @@ async fn test_webauthn_prf_variable_length_input() {
             allow: vec![credential.clone()],
             user_verification: UserVerificationRequirement::Preferred,
             extensions: Some(GetAssertionRequestExtensions {
+                hmac_get_secret: None,
                 prf: Some(PrfInput {
                     eval: Some(PrfInputValue {
                         first,
@@ -952,6 +955,7 @@ async fn test_webauthn_prf_upgrades_uv_at_assertion() {
         allow: vec![credential],
         user_verification: UserVerificationRequirement::Discouraged,
         extensions: Some(GetAssertionRequestExtensions {
+            hmac_get_secret: None,
             prf: Some(prf),
             ..Default::default()
         }),

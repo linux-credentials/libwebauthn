@@ -100,6 +100,7 @@ async fn test_webauthn_large_blob_read_returns_planted_blob() {
         allow: vec![credential],
         user_verification: UserVerificationRequirement::Discouraged,
         extensions: Some(GetAssertionRequestExtensions {
+            hmac_get_secret: None,
             appid: None,
             cred_blob: false,
             prf: None,
@@ -137,6 +138,7 @@ async fn capture_large_blob_key(
         allow: vec![credential.clone()],
         user_verification: UserVerificationRequirement::Discouraged,
         extensions: Some(GetAssertionRequestExtensions {
+            hmac_get_secret: None,
             appid: None,
             cred_blob: false,
             prf: None,
@@ -294,6 +296,7 @@ fn ga_request(
         allow: vec![credential.clone()],
         user_verification: UserVerificationRequirement::Discouraged,
         extensions: Some(GetAssertionRequestExtensions {
+            hmac_get_secret: None,
             appid: None,
             cred_blob: false,
             prf: None,

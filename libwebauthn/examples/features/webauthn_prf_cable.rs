@@ -179,6 +179,7 @@ async fn get(credential_id: Option<&str>) -> Result<(), Box<dyn Error>> {
         allow,
         user_verification: UserVerificationRequirement::Preferred,
         extensions: Some(GetAssertionRequestExtensions {
+            hmac_get_secret: None,
             prf: Some(PrfInput {
                 eval: Some(PrfInputValue {
                     first: GET_EVAL_FIRST.to_vec(),

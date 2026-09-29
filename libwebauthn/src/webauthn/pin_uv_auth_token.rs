@@ -1107,6 +1107,7 @@ mod test {
                 info_extensions.as_deref(),
                 UserVerificationRequirement::Discouraged,
                 Some(GetAssertionRequestExtensions {
+                    hmac_get_secret: None,
                     prf: Some(PrfInput {
                         eval: Some(PrfInputValue {
                             first: vec![0; 32],
@@ -1153,6 +1154,7 @@ mod test {
                 Some(&["hmac-secret"]),
                 UserVerificationRequirement::Preferred,
                 Some(GetAssertionRequestExtensions {
+                    hmac_get_secret: None,
                     prf: Some(PrfInput {
                         eval: Some(PrfInputValue {
                             first: vec![0; 32],
@@ -1225,6 +1227,7 @@ mod test {
 
         for (info_options, uv_requirement) in testcases {
             let extensions = Some(GetAssertionRequestExtensions {
+                hmac_get_secret: None,
                 prf: Some(PrfInput {
                     eval: Some(PrfInputValue {
                         first: vec![0; 32],
@@ -1298,6 +1301,7 @@ mod test {
         channel.push_command_pair(info_req, info_resp);
 
         let extensions = Some(GetAssertionRequestExtensions {
+            hmac_get_secret: None,
             prf: Some(PrfInput {
                 eval: Some(PrfInputValue {
                     first: vec![0; 32],
@@ -1348,6 +1352,7 @@ mod test {
 
         for (info_options, uv_requirement) in testcases {
             let extensions = Some(GetAssertionRequestExtensions {
+                hmac_get_secret: None,
                 prf: Some(PrfInput {
                     eval: Some(PrfInputValue {
                         first: vec![0; 32],
@@ -1468,6 +1473,7 @@ mod test {
 
         for (info_options, uv_requirement) in testcases {
             let extensions = Some(GetAssertionRequestExtensions {
+                hmac_get_secret: None,
                 prf: Some(PrfInput {
                     eval: Some(PrfInputValue {
                         first: vec![0; 32],
@@ -2214,6 +2220,7 @@ mod test {
         channel.push_command_pair(key_agreement_req, key_agreement_resp);
 
         let extensions = Some(GetAssertionRequestExtensions {
+            hmac_get_secret: None,
             large_blob: Some(GetAssertionLargeBlobExtension::Write(vec![1, 2, 3, 4])),
             ..Default::default()
         });

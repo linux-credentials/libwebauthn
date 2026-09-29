@@ -92,6 +92,7 @@ async fn run_success_test(
         allow: vec![credential.clone()],
         user_verification: UserVerificationRequirement::Preferred,
         extensions: Some(GetAssertionRequestExtensions {
+            hmac_get_secret: None,
             prf: Some(prf),
             ..Default::default()
         }),
