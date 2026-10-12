@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use serde::Deserialize;
 use serde_bytes::ByteBuf;
@@ -6,7 +6,8 @@ use serde_bytes::ByteBuf;
 use crate::{
     ops::webauthn::{Base64UrlString, PublicKeyCredentialHint, UserVerificationRequirement},
     proto::ctap2::{
-        Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialType, Ctap2Transport,
+        cbor::Value, Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialType,
+        Ctap2Transport,
     },
 };
 
@@ -57,6 +58,9 @@ pub struct GetAssertionRequestExtensionsJSON {
     /// existing U2F credentials registered under a legacy AppID, this URL is
     /// hashed in place of the rpId to derive the U2F application parameter.
     pub appid: Option<String>,
+    /// Extensions without a typed field, keyed by identifier.
+    #[serde(flatten)]
+    pub other: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
