@@ -1,5 +1,6 @@
 use serde::Serialize;
 use serde_cbor_2 as serde_cbor;
+use std::collections::BTreeMap;
 
 #[derive(thiserror::Error, Debug)]
 pub enum CborError {
@@ -18,6 +19,31 @@ impl PartialEq for CborError {
 }
 
 pub(crate) type Value = serde_cbor::Value;
+
+/// Serializes `typed` as a single definite-length CBOR map in CTAP2 canonical key
+/// order, with the entries of `other` merged in. Entries of `typed` win on a clash.
+/// With no `other` entries, `typed` is serialized unchanged.
+pub(crate) fn serialize_merged<T, S>(
+    typed: &T,
+    other: impl ExactSizeIterator<Item = (Value, Value)>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    T: Serialize,
+    S: serde::Serializer,
+{
+    use serde::ser::Error;
+
+    if other.len() == 0 {
+        return typed.serialize(serializer);
+    }
+    let Value::Map(typed) = serde_cbor::value::to_value(typed).map_err(S::Error::custom)? else {
+        return Err(S::Error::custom("expected a map"));
+    };
+    let mut merged: BTreeMap<Value, Value> = other.collect();
+    merged.extend(typed);
+    merged.serialize(serializer)
+}
 
 pub(crate) fn to_vec<T>(serializable: &T) -> Result<Vec<u8>, CborError>
 where
@@ -148,5 +174,28 @@ mod tests {
         let serialized = to_vec(&nested_struct).unwrap();
         let expected = serde_cbor::to_vec(&nested_struct).unwrap();
         assert_eq!(serialized, expected);
+    }
+
+    #[test]
+    fn serialize_merged_typed_entry_wins_on_clash() {
+        let typed = NamedStruct { value: 10 };
+        let other = BTreeMap::from([
+            (Value::Text("key".into()), Value::Integer(99)),
+            (Value::Text("extra".into()), Value::Integer(1)),
+        ]);
+
+        let mut bytes = Vec::new();
+        serialize_merged(
+            &typed,
+            other.into_iter(),
+            &mut serde_cbor::Serializer::new(&mut bytes),
+        )
+        .unwrap();
+
+        let expected = BTreeMap::from([
+            (Value::Text("key".into()), Value::Integer(10)),
+            (Value::Text("extra".into()), Value::Integer(1)),
+        ]);
+        assert_eq!(bytes, to_vec(&expected).unwrap());
     }
 }
