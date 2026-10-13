@@ -11,8 +11,8 @@ use tracing::{debug, error, warn};
 use super::data_channel::CableDataChannel;
 use crate::transport::cable::error::CableError;
 
-/// End-of-Message sequence terminating every L2CAP message (CRLF).
-const EOM: [u8; 2] = [0x0D, 0x0A];
+/// Size of the big-endian length prefix preceding every L2CAP message payload.
+const LENGTH_PREFIX_LEN: usize = 4;
 
 /// How long to wait for the negotiated send MTU to become available after
 /// `connect()` returns. If unset, bluer silently caps each write to 16 bytes,
@@ -21,7 +21,8 @@ const MTU_READY_TIMEOUT: Duration = Duration::from_secs(2);
 const MTU_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 /// [`CableDataChannel`] over the insecure L2CAP CoC socket the CMHD opens for CTAP 2.3 hybrid.
-/// Messages are CRLF-terminated per the CTAP 2.3 hybrid draft.
+/// Every message is prefixed with its 4-byte big-endian payload length per the
+/// CTAP 2.3 hybrid draft.
 pub(crate) struct L2capDataChannel {
     stream: bluer::l2cap::Stream,
     // Carries bytes read past a message boundary so `recv` stays cancel-safe.
@@ -87,12 +88,19 @@ async fn await_send_mtu(stream: &bluer::l2cap::Stream) {
 #[async_trait]
 impl CableDataChannel for L2capDataChannel {
     async fn send(&mut self, message: &[u8]) -> Result<(), CableError> {
-        self.stream.write_all(message).await.map_err(|e| {
-            error!(?e, "Failed to write L2CAP message");
-            CableError::from(e)
+        let len = u32::try_from(message.len()).map_err(|_| {
+            error!(
+                len = message.len(),
+                "L2CAP message too large for length prefix"
+            );
+            CableError::InvalidFraming
         })?;
-        self.stream.write_all(&EOM).await.map_err(|e| {
-            error!(?e, "Failed to write L2CAP EOM");
+        // Single write so the prefix and payload aren't split into separate SDUs.
+        let mut frame = Vec::with_capacity(LENGTH_PREFIX_LEN + message.len());
+        frame.extend_from_slice(&len.to_be_bytes());
+        frame.extend_from_slice(message);
+        self.stream.write_all(&frame).await.map_err(|e| {
+            error!(?e, "Failed to write L2CAP message");
             CableError::from(e)
         })?;
         Ok(())
@@ -138,12 +146,15 @@ impl CableDataChannel for L2capDataChannel {
     }
 }
 
-/// Drains the first CRLF-terminated message from `buf`, returning it without the
-/// CRLF. Returns `None` (leaving `buf` untouched) until a full message is buffered.
+/// Drains the first length-prefixed message from `buf`, returning its payload
+/// without the prefix. Returns `None` (leaving `buf` untouched) until a full
+/// message is buffered.
 fn split_next_message(buf: &mut Vec<u8>) -> Option<Vec<u8>> {
-    let eom = buf.windows(EOM.len()).position(|w| w == EOM)?;
-    let message: Vec<u8> = buf.get(..eom).unwrap_or(&[]).to_vec();
-    buf.drain(..eom + EOM.len());
+    let prefix: [u8; LENGTH_PREFIX_LEN] = buf.get(..LENGTH_PREFIX_LEN)?.try_into().ok()?;
+    let len = usize::try_from(u32::from_be_bytes(prefix)).ok()?;
+    let end = LENGTH_PREFIX_LEN.checked_add(len)?;
+    let message = buf.get(LENGTH_PREFIX_LEN..end)?.to_vec();
+    buf.drain(..end);
     Some(message)
 }
 
@@ -174,21 +185,24 @@ mod tests {
 
     #[test]
     fn split_message_across_reads() {
-        let mut buf = b"hel".to_vec();
+        let mut buf = b"\0\0\0".to_vec();
         assert_eq!(split_next_message(&mut buf), None);
-        assert_eq!(buf, b"hel");
-        buf.extend_from_slice(b"lo\r\n");
+        assert_eq!(buf, b"\0\0\0");
+        buf.extend_from_slice(b"\x05hel");
+        assert_eq!(split_next_message(&mut buf), None);
+        assert_eq!(buf, b"\0\0\0\x05hel");
+        buf.extend_from_slice(b"lo");
         assert_eq!(split_next_message(&mut buf), Some(b"hello".to_vec()));
         assert!(buf.is_empty());
     }
 
     #[test]
     fn split_multiple_buffered_messages() {
-        let mut buf = b"one\r\ntwo\r\nthr".to_vec();
+        let mut buf = b"\0\0\0\x03one\0\0\0\x03two\0\0\0\x03th".to_vec();
         assert_eq!(split_next_message(&mut buf), Some(b"one".to_vec()));
         assert_eq!(split_next_message(&mut buf), Some(b"two".to_vec()));
         assert_eq!(split_next_message(&mut buf), None);
-        assert_eq!(buf, b"thr");
+        assert_eq!(buf, b"\0\0\0\x03th");
     }
 
     #[test]
@@ -200,21 +214,27 @@ mod tests {
 
     #[test]
     fn split_empty_message() {
-        let mut buf = b"\r\nrest".to_vec();
+        let mut buf = b"\0\0\0\0rest".to_vec();
         assert_eq!(split_next_message(&mut buf), Some(Vec::new()));
         assert_eq!(buf, b"rest");
     }
 
     #[test]
     fn split_handles_binary_payload() {
-        let mut buf = vec![0x00, 0xFF, 0x0D, 0x0A];
-        assert_eq!(split_next_message(&mut buf), Some(vec![0x00, 0xFF]));
+        let mut buf = vec![0x00, 0x00, 0x00, 0x04, 0x00, 0xFF, 0x0D, 0x0A];
+        assert_eq!(
+            split_next_message(&mut buf),
+            Some(vec![0x00, 0xFF, 0x0D, 0x0A])
+        );
         assert!(buf.is_empty());
     }
 
     #[test]
-    fn eom_is_crlf() {
-        assert_eq!(EOM, [0x0D, 0x0A]);
+    fn length_prefix_is_big_endian() {
+        let mut buf = vec![0x00, 0x00, 0x01, 0x00];
+        buf.extend_from_slice(&[0xAB; 0x100]);
+        assert_eq!(split_next_message(&mut buf), Some(vec![0xAB; 0x100]));
+        assert!(buf.is_empty());
     }
 
     #[test]
