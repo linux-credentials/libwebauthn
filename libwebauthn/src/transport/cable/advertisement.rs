@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 
-use ::btleplug::api::Central;
 use futures::StreamExt;
 use serde_cbor_2 as serde_cbor;
 use std::pin::pin;
@@ -82,7 +81,7 @@ pub(crate) async fn await_advertisement(
         .or(Err(CableError::TransportUnavailable))?;
 
     let mut stream = pin!(stream);
-    while let Some((adapter, peripheral, data)) = stream.as_mut().next().await {
+    while let Some((_adapter, peripheral, data)) = stream.as_mut().next().await {
         debug!({ ?peripheral, ?data }, "Found device with service data");
 
         let Some(device) = btleplug::manager::get_device(peripheral.clone())
@@ -122,11 +121,6 @@ pub(crate) async fn await_advertisement(
             ?decrypted,
             "Successfully decrypted advertisement from device"
         );
-
-        adapter
-            .stop_scan()
-            .await
-            .or(Err(CableError::TransportUnavailable))?;
 
         return Ok((device, advert));
     }
