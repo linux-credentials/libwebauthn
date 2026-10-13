@@ -1,6 +1,25 @@
 [workspace]
 resolver = "2"
-members = ["libwebauthn", "libwebauthn-tests"]
+members = [
+    "libwebauthn",
+    "libwebauthn-tests",
+    "libwebauthn-varlink-types",
+]
+
+# Shared by the varlink crates. libwebauthn and libwebauthn-tests keep their own
+# metadata and dependency versions.
+[workspace.package]
+edition = "2021"
+rust-version = "1.88"
+license = "LGPL-2.1-or-later"
+readme = "README.md"
+homepage = "https://github.com/linux-credentials"
+repository = "https://github.com/linux-credentials/libwebauthn"
+
+[workspace.dependencies]
+libwebauthn = { path = "libwebauthn" }
+serde = "1.0.229"
+zlink = "0.7.1"
 
 # The trussed ecosystem is currently a bit messy, so we have to do some patching of the versions
 [patch.crates-io]
