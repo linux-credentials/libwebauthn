@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "libwebauthn",
     "libwebauthn-tests",
+    "libwebauthn-varlink-server",
     "libwebauthn-varlink-types",
 ]
 
@@ -17,8 +18,12 @@ homepage = "https://github.com/linux-credentials"
 repository = "https://github.com/linux-credentials/libwebauthn"
 
 [workspace.dependencies]
+futures-util = "0.3.33"
 libwebauthn = { path = "libwebauthn" }
+libwebauthn-varlink-types = { path = "libwebauthn-varlink-types" }
 serde = "1.0.229"
+tokio = "1.53.1"
+tracing-subscriber = { version = "0.3.3", features = ["env-filter"] }
 zlink = "0.7.1"
 
 # The trussed ecosystem is currently a bit messy, so we have to do some patching of the versions
