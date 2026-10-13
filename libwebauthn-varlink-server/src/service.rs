@@ -123,6 +123,14 @@ impl WebauthnService {
             pending_pins,
         }
     }
+
+    /// Lets tests count the PIN requests waiting for `provide_pin`. Over the
+    /// interface they can only be observed by answering them.
+    #[cfg(test)]
+    pub(crate) fn pending_pin_counter(&self) -> impl Fn() -> usize + Send + 'static {
+        let pending_pins = Arc::clone(&self.pending_pins);
+        move || pending_pins.lock().unwrap().len()
+    }
 }
 
 fn err_stream(err: VarlinkError) -> EventStream {

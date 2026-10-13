@@ -2181,14 +2181,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "libwebauthn-varlink-client"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "libwebauthn-varlink-types",
+ "qrcode",
+ "serde",
+ "text_io",
+ "tokio",
+ "tracing-subscriber",
+ "zlink",
+]
+
+[[package]]
 name = "libwebauthn-varlink-server"
 version = "0.1.0"
 dependencies = [
  "async-stream",
  "futures-util",
  "libwebauthn",
+ "libwebauthn-tests",
+ "libwebauthn-varlink-client",
  "libwebauthn-varlink-types",
  "serde",
+ "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",

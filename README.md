@@ -106,6 +106,31 @@ $ cargo run --example cred_management_hid
 $ cargo run --example persistent_cred_management_hid
 ```
 
+## Varlink daemon
+
+`webauthd-link` lets other processes run hybrid (caBLE) ceremonies through
+libwebauthn. It serves the `com.github.linux-credentials.webauthn`
+[varlink](https://varlink.org) interface on the Unix socket given as its only
+argument. For now it supports registration (MakeCredential) with transient
+pairings only.
+
+```
+$ cargo run --bin webauthd-link -- "$XDG_RUNTIME_DIR/webauthd-link.sock"
+$ varlinkctl introspect "$XDG_RUNTIME_DIR/webauthd-link.sock" com.github.linux-credentials.webauthn
+```
+
+The daemon checks the origin a client sends against the request, but not which
+client sent it: any process that can open the socket can act on behalf of any
+website. Keep the socket private, as in the per-user `$XDG_RUNTIME_DIR` above.
+
+Rust clients use the `libwebauthn-varlink-client` crate. Its example starts a
+private daemon of its own, shows the QR code, and registers a credential with
+a phone:
+
+```
+$ cargo run --example varlink_cable
+```
+
 ## Minimum Supported Rust Version (MSRV)
 
 libwebauthn uses Rust edition 2021 and tracks recent stable Rust. CI builds and

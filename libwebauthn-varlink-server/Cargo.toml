@@ -25,3 +25,10 @@ tracing = "0.1.41"
 tracing-subscriber.workspace = true
 uuid = "1.24.0"
 zlink.workspace = true
+
+[dev-dependencies]
+libwebauthn-tests = { path = "../libwebauthn-tests" }
+libwebauthn-varlink-client = { path = "../libwebauthn-varlink-client" }
+serde_json = "1"
+tempfile = "3.21"
+tokio = { workspace = true, features = ["full"] }

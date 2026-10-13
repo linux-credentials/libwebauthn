@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "libwebauthn",
     "libwebauthn-tests",
+    "libwebauthn-varlink-client",
     "libwebauthn-varlink-server",
     "libwebauthn-varlink-types",
 ]

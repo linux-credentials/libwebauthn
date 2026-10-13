@@ -3,6 +3,8 @@
 //! argument.
 mod provider;
 mod service;
+#[cfg(test)]
+mod tests;
 
 use std::env;
 use std::os::unix::fs::FileTypeExt;
