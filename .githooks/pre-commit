@@ -5,16 +5,16 @@
 
 set -eu
 
-# Find the Cargo.toml relative to the repo root
+# Check the whole workspace, not just libwebauthn
 REPO_ROOT="$(git rev-parse --show-toplevel)"
-MANIFEST="$REPO_ROOT/libwebauthn/Cargo.toml"
+MANIFEST="$REPO_ROOT/Cargo.toml"
 
 if ! command -v cargo >/dev/null 2>&1; then
     echo "warning: cargo not found, skipping format check"
     exit 0
 fi
 
-if ! cargo fmt --manifest-path "$MANIFEST" -- --check >/dev/null 2>&1; then
-    echo "error: code is not formatted. Run 'cargo fmt --manifest-path libwebauthn/Cargo.toml' and re-commit."
+if ! cargo fmt --all --manifest-path "$MANIFEST" -- --check >/dev/null 2>&1; then
+    echo "error: code is not formatted. Run 'cargo fmt --all' and re-commit."
     exit 1
 fi

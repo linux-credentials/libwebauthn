@@ -36,6 +36,10 @@ jobs:
         run: cargo test --workspace --verbose
         env:
           LIBWEBAUTHN_PSL_SYSTEM_TEST: "1"
+      - name: Validate the varlink interface description
+        # The tests keep this file in sync with the service; this checks it parses
+        # for other varlink implementations too.
+        run: varlinkctl validate-idl libwebauthn-varlink-server/com.github.linux-credentials.webauthn.varlink
       - name: Run tests with nfc-backend-pcsc
         run: cargo test -p libwebauthn --lib --features nfc-backend-pcsc --verbose
         env:

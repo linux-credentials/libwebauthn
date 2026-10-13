@@ -1,0 +1,19 @@
+[package]
+name = "libwebauthn-varlink-types"
+description = "FIDO2 (WebAuthn) varlink type library for Linux written in Rust"
+version = "0.1.0"
+authors = ["Andreas Bergmeier <abergmeier@gmx.net>"]
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+readme.workspace = true
+homepage.workspace = true
+repository.workspace = true
+
+[dependencies]
+libwebauthn.workspace = true
+serde.workspace = true
+zlink.workspace = true
+
+[dev-dependencies]
+serde_json = "1"
