@@ -2,12 +2,14 @@ use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
 
-use libwebauthn::transport::cable::is_available;
 use libwebauthn::transport::cable::known_devices::{
     CableKnownDevice, ClientPayloadHint, EphemeralDeviceInfoStore,
 };
 use libwebauthn::transport::cable::qr_code_device::{
     CableQrCodeDevice, CableTransports, QrCodeOperationHint,
+};
+use libwebauthn::transport::cable::{
+    is_available, CableClose, CableLingerConfig, CableLingerRegistry,
 };
 use qrcode::render::unicode;
 use qrcode::QrCode;
@@ -68,6 +70,14 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     let device_info_store = Arc::new(EphemeralDeviceInfoStore::default());
+    // One registry per client, threaded through every hybrid channel. It lets
+    // a connection keep receiving the linking update after the ceremony, and
+    // a new connection evict the one still lingering.
+    let linger_registry = CableLingerRegistry::new();
+    let settings = || ChannelSettings {
+        cable_linger: Some(CableLingerConfig::new(linger_registry.clone())),
+        ..Default::default()
+    };
     let request_origin: RequestOrigin = "https://example.org".try_into().expect("Invalid origin");
     let psl = SystemPublicSuffixList::auto().expect(
         "PSL not available; install the publicsuffix-list (or publicsuffix-list-dafsa) package, or pass an explicit path",
@@ -89,7 +99,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             .build();
         println!("{}", image);
 
-        let mut channel = device.channel(ChannelSettings::default()).await.unwrap();
+        let mut channel = device.channel(settings()).await.unwrap();
         println!("Channel established {:?}", channel);
 
         let state_recv = channel.get_ux_update_receiver();
@@ -113,10 +123,18 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             .to_json_string(&request, JsonFormat::Prettified)
             .expect("Failed to serialize MakeCredential response");
         println!("WebAuthn MakeCredential response (JSON):\n{response_json}");
+
+        // Say goodbye, then keep receiving in the background: the phone may
+        // send its linking information a while after the response.
+        channel.close(CableClose::Linger).await;
     }
 
-    println!("Waiting for 5 seconds before contacting the device...");
+    println!("Waiting for 5 seconds for a linking update...");
     sleep(Duration::from_secs(5)).await;
+    println!(
+        "Connections still lingering: {}",
+        linger_registry.lingering_count()
+    );
 
     // Second leg: prefer state-assisted reconnection if the peer offered
     // linking info, otherwise fall back to a fresh QR. Many authenticators
@@ -131,12 +149,11 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         )
         .await
         .unwrap();
-        let mut channel = known_device
-            .channel(ChannelSettings::default())
-            .await
-            .unwrap();
+        // Opening this channel evicts the lingering QR connection.
+        let mut channel = known_device.channel(settings()).await.unwrap();
         println!("Channel established {:?}", channel);
         run_get_assertion(&mut channel, &request_origin, &psl).await?;
+        channel.close(CableClose::Immediate).await;
     } else {
         println!("No known devices (peer did not offer linking). Falling back to QR.");
         let mut device: CableQrCodeDevice = CableQrCodeDevice::new_persistent(
@@ -151,11 +168,15 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             .light_color(unicode::Dense1x2::Dark)
             .build();
         println!("{}", image);
-        let mut channel = device.channel(ChannelSettings::default()).await.unwrap();
+        let mut channel = device.channel(settings()).await.unwrap();
         println!("Channel established {:?}", channel);
         run_get_assertion(&mut channel, &request_origin, &psl).await?;
+        // Nothing follows that could use a linking update, so just close.
+        channel.close(CableClose::Immediate).await;
     }
 
+    // Signal any lingering connection to stop before the runtime goes away.
+    linger_registry.close_lingering();
     Ok(())
 }
 

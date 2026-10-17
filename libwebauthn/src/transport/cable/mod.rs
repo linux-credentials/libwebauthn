@@ -4,6 +4,7 @@ mod crypto;
 mod data_channel;
 mod digit_encode;
 mod l2cap;
+mod linger;
 mod protocol;
 
 pub mod advertisement;
@@ -15,7 +16,9 @@ pub mod qr_code_device;
 pub mod tunnel;
 
 use super::Transport;
+pub use channel::CableClose;
 pub use digit_encode::digit_encode;
+pub use linger::{CableLingerConfig, CableLingerRegistry};
 
 /// Checks if the Cable/Hybrid transport is available on the system.
 /// Cable depends on a Bluetooth adapter for BLE advertisement discovery.

@@ -36,6 +36,7 @@ mod channel;
 #[allow(clippy::module_inception)]
 mod transport;
 
+pub use cable::{CableClose, CableLingerConfig, CableLingerRegistry};
 pub(crate) use channel::{AuthTokenData, Ctap2AuthTokenPermission};
 pub use channel::{Channel, ChannelSettings, Ctap2AuthTokenStore};
 
