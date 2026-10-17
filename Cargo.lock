@@ -16,7 +16,7 @@ checksum = "d122413f284cf2d62fb1b7db97e02edb8cda96d769b16e443a4f6195e35662b0"
 dependencies = [
  "crypto-common",
  "generic-array",
- "heapless",
+ "heapless 0.7.17",
 ]
 
 [[package]]
@@ -126,7 +126,7 @@ version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ce391931a2cc4597eaf0d464db9d4d5e1939ccc8dd6eda0f86cda117e914c02d"
 dependencies = [
- "iso7816",
+ "iso7816 0.1.4",
 ]
 
 [[package]]
@@ -464,8 +464,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b6dd31f7069836e87169bc5910212571b873cebe389c7c7f2d8b1fb3e55c80d"
 dependencies = [
  "delog",
- "heapless",
- "heapless-bytes",
+ "heapless 0.7.17",
+ "heapless 0.9.3",
+ "heapless-bytes 0.3.0",
+ "heapless-bytes 0.5.0",
  "serde_core",
 ]
 
@@ -596,7 +598,18 @@ version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75494895fa1a9713ca725ddf2db084ee84fb0c20938fdd7c89293febe732d30a"
 dependencies = [
- "heapless-bytes",
+ "heapless-bytes 0.3.0",
+ "serde",
+ "serde_repr",
+]
+
+[[package]]
+name = "cosey"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "540d9a2a9f2d35a876fedb35f4c0b51c7a69f71f042252cf34fc159708f962d4"
+dependencies = [
+ "heapless-bytes 0.5.0",
  "serde",
  "serde_repr",
 ]
@@ -690,11 +703,30 @@ checksum = "bb8b105c5e728afd373e99874f0c1911c170b3a56848456cc16feb4506321606"
 dependencies = [
  "bitflags 1.3.2",
  "cbor-smol",
- "cosey",
+ "cosey 0.3.2",
  "delog",
- "heapless",
- "heapless-bytes",
- "iso7816",
+ "heapless 0.7.17",
+ "heapless-bytes 0.3.0",
+ "iso7816 0.1.4",
+ "serde",
+ "serde-indexed 0.1.1",
+ "serde_bytes",
+ "serde_repr",
+]
+
+[[package]]
+name = "ctap-types"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab74c7ac39f3bde2a13960ab8257975a35cfcc3d45420ca59b21b55dcbadc6f9"
+dependencies = [
+ "bitflags 1.3.2",
+ "cbor-smol",
+ "cosey 0.4.0",
+ "delog",
+ "heapless 0.9.3",
+ "heapless-bytes 0.5.0",
+ "iso7816 0.2.0",
  "serde",
  "serde-indexed 0.1.1",
  "serde_bytes",
@@ -720,7 +752,7 @@ version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1fe93489fe96c998488d0843dffea35c02ed9add2585e55228e1d45988727ecc"
 dependencies = [
- "heapless-bytes",
+ "heapless-bytes 0.3.0",
  "trussed-core",
 ]
 
@@ -732,7 +764,7 @@ checksum = "38fd4316573df369820c5a9f8285fe522d8871c0b20bcf7d390f73b8e6caee28"
 dependencies = [
  "ctaphid-app",
  "delog",
- "heapless-bytes",
+ "heapless-bytes 0.3.0",
  "interchange",
  "ref-swap",
  "trussed-core",
@@ -1133,13 +1165,13 @@ source = "git+https://github.com/Nitrokey/fido-authenticator.git?tag=v0.1.1-nitr
 dependencies = [
  "apdu-app",
  "cbor-smol",
- "cosey",
- "ctap-types",
+ "cosey 0.3.2",
+ "ctap-types 0.4.0",
  "ctaphid-app",
  "delog",
- "heapless",
- "heapless-bytes",
- "iso7816",
+ "heapless 0.7.17",
+ "heapless-bytes 0.3.0",
+ "iso7816 0.1.4",
  "littlefs2-core",
  "serde",
  "serde-indexed 0.1.1",
@@ -1186,7 +1218,7 @@ checksum = "a2510a9088d9557aab93401404fc6786fad82f55705dedf4ee5884a3ace9be9b"
 dependencies = [
  "delog",
  "flexiber_derive",
- "heapless",
+ "heapless 0.7.17",
 ]
 
 [[package]]
@@ -1461,6 +1493,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "hash32"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "47d60b12902ba28e2730cd37e95b8c9223af2808df9e902d4df49588d1470606"
+dependencies = [
+ "byteorder",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.14.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1488,10 +1529,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cdc6457c0eb62c71aac4bc17216026d8410337c4126773b9c5daba343f17964f"
 dependencies = [
  "atomic-polyfill",
- "hash32",
+ "hash32 0.2.1",
  "rustc_version",
  "serde",
  "spin",
+ "stable_deref_trait",
+]
+
+[[package]]
+name = "heapless"
+version = "0.9.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "25ba4bd83f9415b58b4ed8dc5714c76e626a105be4646c02630ad730ad3b5aa4"
+dependencies = [
+ "hash32 0.3.1",
+ "serde_core",
  "stable_deref_trait",
 ]
 
@@ -1501,9 +1553,19 @@ version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7285eba272c6af3e9f15fb9e1c1b6e7d35aa70580ffe0d47af017e97dfb6f48b"
 dependencies = [
- "heapless",
+ "heapless 0.7.17",
  "serde",
  "typenum",
+]
+
+[[package]]
+name = "heapless-bytes"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "774f9dbf3f3a66edc65579e68b9f564ad5ec52e770a755af46b87d40909b8024"
+dependencies = [
+ "heapless 0.9.3",
+ "serde_core",
 ]
 
 [[package]]
@@ -1834,7 +1896,16 @@ version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cd3c7e91da489667bb054f9cd2f1c60cc2ac4478a899f403d11dbc62189215b0"
 dependencies = [
- "heapless",
+ "heapless 0.7.17",
+]
+
+[[package]]
+name = "iso7816"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4b574e1a9ae668e3167a82fe2c62fe629ca60383da01c6f70acb0fb642d9c55f"
+dependencies = [
+ "heapless 0.9.3",
 ]
 
 [[package]]
@@ -1982,14 +2053,13 @@ dependencies = [
  "btleplug",
  "byteorder",
  "cbc",
- "cosey",
- "ctap-types",
+ "cosey 0.4.0",
+ "ctap-types 0.5.0",
  "curve25519-dalek",
  "dbus",
  "der 0.7.10",
  "flate2",
  "futures",
- "heapless",
  "hex",
  "hidapi",
  "hkdf",
@@ -2043,7 +2113,7 @@ version = "0.0.0"
 dependencies = [
  "aes-gcm",
  "base64-url",
- "cosey",
+ "cosey 0.3.2",
  "ctaphid",
  "ctaphid-dispatch",
  "delog",
@@ -2088,7 +2158,7 @@ checksum = "32a43f3c0c6a7d127e3e1241665dd896d8bf1ca31cf9d826a1dc65239bd59868"
 dependencies = [
  "delog",
  "generic-array",
- "heapless",
+ "heapless 0.7.17",
  "littlefs2-core",
  "littlefs2-sys",
 ]
@@ -2100,7 +2170,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0dd2d1cad5532f5e11b0fd871b8a981885efd3fdaec0427c0d637322ae09efbf"
 dependencies = [
  "bitflags 2.11.1",
- "heapless-bytes",
+ "heapless-bytes 0.3.0",
  "serde",
 ]
 
@@ -2606,7 +2676,7 @@ version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a25c0b0ae06fcffe600ad392aabfa535696c8973f2253d9ac83171924c58a858"
 dependencies = [
- "heapless",
+ "heapless 0.7.17",
  "postcard-cobs",
  "serde",
 ]
@@ -3091,7 +3161,7 @@ version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b947325a585e90733e0e9ec097228f40b637cc346f9bd68f84d5c6297d0fcfef"
 dependencies = [
- "cosey",
+ "cosey 0.3.2",
  "ed25519",
  "subtle",
  "zeroize",
@@ -3955,13 +4025,13 @@ dependencies = [
  "cfg-if",
  "chacha20",
  "chacha20poly1305",
- "cosey",
+ "cosey 0.3.2",
  "delog",
  "des",
  "flexiber",
  "generic-array",
- "heapless",
- "heapless-bytes",
+ "heapless 0.7.17",
+ "heapless-bytes 0.3.0",
  "hex-literal",
  "hmac 0.12.1",
  "interchange",
@@ -3997,7 +4067,7 @@ version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "afddad280ae8a5235e1b06408cca909ce9454cdd89f941b94b024c580732b3ce"
 dependencies = [
- "heapless-bytes",
+ "heapless-bytes 0.3.0",
  "littlefs2-core",
  "postcard",
  "rand_core 0.6.4",

@@ -1182,8 +1182,8 @@ mod test {
                 .unwrap();
 
         cosey::PublicKey::EcdhEsHkdf256Key(cosey::EcdhEsHkdf256PublicKey {
-            x: cosey::Bytes::from_slice(&pub_key_x).unwrap(),
-            y: cosey::Bytes::from_slice(&pub_key_y).unwrap(),
+            x: cosey::Bytes::try_from(pub_key_x.as_slice()).unwrap(),
+            y: cosey::Bytes::try_from(pub_key_y.as_slice()).unwrap(),
         })
     }
 

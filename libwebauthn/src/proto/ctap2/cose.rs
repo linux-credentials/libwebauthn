@@ -556,8 +556,8 @@ mod tests {
     fn p256_public_key_golden_cose() {
         use cosey::{Bytes, P256PublicKey, PublicKey};
         let key = PublicKey::P256Key(P256PublicKey {
-            x: Bytes::from_slice(&[0x06u8; 32]).unwrap(),
-            y: Bytes::from_slice(&[0x07u8; 32]).unwrap(),
+            x: Bytes::from(&[0x06u8; 32]),
+            y: Bytes::from(&[0x07u8; 32]),
         });
         let bytes = cbor::to_vec(&key).unwrap();
         // {1: 2(EC2), 3: -7(ES256), -1: 1(P256), -2: x[32], -3: y[32]}.

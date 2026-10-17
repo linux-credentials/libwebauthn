@@ -1787,8 +1787,8 @@ mod tests {
         // Minimal COSE_Key for a P-256 ES256 credential, used as opaque
         // bytes by the test harness.
         let cose_public_key = cosey::PublicKey::P256Key(cosey::P256PublicKey {
-            x: Bytes::from_slice(&[0u8; 32]).unwrap(),
-            y: Bytes::from_slice(&[0u8; 32]).unwrap(),
+            x: Bytes::from(&[0u8; 32]),
+            y: Bytes::from(&[0u8; 32]),
         });
         let credential_public_key = cbor::to_vec(&cose_public_key).unwrap();
 
@@ -2095,8 +2095,8 @@ mod tests {
         use serde_bytes::ByteBuf;
 
         let cose_public_key = cosey::PublicKey::P256Key(cosey::P256PublicKey {
-            x: Bytes::from_slice(&[0u8; 32]).unwrap(),
-            y: Bytes::from_slice(&[0u8; 32]).unwrap(),
+            x: Bytes::from(&[0u8; 32]),
+            y: Bytes::from(&[0u8; 32]),
         });
         let credential_public_key = cbor::to_vec(&cose_public_key).unwrap();
 
