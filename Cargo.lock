@@ -2252,9 +2252,9 @@ checksum = "8d5439c4ad607c3c23abf66de8c8bf57ba8adcd1f129e699851a6e43935d339d"
 
 [[package]]
 name = "nfc1"
-version = "0.6.0"
+version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "60d6dc2e4110af159c220d2d004661e380b6c40d93c5b04e839e4944f9d5291d"
+checksum = "86cab229f42df4140bb410c1d2cd2f9008b22575742719cfc73268fb6308bab8"
 dependencies = [
  "nfc1-sys",
 ]
