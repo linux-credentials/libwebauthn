@@ -1,6 +1,6 @@
 //! [`Device`] impls opening a [`HybridChannel`] to a PXP device.
 use async_trait::async_trait;
-use libwebauthn_pxp::{ConnectTarget, PxpUpdate, UpdateSink};
+use pxp::{ConnectTarget, PxpUpdate, UpdateSink};
 use tokio::sync::broadcast;
 use tracing::{debug, trace, warn};
 
@@ -26,7 +26,7 @@ impl UpdateSink for UxUpdateForwarder {
 
 fn open_channel(target: ConnectTarget, settings: ChannelSettings) -> HybridChannel {
     let (ux_update_sender, _) = broadcast::channel(16);
-    let tunnel = libwebauthn_pxp::connect(target, UxUpdateForwarder(ux_update_sender.clone()));
+    let tunnel = pxp::connect(target, UxUpdateForwarder(ux_update_sender.clone()));
     HybridChannel {
         tunnel,
         ux_update_sender,

@@ -2066,7 +2066,6 @@ dependencies = [
  "http",
  "icu_normalizer",
  "idna",
- "libwebauthn-pxp",
  "maplit",
  "mockall",
  "nfc1",
@@ -2077,6 +2076,7 @@ dependencies = [
  "p256 0.13.2",
  "pcsc",
  "publicsuffix",
+ "pxp",
  "qrcode",
  "rand 0.8.6",
  "reqwest",
@@ -2101,39 +2101,6 @@ dependencies = [
  "uuid",
  "x509-parser",
  "zeroize",
-]
-
-[[package]]
-name = "libwebauthn-pxp"
-version = "0.10.0"
-dependencies = [
- "aes",
- "async-trait",
- "base64-url",
- "bluer",
- "btleplug",
- "futures",
- "hex",
- "hkdf",
- "hmac 0.12.1",
- "p256 0.13.2",
- "rand 0.8.6",
- "rustls",
- "serde",
- "serde-indexed 0.2.0",
- "serde_bytes",
- "serde_cbor_2",
- "serde_repr",
- "sha2 0.10.9",
- "snow",
- "test-log",
- "thiserror 2.0.18",
- "tokio",
- "tokio-tungstenite",
- "tracing",
- "tungstenite",
- "url",
- "uuid",
 ]
 
 [[package]]
@@ -2825,6 +2792,39 @@ name = "pxfm"
 version = "0.1.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e0c5ccf5294c6ccd63a74f1565028353830a9c2f5eb0c682c355c471726a6e3f"
+
+[[package]]
+name = "pxp"
+version = "0.10.0"
+dependencies = [
+ "aes",
+ "async-trait",
+ "base64-url",
+ "bluer",
+ "btleplug",
+ "futures",
+ "hex",
+ "hkdf",
+ "hmac 0.12.1",
+ "p256 0.13.2",
+ "rand 0.8.6",
+ "rustls",
+ "serde",
+ "serde-indexed 0.2.0",
+ "serde_bytes",
+ "serde_cbor_2",
+ "serde_repr",
+ "sha2 0.10.9",
+ "snow",
+ "test-log",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
+ "tungstenite",
+ "url",
+ "uuid",
+]
 
 [[package]]
 name = "qrcode"

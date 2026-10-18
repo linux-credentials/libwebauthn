@@ -1,14 +1,12 @@
 //! Hybrid transport: `libwebauthn`'s `Channel` / `Device` adapter over the
-//! Proximity Exchange Protocol implemented in [`libwebauthn_pxp`].
+//! Proximity Exchange Protocol implemented in [`pxp`].
 use std::fmt::Display;
 
 mod device;
 
 pub mod channel;
 
-pub use libwebauthn_pxp::{
-    advertisement, digit_encode, error, known_devices, qr_code_device, tunnel,
-};
+pub use pxp::{advertisement, digit_encode, error, known_devices, qr_code_device, tunnel};
 
 use super::Transport;
 

@@ -1,5 +1,5 @@
 [package]
-name = "libwebauthn-pxp"
+name = "pxp"
 description = "FIDO Proximity Exchange Protocol (PXP, formerly CTAP hybrid / caBLE) client for Linux, written in Rust"
 version = "0.10.0"
 authors = [
@@ -16,7 +16,7 @@ homepage = "https://github.com/linux-credentials"
 repository = "https://github.com/linux-credentials/libwebauthn"
 
 [lib]
-name = "libwebauthn_pxp"
+name = "pxp"
 path = "src/lib.rs"
 
 [dependencies]

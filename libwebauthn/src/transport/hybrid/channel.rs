@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use libwebauthn_pxp::TunnelHandle;
+use pxp::TunnelHandle;
 use tokio::sync::broadcast;
 use tokio::time;
 use tracing::error;
@@ -25,7 +25,7 @@ use super::error::PxpError;
 use super::known_devices::PxpKnownDevice;
 use super::qr_code_device::PxpQrCodeDevice;
 
-pub use libwebauthn_pxp::{ConnectionState, PxpUpdate};
+pub use pxp::{ConnectionState, PxpUpdate};
 
 #[derive(Debug)]
 pub enum HybridChannelDevice<'d> {

@@ -62,7 +62,7 @@ opt-in: the crate ships with `default = []` for the NFC stack, so enable the
 (requires the `libnfc` system library) to compile it in.
 
 The hybrid transports are built on the standalone
-[`libwebauthn-pxp`](libwebauthn-pxp) crate, which implements the FIDO
+[`pxp`](pxp) crate, which implements the FIDO
 [Proximity Exchange Protocol][pxp] (formerly CTAP hybrid).
 
 [^nfc-optin]: Off by default. Enable `nfc-backend-pcsc` and/or `nfc-backend-libnfc`.
