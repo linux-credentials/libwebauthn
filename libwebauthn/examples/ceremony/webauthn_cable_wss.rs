@@ -113,6 +113,8 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             .to_json_string(&request, JsonFormat::Prettified)
             .expect("Failed to serialize MakeCredential response");
         println!("WebAuthn MakeCredential response (JSON):\n{response_json}");
+
+        channel.close().await;
     }
 
     println!("Waiting for 5 seconds before contacting the device...");
@@ -186,5 +188,7 @@ async fn run_get_assertion(
             .expect("Failed to serialize GetAssertion response");
         println!("WebAuthn GetAssertion response (JSON):\n{assertion_json}");
     }
+
+    channel.close().await;
     Ok(())
 }
