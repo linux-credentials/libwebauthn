@@ -3,9 +3,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use tokio::sync::{broadcast, mpsc, watch};
+use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tokio::{task, time};
-use tracing::error;
+use tracing::{debug, error};
 
 use crate::pin::persistent_token::PersistentTokenStore;
 use crate::proto::{
@@ -48,7 +48,16 @@ pub struct CableChannel {
     pub(crate) ux_update_sender: broadcast::Sender<CableUxUpdate>,
     pub(crate) connection_state_receiver: watch::Receiver<ConnectionState>,
     pub(crate) persistent_token_store: Option<Arc<dyn PersistentTokenStore>>,
+    /// Asks the connection task to send the tunnel Shutdown message and
+    /// close. Taken by [`Channel::close`].
+    pub(crate) shutdown_sender: Option<oneshot::Sender<()>>,
 }
+
+/// How long [`Channel::close`] waits for the connection task to deliver the
+/// Shutdown message and see the peer close. Chromium waits up to three minutes
+/// for the peer; a short bound keeps `close()` from stalling a caller that is
+/// about to exit, and phones close within a round trip of receiving Shutdown.
+pub(crate) const CLOSE_TIMEOUT: Duration = Duration::from_secs(3);
 
 impl CableChannel {
     async fn wait_for_connection(&self) -> Result<(), CableError> {
@@ -140,8 +149,26 @@ impl Channel for CableChannel {
         }
     }
 
+    /// Send the caBLE tunnel Shutdown message and close the connection, the
+    /// way Chromium's `FidoTunnelDevice` does. Without it the phone sees the
+    /// tunnel drop and shows an error even after a successful ceremony.
     async fn close(&mut self) {
-        // TODO Send CableTunnelMessageType#Shutdown and drop the connection
+        // Nothing to say Shutdown on before the tunnel is up: the task is
+        // still in the handshake, and dropping the channel aborts it.
+        if *self.connection_state_receiver.borrow() != ConnectionState::Connected {
+            self.shutdown_sender.take();
+            return;
+        }
+        let Some(shutdown) = self.shutdown_sender.take() else {
+            return;
+        };
+        if shutdown.send(()).is_ok()
+            && time::timeout(CLOSE_TIMEOUT, &mut self.handle_connection)
+                .await
+                .is_err()
+        {
+            debug!("caBLE connection did not finish closing in time");
+        }
     }
 
     async fn apdu_send(
