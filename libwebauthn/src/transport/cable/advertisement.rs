@@ -81,7 +81,7 @@ pub(crate) async fn await_advertisement(
         .or(Err(CableError::TransportUnavailable))?;
 
     let mut stream = pin!(stream);
-    while let Some((_adapter, peripheral, data)) = stream.as_mut().next().await {
+    while let Some((peripheral, data)) = stream.as_mut().next().await {
         debug!({ ?peripheral, ?data }, "Found device with service data");
 
         let Some(device) = btleplug::manager::get_device(peripheral.clone())
