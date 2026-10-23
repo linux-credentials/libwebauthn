@@ -1,7 +1,10 @@
 //! Public entry point: open a PXP connection to a CMHD and exchange opaque
 //! CTAP frames over it.
-use tokio::sync::{mpsc, watch};
-use tokio::task;
+use std::time::Duration;
+
+use tokio::sync::{mpsc, oneshot, watch};
+use tokio::{task, time};
+use tracing::debug;
 
 use crate::connection_stages::{MpscUxUpdateSender, TunnelConnectionInput, UxUpdateSender};
 use crate::error::PxpError;
@@ -69,9 +72,37 @@ pub struct TunnelHandle {
     /// Inbound CTAP frames: status byte followed by the CBOR payload.
     pub ctap_receiver: mpsc::Receiver<Vec<u8>>,
     pub connection_state: watch::Receiver<ConnectionState>,
+    /// Asks the connection task to send the tunnel Shutdown message and
+    /// close. Taken by [`TunnelHandle::close`].
+    shutdown_sender: Option<oneshot::Sender<()>>,
 }
 
+/// How long [`TunnelHandle::close`] waits for the connection task to deliver the
+/// Shutdown message and see the peer close. Chromium waits up to three minutes
+/// for the peer; a short bound keeps `close()` from stalling a caller that is
+/// about to exit, and phones close within a round trip of receiving Shutdown.
+pub const CLOSE_TIMEOUT: Duration = Duration::from_secs(3);
+
 impl TunnelHandle {
+    /// Send the tunnel Shutdown message and close the connection, the way
+    /// Chromium's `FidoTunnelDevice` does. Without it the phone sees the
+    /// tunnel drop and shows an error even after a successful ceremony.
+    pub async fn close(&mut self) {
+        // Nothing to say Shutdown on before the tunnel is up: the task is
+        // still in the handshake, and dropping the handle aborts it.
+        if *self.connection_state.borrow() != ConnectionState::Connected {
+            self.shutdown_sender.take();
+            return;
+        }
+        let Some(shutdown) = self.shutdown_sender.take() else {
+            return;
+        };
+        if shutdown.send(()).is_ok() && time::timeout(CLOSE_TIMEOUT, &mut self.task).await.is_err()
+        {
+            debug!("PXP connection did not finish closing in time");
+        }
+    }
+
     /// Waits until the handshake completes, or fails if the connection terminates first.
     pub async fn wait_for_connection(&self) -> Result<(), PxpError> {
         let mut rx = self.connection_state.clone();
@@ -116,6 +147,7 @@ pub fn connect(target: impl Into<ConnectTarget>, updates: impl UpdateSink) -> Tu
     let target = target.into();
     let (ctap_tx_send, ctap_tx_recv) = mpsc::channel(16);
     let (ctap_rx_send, ctap_rx_recv) = mpsc::channel(16);
+    let (shutdown_sender, shutdown_recv) = oneshot::channel();
     let (connection_state_sender, connection_state_receiver) =
         watch::channel(ConnectionState::Connecting);
 
@@ -145,6 +177,7 @@ pub fn connect(target: impl Into<ConnectTarget>, updates: impl UpdateSink) -> Tu
             store,
             ctap_tx_recv,
             ctap_rx_send,
+            shutdown_recv,
         );
         match protocol::connection(tunnel_input).await {
             Ok(()) => {
@@ -164,5 +197,6 @@ pub fn connect(target: impl Into<ConnectTarget>, updates: impl UpdateSink) -> Tu
         ctap_sender: ctap_tx_send,
         ctap_receiver: ctap_rx_recv,
         connection_state: connection_state_receiver,
+        shutdown_sender: Some(shutdown_sender),
     }
 }

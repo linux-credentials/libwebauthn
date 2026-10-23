@@ -27,6 +27,8 @@ use crate::known_devices::PxpKnownDeviceId;
 const P256_X962_LENGTH: usize = 65;
 const MAX_CBOR_SIZE: usize = 1024 * 1024;
 const PADDING_GRANULARITY: usize = 32;
+/// After sending Shutdown, how long to wait for the peer to close its side.
+const PEER_CLOSE_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
 
 const PXP_PROLOGUE_STATE_ASSISTED: &[u8] = &[0u8];
 const PXP_PROLOGUE_QR_INITIATED: &[u8] = &[1u8];
@@ -52,7 +54,9 @@ impl PxpTunnelMessage {
     }
     pub fn from_slice(slice: &[u8]) -> Result<Self, PxpError> {
         let (type_byte, payload) = slice.split_first().ok_or(PxpError::InvalidFraming)?;
-        if payload.is_empty() {
+        // Shutdown is the type byte alone (Chromium sends exactly that);
+        // every other message carries a payload.
+        if payload.is_empty() && *type_byte != 0 {
             return Err(PxpError::InvalidFraming);
         }
 
@@ -354,6 +358,28 @@ pub(crate) async fn connection(mut input: TunnelConnectionInput) -> Result<(), P
                     }
                 }
             }
+            // `TunnelHandle::close` asked to end the session. Send
+            // Shutdown, as Chromium does, so the authenticator ends in its
+            // success state, then give the peer a moment to close first.
+            _ = &mut input.shutdown_recv => {
+                debug!("Sending Shutdown control message");
+                if let Err(e) = send_tunnel_message(
+                    PxpTunnelMessageType::Shutdown,
+                    &[],
+                    &mut *input.data_channel,
+                    &mut input.noise_state,
+                )
+                .await
+                {
+                    debug!(?e, "Could not send Shutdown; the tunnel is already gone");
+                    return Ok(());
+                }
+                let _ = tokio::time::timeout(PEER_CLOSE_GRACE, async {
+                    while let Ok(Some(_)) = input.data_channel.recv().await {}
+                })
+                .await;
+                return Ok(());
+            }
             Some(request) = input.ctap_tx_recv.recv() => {
                 match request.first() {
                     // Optimisation: respond to GetInfo requests immediately with the cached response
@@ -400,16 +426,33 @@ async fn connection_send(
     }
     trace!(?cbor_request, cbor_request_len = cbor_request.len());
 
-    let extra_bytes = PADDING_GRANULARITY - (cbor_request.len() % PADDING_GRANULARITY);
-    let padded_len = cbor_request.len() + extra_bytes;
+    send_tunnel_message(
+        PxpTunnelMessageType::Ctap,
+        &cbor_request,
+        data_channel,
+        noise_state,
+    )
+    .await
+}
 
-    let mut padded_cbor_request = cbor_request.clone();
-    padded_cbor_request.resize(padded_len, 0u8);
-    if let Some(last) = padded_cbor_request.last_mut() {
+/// Pad, frame, encrypt and send one tunnel message. Shared by CTAP requests
+/// and the Shutdown control message.
+async fn send_tunnel_message(
+    message_type: PxpTunnelMessageType,
+    payload: &[u8],
+    data_channel: &mut dyn PxpDataChannel,
+    noise_state: &mut TunnelNoiseState,
+) -> Result<(), PxpError> {
+    let extra_bytes = PADDING_GRANULARITY - (payload.len() % PADDING_GRANULARITY);
+    let padded_len = payload.len() + extra_bytes;
+
+    let mut padded_payload = payload.to_vec();
+    padded_payload.resize(padded_len, 0u8);
+    if let Some(last) = padded_payload.last_mut() {
         *last = (extra_bytes - 1) as u8;
     }
 
-    let frame = PxpTunnelMessage::new(PxpTunnelMessageType::Ctap, &padded_cbor_request);
+    let frame = PxpTunnelMessage::new(message_type, &padded_payload);
     let frame_serialized = frame.to_vec();
     trace!(?frame_serialized);
 
@@ -788,6 +831,189 @@ mod tests {
             recording.puts.lock().expect("puts").is_empty(),
             "invalid update must not store anything"
         );
+    }
+
+    /// A connected pair of Noise transport states, standing in for the
+    /// desktop and the phone after the handshake.
+    fn noise_pair() -> (TunnelNoiseState, TunnelNoiseState) {
+        let params: snow::params::NoiseParams = "Noise_NN_P256_AESGCM_SHA256".parse().unwrap();
+        let mut initiator = Builder::new(params.clone()).build_initiator().unwrap();
+        let mut responder = Builder::new(params).build_responder().unwrap();
+        let (mut buf, mut out) = ([0u8; 1024], [0u8; 1024]);
+        let len = initiator.write_message(&[], &mut buf).unwrap();
+        responder.read_message(&buf[..len], &mut out).unwrap();
+        let len = responder.write_message(&[], &mut buf).unwrap();
+        initiator.read_message(&buf[..len], &mut out).unwrap();
+        let state = |hs: snow::HandshakeState| TunnelNoiseState {
+            handshake_hash: hs.get_handshake_hash().to_vec(),
+            transport_state: hs.into_transport_mode().unwrap(),
+        };
+        (state(initiator), state(responder))
+    }
+
+    #[derive(Default)]
+    struct RecordingChannel {
+        sent: Vec<Vec<u8>>,
+    }
+
+    #[async_trait]
+    impl PxpDataChannel for RecordingChannel {
+        async fn send(&mut self, message: &[u8]) -> Result<(), PxpError> {
+            self.sent.push(message.to_vec());
+            Ok(())
+        }
+        async fn recv(&mut self) -> Result<Option<Vec<u8>>, PxpError> {
+            Ok(None)
+        }
+    }
+
+    /// A data channel the test scripts: inbound messages come from `inbox`
+    /// (closing it is the peer closing), outbound ones are recorded.
+    struct ScriptedChannel {
+        inbox: tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>,
+        sent: Arc<Mutex<Vec<Vec<u8>>>>,
+    }
+
+    #[async_trait]
+    impl PxpDataChannel for ScriptedChannel {
+        async fn send(&mut self, message: &[u8]) -> Result<(), PxpError> {
+            self.sent.lock().unwrap().push(message.to_vec());
+            Ok(())
+        }
+        async fn recv(&mut self) -> Result<Option<Vec<u8>>, PxpError> {
+            Ok(self.inbox.recv().await)
+        }
+    }
+
+    /// The phone's post-handshake message: `{1: getInfo}` with a minimal
+    /// getInfo (`{1: ["FIDO_2_0"], 3: aaguid}`), plus the zero-padding marker.
+    fn initial_message_plaintext() -> Vec<u8> {
+        let mut get_info = vec![0xA2, 0x01, 0x81, 0x68];
+        get_info.extend_from_slice(b"FIDO_2_0");
+        get_info.extend_from_slice(&[0x03, 0x50]);
+        get_info.extend_from_slice(&[0u8; 16]);
+        let mut initial = vec![0xA1, 0x01, 0x58, get_info.len() as u8];
+        initial.extend_from_slice(&get_info);
+        initial.push(0x00);
+        initial
+    }
+
+    #[tokio::test]
+    async fn closing_while_a_request_is_pending_sends_one_shutdown_and_ends_when_the_peer_closes() {
+        let (desktop, mut phone) = noise_pair();
+        let (inbox_tx, inbox) = tokio::sync::mpsc::unbounded_channel();
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let (ctap_tx, ctap_tx_recv) = tokio::sync::mpsc::channel(4);
+        let (ctap_rx_send, _ctap_rx_recv) = tokio::sync::mpsc::channel(4);
+        let (shutdown, shutdown_recv) = tokio::sync::oneshot::channel();
+        let input = TunnelConnectionInput {
+            connection_type: PxpTunnelConnectionType::QrCode {
+                routing_id: "000000".into(),
+                tunnel_id: "00".repeat(16),
+                private_key: NonZeroScalar::random(&mut OsRng),
+            },
+            tunnel_domain: "cable.example.com".into(),
+            known_device_store: None,
+            data_channel: Box::new(ScriptedChannel {
+                inbox,
+                sent: Arc::clone(&sent),
+            }),
+            noise_state: desktop,
+            ctap_tx_recv,
+            ctap_rx_send,
+            shutdown_recv,
+        };
+        let task = tokio::spawn(connection(input));
+
+        // The phone says hello, the desktop sends a request, and the phone
+        // is still working on it (a chooser or a fingerprint prompt).
+        let mut frame = vec![0u8; 1024];
+        let len = phone
+            .transport_state
+            .write_message(&initial_message_plaintext(), &mut frame)
+            .unwrap();
+        inbox_tx.send(frame[..len].to_vec()).unwrap();
+        ctap_tx.send(vec![0x02]).await.unwrap();
+        while sent.lock().unwrap().is_empty() {
+            tokio::task::yield_now().await;
+        }
+
+        // The person cancels on the desktop.
+        shutdown.send(()).unwrap();
+        while sent.lock().unwrap().len() < 2 {
+            tokio::task::yield_now().await;
+        }
+        assert!(!task.is_finished(), "waits for the phone to close first");
+        drop(inbox_tx); // the phone closes its side
+        assert!(task.await.unwrap().is_ok(), "a clean close, not an error");
+
+        let frames = sent.lock().unwrap().clone();
+        assert_eq!(frames.len(), 2, "the request, then exactly one more frame");
+        let request = decrypt_frame(frames[0].clone(), &mut phone).await.unwrap();
+        assert_eq!(request[0], PxpTunnelMessageType::Ctap as u8);
+        let shutdown = decrypt_frame(frames[1].clone(), &mut phone).await.unwrap();
+        assert_eq!(shutdown, vec![0u8], "the second frame is Shutdown");
+    }
+
+    #[test]
+    fn a_bare_shutdown_parses_and_other_empty_messages_do_not() {
+        let message = PxpTunnelMessage::from_slice(&[0]).unwrap();
+        assert!(matches!(
+            message.message_type,
+            PxpTunnelMessageType::Shutdown
+        ));
+        assert!(matches!(
+            PxpTunnelMessage::from_slice(&[1]),
+            Err(PxpError::InvalidFraming)
+        ));
+        assert!(matches!(
+            PxpTunnelMessage::from_slice(&[2]),
+            Err(PxpError::InvalidFraming)
+        ));
+    }
+
+    #[tokio::test]
+    async fn shutdown_goes_on_the_wire_as_an_encrypted_padded_type_byte() {
+        let (mut desktop, mut phone) = noise_pair();
+        let mut channel = RecordingChannel::default();
+        send_tunnel_message(
+            PxpTunnelMessageType::Shutdown,
+            &[],
+            &mut channel,
+            &mut desktop,
+        )
+        .await
+        .unwrap();
+        assert_eq!(channel.sent.len(), 1, "exactly one frame");
+        let plaintext = decrypt_frame(channel.sent.remove(0), &mut phone)
+            .await
+            .unwrap();
+        assert_eq!(plaintext, vec![0u8], "Shutdown is the type byte alone");
+        let message = PxpTunnelMessage::from_slice(&plaintext).unwrap();
+        assert!(matches!(
+            message.message_type,
+            PxpTunnelMessageType::Shutdown
+        ));
+    }
+
+    #[tokio::test]
+    async fn ctap_frames_still_round_trip_through_the_shared_path() {
+        let (mut desktop, mut phone) = noise_pair();
+        let mut channel = RecordingChannel::default();
+        let payload = vec![0xA1, 0x01, 0x02];
+        send_tunnel_message(
+            PxpTunnelMessageType::Ctap,
+            &payload,
+            &mut channel,
+            &mut desktop,
+        )
+        .await
+        .unwrap();
+        let plaintext = decrypt_frame(channel.sent.remove(0), &mut phone)
+            .await
+            .unwrap();
+        assert_eq!(plaintext[0], PxpTunnelMessageType::Ctap as u8);
+        assert_eq!(&plaintext[1..], payload.as_slice());
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use ::btleplug::api::{AddressType, BDAddr, PeripheralProperties};
 use async_trait::async_trait;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 use tracing::{debug, error, info, instrument, trace, warn};
 
 use super::advertisement::{await_advertisement, DecryptedAdvert};
@@ -199,6 +199,8 @@ pub(crate) struct TunnelConnectionInput {
     pub noise_state: TunnelNoiseState,
     pub ctap_tx_recv: mpsc::Receiver<Vec<u8>>,
     pub ctap_rx_send: mpsc::Sender<Vec<u8>>,
+    /// Fires when the channel is closed.
+    pub shutdown_recv: oneshot::Receiver<()>,
 }
 
 impl TunnelConnectionInput {
@@ -207,6 +209,7 @@ impl TunnelConnectionInput {
         known_device_store: Option<Arc<dyn PxpKnownDeviceInfoStore>>,
         ctap_tx_recv: mpsc::Receiver<Vec<u8>>,
         ctap_rx_send: mpsc::Sender<Vec<u8>>,
+        shutdown_recv: oneshot::Receiver<()>,
     ) -> Self {
         Self {
             connection_type: handshake_output.connection_type,
@@ -216,6 +219,7 @@ impl TunnelConnectionInput {
             noise_state: handshake_output.noise_state,
             ctap_tx_recv,
             ctap_rx_send,
+            shutdown_recv,
         }
     }
 }

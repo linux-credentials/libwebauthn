@@ -79,7 +79,7 @@ impl Channel for HybridChannel {
     }
 
     async fn close(&mut self) {
-        // TODO Send PxpTunnelMessageType#Shutdown and drop the connection
+        self.tunnel.close().await;
     }
 
     async fn apdu_send(
