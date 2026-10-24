@@ -96,5 +96,6 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         .expect("Failed to serialize MakeCredential response");
     println!("WebAuthn MakeCredential response (JSON):\n{response_json}");
 
+    channel.close().await;
     Ok(())
 }
