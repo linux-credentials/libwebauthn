@@ -6,22 +6,22 @@ use tokio_tungstenite::tungstenite::{Error, Message};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use tracing::error;
 
-use crate::transport::cable::error::CableError;
+use crate::error::PxpError;
 
 /// A bidirectional channel carrying discrete protocol messages: the Noise
 /// handshake messages, then the encrypted CTAP frames. caBLE rides this over a
 /// WebSocket tunnel; CTAP 2.3 hybrid can also ride it over a BLE L2CAP connection.
 #[async_trait]
-pub(crate) trait CableDataChannel: Send {
+pub(crate) trait PxpDataChannel: Send {
     /// Sends one message as a discrete unit.
-    async fn send(&mut self, message: &[u8]) -> Result<(), CableError>;
+    async fn send(&mut self, message: &[u8]) -> Result<(), PxpError>;
 
     /// Receives the next message. `Ok(None)` signals a clean close by the peer.
     /// Must be cancel-safe so it can be used as a `tokio::select!` branch.
-    async fn recv(&mut self) -> Result<Option<Vec<u8>>, CableError>;
+    async fn recv(&mut self) -> Result<Option<Vec<u8>>, PxpError>;
 }
 
-/// [`CableDataChannel`] over the caBLE WebSocket tunnel. Each protocol message is
+/// [`PxpDataChannel`] over the caBLE WebSocket tunnel. Each protocol message is
 /// a single binary WebSocket frame.
 pub(crate) struct WebSocketDataChannel {
     stream: WebSocketStream<MaybeTlsStream<TcpStream>>,
@@ -34,21 +34,21 @@ impl WebSocketDataChannel {
 }
 
 #[async_trait]
-impl CableDataChannel for WebSocketDataChannel {
-    async fn send(&mut self, message: &[u8]) -> Result<(), CableError> {
+impl PxpDataChannel for WebSocketDataChannel {
+    async fn send(&mut self, message: &[u8]) -> Result<(), PxpError> {
         self.stream
             .send(Message::Binary(message.to_vec().into()))
             .await
             .map_err(|e| {
                 error!(?e, "Failed to send WebSocket message");
                 match e {
-                    Error::Io(io) => CableError::from(io),
-                    _ => CableError::ConnectionFailed,
+                    Error::Io(io) => PxpError::from(io),
+                    _ => PxpError::ConnectionFailed,
                 }
             })
     }
 
-    async fn recv(&mut self) -> Result<Option<Vec<u8>>, CableError> {
+    async fn recv(&mut self) -> Result<Option<Vec<u8>>, PxpError> {
         loop {
             match self.stream.next().await {
                 Some(Ok(Message::Binary(data))) => return Ok(Some(data.into())),
@@ -58,15 +58,15 @@ impl CableDataChannel for WebSocketDataChannel {
                 }
                 Some(Ok(other)) => {
                     error!(?other, "Unexpected WebSocket message type");
-                    return Err(CableError::ConnectionFailed);
+                    return Err(PxpError::ConnectionFailed);
                 }
                 Some(Err(Error::Io(e))) => {
                     error!(?e, "Failed to read WebSocket message");
-                    return Err(CableError::from(e));
+                    return Err(PxpError::from(e));
                 }
                 Some(Err(e)) => {
                     error!(?e, "Failed to read WebSocket message");
-                    return Err(CableError::ConnectionFailed);
+                    return Err(PxpError::ConnectionFailed);
                 }
             }
         }
