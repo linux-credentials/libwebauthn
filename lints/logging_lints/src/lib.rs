@@ -53,8 +53,8 @@ rustc_session::declare_tool_lint! {
 
 rustc_session::declare_tool_lint! {
     /// Best-effort check that sensitive-looking field names are not logged at
-    /// info or above. Sensitive values belong at debug (length/presence) or
-    /// trace (full).
+    /// info or above. A sensitive value appears in full only at trace, and as a
+    /// length or presence flag at any other level.
     pub dylint::SENSITIVE_FIELD_ABOVE_DEBUG,
     Warn,
     "possibly sensitive field logged at info or above"
@@ -223,8 +223,8 @@ fn check_mac(cx: &EarlyContext<'_>, mac: &MacCall) {
                     SENSITIVE_FIELD_ABOVE_DEBUG,
                     span,
                     format!("possibly sensitive field `{field}` logged at `{name}!`"),
-                    "log sensitive data only at debug! (length or presence) or \
-                     trace! (full); see docs/logging.md",
+                    "log a sensitive value in full only at trace!, and only its \
+                     length or presence elsewhere; see docs/logging.md",
                 );
             }
         }

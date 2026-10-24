@@ -44,10 +44,10 @@ fn main() {
     // sensitive_field_above_debug
     warn!(?pin, "logging a pin at warn");
     error!(?shared_secret, "logging a secret at error");
-    // OK: sensitive name but only at debug, and benign pin metadata.
-    debug!(?pin, "pin at debug is allowed");
+    // OK for the lint: sensitive names below info, and benign pin metadata.
+    debug!(?pin, "pin at debug is not flagged");
     info!(pin_protocol = count, "pin protocol is benign");
-    info!(pin_len = count, "a length is benign");
+    info!(token_len = count, "a length is benign");
 
     // sensitive_field_above_debug inside a brace block (the policy form for 2+ fields)
     let bar = 7u32;
@@ -55,7 +55,7 @@ fn main() {
     error!({ ?shared_secret, attempt = count }, "secret in a brace block");
     // OK: brace block of benign fields, and a brace block at debug
     info!({ rp_id = bar, attempt = count }, "benign brace block");
-    debug!({ pin = ?pin, attempt = count }, "pin in a brace block at debug is allowed");
+    debug!({ pin = ?pin, attempt = count }, "pin in a brace block at debug is not flagged");
 
     // print_macro_in_library: std-qualified
     std::println!("qualified {}", count);

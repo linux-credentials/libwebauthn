@@ -40,8 +40,8 @@ field we ignore, or a non-fatal failure we continue past.
 
 Sparse, high-level lifecycle events meaningful to an operator. For example
 establishing a connection, selecting a transport or FIDO revision, or the start
-and end of a ceremony. INFO carries no sensitive data and never appears inside a
-loop or per packet. Device enumeration is polled by callers, so it logs the
+and end of a ceremony. INFO carries no sensitive values and never appears inside
+a loop or per packet. Device enumeration is polled by callers, so it logs the
 count at `debug!` and the device list at `trace!`.
 
 ### `debug!`
@@ -59,7 +59,7 @@ secret may appear.
 
 ## Sensitive data
 
-These are sensitive and must never be logged above `debug!`:
+These are sensitive:
 
 - PINs, PIN hashes, and PIN tokens
 - shared secrets and key-agreement material
@@ -70,8 +70,13 @@ These are sensitive and must never be logged above `debug!`:
 - credential IDs
 - user handles and user names
 
-At `debug!` log only a length or a presence flag. A full value may appear only
-at `trace!`.
+A sensitive value may appear in full only at `trace!`. At every other level,
+log only its length or a presence flag. A length or a presence flag is not the
+value, so it can go at whatever level the event calls for. For example, an HMAC
+output of the wrong length from the device is a `warn!` that carries the length.
+
+The exception is a length that narrows down a secret the user chose, such as
+the length of a PIN. Keep that at `debug!` or below.
 
 ## How to write a log call
 
@@ -110,10 +115,12 @@ A custom dylint lint in [`lints/`](../lints) checks the mechanical rules:
 - no `println!`, `eprintln!`, `print!`, or `eprint!`
 - no `log::` macros
 - a best-effort denylist flags sensitive field names (pin, secret, token, and so
-  on) used at `info!` and above
+  on) used at `info!` and above, except length and count fields such as
+  `token_len`
 
-Level choice, and whether a particular value is sensitive, cannot be decided by a
-tool. Those rules are upheld in review against this document.
+Level choice, whether a particular value is sensitive, and the PIN length
+exception cannot be decided by a tool. Those rules are upheld in review against
+this document.
 
 Run it locally:
 

@@ -62,7 +62,7 @@ warning: possibly sensitive field `pin` logged at `warn!`
 LL |     warn!(?pin, "logging a pin at warn");
    |            ^^^
    |
-   = help: log sensitive data only at debug! (length or presence) or trace! (full); see docs/logging.md
+   = help: log a sensitive value in full only at trace!, and only its length or presence elsewhere; see docs/logging.md
    = note: `#[warn(dylint::sensitive_field_above_debug)]` on by default
 
 warning: possibly sensitive field `shared_secret` logged at `error!`
@@ -71,7 +71,7 @@ warning: possibly sensitive field `shared_secret` logged at `error!`
 LL |     error!(?shared_secret, "logging a secret at error");
    |             ^^^^^^^^^^^^^
    |
-   = help: log sensitive data only at debug! (length or presence) or trace! (full); see docs/logging.md
+   = help: log a sensitive value in full only at trace!, and only its length or presence elsewhere; see docs/logging.md
 
 warning: possibly sensitive field `pin` logged at `warn!`
   --> $DIR/main.rs:54:13
@@ -79,7 +79,7 @@ warning: possibly sensitive field `pin` logged at `warn!`
 LL |     warn!({ pin = ?pin, attempt = count }, "pin in a brace block");
    |             ^^^
    |
-   = help: log sensitive data only at debug! (length or presence) or trace! (full); see docs/logging.md
+   = help: log a sensitive value in full only at trace!, and only its length or presence elsewhere; see docs/logging.md
 
 warning: possibly sensitive field `shared_secret` logged at `error!`
   --> $DIR/main.rs:55:15
@@ -87,7 +87,7 @@ warning: possibly sensitive field `shared_secret` logged at `error!`
 LL |     error!({ ?shared_secret, attempt = count }, "secret in a brace block");
    |               ^^^^^^^^^^^^^
    |
-   = help: log sensitive data only at debug! (length or presence) or trace! (full); see docs/logging.md
+   = help: log a sensitive value in full only at trace!, and only its length or presence elsewhere; see docs/logging.md
 
 warning: `println!` in library code
   --> $DIR/main.rs:61:5

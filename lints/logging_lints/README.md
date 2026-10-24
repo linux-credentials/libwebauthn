@@ -17,10 +17,10 @@ They run before macro expansion, so they inspect the macro tokens as written.
   `tracing`.
 - **`sensitive_field_above_debug`** — best-effort denylist that flags
   sensitive-looking field names (pin, secret, token, shared secret, credential
-  id, ...) used at `info!` and above. Length and presence fields (`*_len`,
-  `*_count`) and PIN protocol metadata (`pin_protocol`) are not flagged. This is
-  a heuristic and can have false positives. Silence a checked case with
-  `#[allow(dylint::sensitive_field_above_debug)]`.
+  id, ...) used at `info!` and above. Length and count fields (`*_len`,
+  `*_count`, `*_size`) and PIN protocol metadata (`pin_protocol`) are not
+  flagged. This is a heuristic and can have false positives. Silence a checked
+  case with `#[allow(dylint::sensitive_field_above_debug)]`.
 
 ## Running
 
