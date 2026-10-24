@@ -40,16 +40,18 @@ field we ignore, or a non-fatal failure we continue past.
 
 Sparse, high-level lifecycle events meaningful to an operator. For example
 establishing a connection, selecting a transport or FIDO revision, or the start
-and end of a ceremony. INFO carries no sensitive values and never appears inside
-a loop or per packet. Device enumeration is polled by callers, so it logs the
-count at `debug!` and the device list at `trace!`.
+and end of a ceremony. INFO carries no sensitive values and no per-device
+identifiers, and never appears inside a loop or per packet. Device enumeration
+is polled by callers, so it logs the count at `debug!` and the device list at
+`trace!`.
 
 ### `debug!`
 
 Developer-facing protocol flow: command and response codes, status, lengths,
 small non-sensitive fields, and state transitions. Byte arrays appear here only
-as their length. Sensitive values appear here only as a length or a presence
-flag, never in full.
+as their length, except per-device identifiers (see
+[Device identifiers](#device-identifiers)). Sensitive values appear here only
+as a length or a presence flag, never in full.
 
 ### `trace!`
 
@@ -69,6 +71,8 @@ These are sensitive:
 - private keys
 - credential IDs
 - user handles and user names
+- hybrid linking secrets: the QR secret, the link secret, and keys derived
+  from them
 
 A sensitive value may appear in full only at `trace!`. At every other level,
 log only its length or a presence flag. A length or a presence flag is not the
@@ -77,6 +81,31 @@ output of the wrong length from the device is a `warn!` that carries the length.
 
 The exception is a length that narrows down a secret the user chose, such as
 the length of a PIN. Keep that at `debug!` or below.
+
+## Device identifiers
+
+Connection details change on replug or per session and identify nothing on
+their own: hidraw paths, USB bus and address, the HID channel ID, the L2CAP
+PSM, and the hybrid routing and tunnel IDs. Model details are shared by every
+unit of a model: USB vendor and product IDs, manufacturer and product strings,
+firmware versions, and the AAGUID. Both may be logged at any level.
+
+Per-device identifiers can follow one device, and so its user, across logs.
+Unlike sensitive data, they may appear in full at `debug!`. Never log them at
+`info!` or above:
+
+- Bluetooth addresses, including btleplug peripheral IDs and BlueZ object
+  paths, which embed the address
+- USB serial numbers, including PC/SC reader names, since pcscd appends the
+  serial number by default
+- NFC card UIDs
+- Bluetooth local names and hybrid authenticator names, which may be
+  user-chosen
+- hybrid known-device IDs, contact IDs, and link IDs
+- the device identifier recovered from `encIdentifier`
+
+This covers span fields too. An `#[instrument]` span is `info` unless it sets a
+level, so one that carries a per-device identifier sets `level = Level::DEBUG`.
 
 ## How to write a log call
 
@@ -118,9 +147,9 @@ A custom dylint lint in [`lints/`](../lints) checks the mechanical rules:
   on) used at `info!` and above, except length and count fields such as
   `token_len`
 
-Level choice, whether a particular value is sensitive, and the PIN length
-exception cannot be decided by a tool. Those rules are upheld in review against
-this document.
+Level choice, whether a particular value is sensitive or identifies a device,
+and the PIN length exception cannot be decided by a tool. Those rules are
+upheld in review against this document.
 
 Run it locally:
 
