@@ -48,7 +48,7 @@ impl L2capDataChannel {
             bluer::l2cap::Stream::connect(bluer::l2cap::SocketAddr::new(addr, addr_type, psm))
                 .await
                 .map_err(|e| {
-                    warn!({ ?e, %addr, psm }, "Failed to connect L2CAP CoC");
+                    warn!({ ?e, psm }, "Failed to connect L2CAP CoC");
                     CableError::from(e)
                 })?;
 
@@ -164,8 +164,8 @@ fn bdaddr_to_bluer(
     addr: BDAddr,
     addr_type: Option<AddressType>,
 ) -> Result<(bluer::Address, bluer::AddressType), CableError> {
-    let addr = bluer::Address::from_str(&addr.to_string()).map_err(|e| {
-        warn!(?e, "Failed to parse Bluetooth address");
+    let addr = bluer::Address::from_str(&addr.to_string()).map_err(|_| {
+        warn!("Failed to parse Bluetooth address");
         CableError::InvalidEndpoint
     })?;
     let addr_type = match addr_type {

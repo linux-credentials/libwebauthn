@@ -67,7 +67,7 @@ async fn on_peripheral_service_data(
         if let Some(service_data) = service_data.get(uuid) {
             trace!({ ?id, ?service_data }, "Found service data");
             let Ok(peripheral) = adapter.peripheral(id).await else {
-                warn!(?id, "Could not get peripheral");
+                warn!("Could not get peripheral");
                 return None;
             };
 

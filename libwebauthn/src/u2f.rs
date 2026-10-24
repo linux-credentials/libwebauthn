@@ -53,7 +53,7 @@ where
         Ok(selected)
     }
 
-    #[instrument(skip_all, fields(dev = %self))]
+    #[instrument(skip_all, fields(transport = ?self.transport()))]
     async fn u2f_register(
         &mut self,
         op: &RegisterRequest,
@@ -65,7 +65,7 @@ where
         }
     }
 
-    #[instrument(skip_all, fields(dev = %self))]
+    #[instrument(skip_all, fields(transport = ?self.transport()))]
     async fn u2f_sign(
         &mut self,
         op: &SignRequest,

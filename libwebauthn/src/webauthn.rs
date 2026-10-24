@@ -169,7 +169,7 @@ impl<C> WebAuthn for C
 where
     C: Channel,
 {
-    #[instrument(skip_all, fields(dev = % self))]
+    #[instrument(skip_all, fields(transport = ?self.transport()))]
     async fn webauthn_make_credential(
         &mut self,
         op: &MakeCredentialRequest,
@@ -196,7 +196,7 @@ where
         Ok(response)
     }
 
-    #[instrument(skip_all, fields(dev = % self))]
+    #[instrument(skip_all, fields(transport = ?self.transport()))]
     async fn webauthn_get_assertion(
         &mut self,
         op: &GetAssertionRequest,

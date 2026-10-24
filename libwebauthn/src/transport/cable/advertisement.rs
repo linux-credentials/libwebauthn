@@ -88,10 +88,7 @@ pub(crate) async fn await_advertisement(
             .await
             .or(Err(CableError::TransportUnavailable))?
         else {
-            warn!(
-                ?peripheral,
-                "Unable to fetch peripheral properties, ignoring"
-            );
+            warn!("Unable to fetch peripheral properties, ignoring");
             continue;
         };
 
@@ -109,10 +106,7 @@ pub(crate) async fn await_advertisement(
                     trace!(?suffix, "Parsed advertisement suffix");
                     advert.suffix = Some(suffix);
                 }
-                Err(e) => warn!(
-                    { ?device, ?e },
-                    "Failed to parse advertisement suffix, ignoring it"
-                ),
+                Err(e) => warn!(?e, "Failed to parse advertisement suffix, ignoring it"),
             }
         }
         debug!(?device, "Successfully decrypted advertisement from device");

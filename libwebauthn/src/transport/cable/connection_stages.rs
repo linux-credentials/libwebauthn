@@ -337,10 +337,8 @@ async fn connect_data_channel(
                 tunnel::known_device_id_to_forget(&error, &input.connection_type)
             {
                 if let Some(store) = &input.known_device_store {
-                    warn!(
-                        ?device_id,
-                        "Tunnel server returned 410 Gone; forgetting known device"
-                    );
+                    warn!("Tunnel server returned 410 Gone; forgetting known device");
+                    debug!(?device_id, "Forgetting known device");
                     store.delete_known_device(&device_id).await;
                 }
             }
