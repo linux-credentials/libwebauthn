@@ -132,6 +132,29 @@ Prefer a span over repeating the same field on every event. A ceremony or a
 transport can open a span carrying shared context such as the transport and the
 rp_id.
 
+```rust
+// shared context: once on the span, not on every event
+#[instrument(level = Level::DEBUG, skip_all, fields(cmd = ?msg.cmd, payload_len = msg.payload.len()))]
+async fn hid_send(&self, msg: &HidMessage) -> Result<(), HidError> {
+    for (i, packet) in packets.iter().enumerate() {
+        // cmd and payload_len come from the span
+        debug!({ packet = i, len = packet.len() }, "Sending packet as HID report");
+    }
+}
+```
+
+Span fields follow the same rules as event fields. A span's fields are printed
+with every event inside it whenever the span's level is enabled. By default
+`#[instrument]` opens the span at `info`, records every argument with `Debug`,
+and logs an `err` return at `error`. So:
+
+- Always set `level` explicitly, chosen as for an event. Per-message and
+  polled spans use `Level::DEBUG`.
+- Pass `skip_all` by default and opt values in with `fields(...)`.
+- Give `err` an explicit level, since most errors are returned to the caller
+  and belong at `warn!` or lower (see [`error!`](#error)).
+- Never use `ret` on a function that returns a secret.
+
 Do not use `println!`, `eprintln!`, or the `log` crate's macros in the library.
 Everything goes through `tracing`.
 
@@ -149,7 +172,8 @@ A custom dylint lint in [`lints/`](../lints) checks the mechanical rules:
 
 Level choice, whether a particular value is sensitive or identifies a device,
 and the PIN length exception cannot be decided by a tool. Those rules are
-upheld in review against this document.
+upheld in review against this document. The lint does not inspect
+`#[instrument]` attributes, so the span rules are upheld in review too.
 
 Run it locally:
 
