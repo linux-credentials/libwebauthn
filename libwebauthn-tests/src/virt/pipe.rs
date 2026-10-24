@@ -395,7 +395,7 @@ impl<'a, const N: usize> Pipe<'a, N> {
                         self.start_sending_error(request, CtapError::InvalidLength);
                     }
                     Err(ctaphid_dispatch::app::Error::NoResponse) => {
-                        info!("Got waiting noresponse from authenticator??");
+                        info!("Authenticator returned NoResponse while waiting");
                     }
 
                     Ok(message) => {

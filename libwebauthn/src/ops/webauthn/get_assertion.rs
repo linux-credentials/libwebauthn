@@ -637,7 +637,7 @@ impl DowngradableRequest<Vec<SignRequest>> for GetAssertionRequest {
 
         // allowList must have at least one credential.
         if self.allow.is_empty() {
-            debug!("Not downgradable: allowList is empty.");
+            debug!("Not downgradable: allowList is empty");
             return false;
         }
 

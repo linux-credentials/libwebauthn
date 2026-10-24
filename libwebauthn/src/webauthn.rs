@@ -116,14 +116,14 @@ macro_rules! handle_errors {
             Err(WebAuthnError::Ctap(CtapError::PINAuthInvalid))
                 if $uv_auth_used == UsedPinUvAuthToken::FromEphemeralStorage =>
             {
-                info!("PINAuthInvalid: Clearing auth token storage and trying again.");
+                info!("PINAuthInvalid: Clearing auth token storage and trying again");
                 $channel.clear_uv_auth_token_store();
                 continue;
             }
             Err(WebAuthnError::Ctap(CtapError::PINAuthInvalid))
                 if matches!($uv_auth_used, UsedPinUvAuthToken::FromPersistentStorage(_)) =>
             {
-                info!("PINAuthInvalid on a persistent token: evicting the record and retrying.");
+                info!("PINAuthInvalid on a persistent token: evicting the record and retrying");
                 if let UsedPinUvAuthToken::FromPersistentStorage(id) = &$uv_auth_used {
                     if let Some(store) = $channel.persistent_token_store() {
                         store.delete(id).await;
@@ -350,7 +350,7 @@ async fn get_assertion_fido2<C: Channel>(
             // credentials are present on this device. So we error out here
             // But the spec requires some form of user interaction, so we run a
             // dummy request, ignore the result and error out.
-            warn!("Preflight removed all credentials from the allow-list. Sending dummy request and erroring out.");
+            warn!("Preflight removed all credentials from the allow-list. Sending dummy request and erroring out");
             let dummy_request: Ctap2MakeCredentialRequest = Ctap2MakeCredentialRequest::dummy();
             channel
                 .send_ux_update(UvUpdate::PresenceRequired.into())
@@ -676,7 +676,7 @@ async fn get_assertion_u2f<C: Channel>(
                 return Ok(upgraded);
             }
             Err(WebAuthnError::Ctap(CtapError::NoCredentials)) => {
-                debug!("No credentials found, trying with the next.");
+                debug!("No credentials found, trying with the next");
             }
             Err(err) => {
                 warn!(
@@ -687,7 +687,7 @@ async fn get_assertion_u2f<C: Channel>(
             }
         }
     }
-    warn!("None of the credentials in the original request's allowList were found.");
+    warn!("None of the credentials in the original request's allowList were found");
     Err(WebAuthnError::Ctap(CtapError::NoCredentials))
 }
 

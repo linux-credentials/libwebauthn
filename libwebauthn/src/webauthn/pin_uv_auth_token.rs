@@ -200,19 +200,19 @@ where
     // If we do not need to create a shared secret, we can error out here early
     if !needs_shared_secret {
         if !uv {
-            debug!("User verification not requested by either RP nor authenticator. Ignoring.");
+            debug!("User verification not requested by either RP nor authenticator. Ignoring");
             return Ok(UsedPinUvAuthToken::None);
         }
 
         if !dev_uv_protected && user_verification.is_preferred() {
-            warn!("User verification is preferred, but device user verification is not available. Ignoring.");
+            warn!("User verification is preferred, but device user verification is not available. Ignoring");
             return Ok(UsedPinUvAuthToken::None);
         }
     } else if !can_establish_shared_secret && !uv {
         // We need a shared secret, but the device does not support any form of query-able UV, so we can't establish a
         // shared secret that is needed
         warn!(
-            "Request requires a shared secret, but device is not capable of establishing one. Skipping UV."
+            "Request requires a shared secret, but device is not capable of establishing one. Skipping UV"
         );
         // We treat this currently as a non-fatal error as this is only for HMAC-calculations, which
         // we can drop
@@ -235,7 +235,7 @@ where
                 }
             })?;
         if let Ctap2UserVerificationOperation::LegacyUv = uv_operation {
-            debug!("No client operation. Setting deprecated request options.uv flag to true.");
+            debug!("No client operation. Setting deprecated request options.uv flag to true");
             ctap2_request.ensure_uv_set();
             // If the device is UV protected, but has no fitting operation, we have to use the legacy UV option.
             // If we don't have to or we can't establish a shared secret, we can return right here
@@ -386,7 +386,7 @@ where
             }
             // Internal retry, because we otherwise can't fall back to PIN, if the UV is blocked
             Err(WebAuthnError::Ctap(CtapError::UvBlocked)) => {
-                warn!("UV failed too many times and is now blocked. Trying to fall back to PIN.");
+                warn!("UV failed too many times and is now blocked. Trying to fall back to PIN");
                 uv_blocked = true;
                 continue;
             }
@@ -405,7 +405,7 @@ where
                     // So, this check MAY prevent one additional fingerprint scan for the user,
                     // that is going to fail with UvBlocked.
                     if attempts == 0 {
-                        warn!("UV failed too many times and is now blocked. Trying to fall back to PIN.");
+                        warn!("UV failed too many times and is now blocked. Trying to fall back to PIN");
                         uv_blocked = true;
                         continue;
                     }
