@@ -238,6 +238,23 @@ pub struct AuthenticationExtensionsClientOutputsJSON {
     pub unsigned_extension_outputs: serde_json::Map<String, serde_json::Value>,
 }
 
+impl AuthenticationExtensionsClientOutputsJSON {
+    /// Surfaces each entry as a top-level member, skipping ids listed in
+    /// `typed_members` to avoid emitting a duplicate JSON key.
+    pub(crate) fn extend_untyped(
+        &mut self,
+        outputs: &serde_json::Map<String, serde_json::Value>,
+        typed_members: &[&str],
+    ) {
+        for (id, value) in outputs {
+            if !typed_members.contains(&id.as_str()) {
+                self.unsigned_extension_outputs
+                    .insert(id.clone(), value.clone());
+            }
+        }
+    }
+}
+
 /// Credential properties extension output.
 #[derive(Debug, Clone, Serialize)]
 pub struct CredentialPropertiesOutputJSON {

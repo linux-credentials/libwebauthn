@@ -44,6 +44,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         prf: None,
         cred_props: Some(true),
         appid_exclude: None,
+        other: Default::default(),
     };
 
     for mut device in devices {
