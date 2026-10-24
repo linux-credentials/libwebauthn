@@ -7,15 +7,17 @@ They run before macro expansion, so they inspect the macro tokens as written.
 
 ## Lints
 
-- **`tracing_message_interpolation`** — a `tracing` event or span message must be
+- **`tracing_message_interpolation`**: a `tracing` event or span message must be
   a static string literal. Flags interpolated messages (`info!("got {x}")`,
   `info!("got {}", x)`) and messages built with `format!`. Dynamic data belongs
   in structured fields.
-- **`print_macro_in_library`** — flags `print!`, `println!`, `eprint!`,
+- **`tracing_message_trailing_punctuation`**: a `tracing` message must not end
+  with `.`, `,`, `;`, `:`, `!` or `?`. A trailing `...` is allowed.
+- **`print_macro_in_library`**: flags `print!`, `println!`, `eprint!`,
   `eprintln!`. Library code logs through `tracing`.
-- **`log_crate_macro`** — flags `log::` macros. libwebauthn standardises on
+- **`log_crate_macro`**: flags `log::` macros. libwebauthn standardises on
   `tracing`.
-- **`sensitive_field_above_debug`** — best-effort denylist that flags
+- **`sensitive_field_above_debug`**: best-effort denylist that flags
   sensitive-looking field names (pin, secret, token, shared secret, credential
   id, ...) used at `info!` and above. Length and count fields (`*_len`,
   `*_count`, `*_size`) and PIN protocol metadata (`pin_protocol`) are not
@@ -31,7 +33,7 @@ cargo dylint --all --workspace -- --all-features
 
 The lints are registered for the workspace in the top-level `Cargo.toml` under
 `[workspace.metadata.dylint]`, and run in CI (`.github/workflows/dylint.yml`),
-where the three deterministic lints fail the build.
+where the four deterministic lints fail the build.
 
 ## Toolchain
 

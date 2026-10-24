@@ -7,6 +7,8 @@
 //!
 //! - `tracing_message_interpolation`: a tracing event/span message must be a
 //!   static string literal, never an interpolated or `format!`-built string.
+//! - `tracing_message_trailing_punctuation`: a tracing message must not end
+//!   with punctuation, except a trailing `...`.
 //! - `print_macro_in_library`: no `print!`/`println!`/`eprint!`/`eprintln!`.
 //! - `log_crate_macro`: no `log::` macros, use `tracing`.
 //! - `sensitive_field_above_debug`: best-effort denylist of sensitive field
@@ -36,6 +38,13 @@ rustc_session::declare_tool_lint! {
 }
 
 rustc_session::declare_tool_lint! {
+    /// Tracing messages must not end with punctuation, except a trailing `...`.
+    pub dylint::TRACING_MESSAGE_TRAILING_PUNCTUATION,
+    Warn,
+    "tracing message ends with punctuation"
+}
+
+rustc_session::declare_tool_lint! {
     /// The print family writes to stdout/stderr and bypasses tracing. Library
     /// code must use tracing.
     pub dylint::PRINT_MACRO_IN_LIBRARY,
@@ -62,6 +71,7 @@ rustc_session::declare_tool_lint! {
 
 rustc_session::declare_lint_pass!(LoggingLints => [
     TRACING_MESSAGE_INTERPOLATION,
+    TRACING_MESSAGE_TRAILING_PUNCTUATION,
     PRINT_MACRO_IN_LIBRARY,
     LOG_CRATE_MACRO,
     SENSITIVE_FIELD_ABOVE_DEBUG,
@@ -72,6 +82,7 @@ rustc_session::declare_lint_pass!(LoggingLints => [
 pub fn register_lints(_sess: &Session, lint_store: &mut LintStore) {
     lint_store.register_lints(&[
         TRACING_MESSAGE_INTERPOLATION,
+        TRACING_MESSAGE_TRAILING_PUNCTUATION,
         PRINT_MACRO_IN_LIBRARY,
         LOG_CRATE_MACRO,
         SENSITIVE_FIELD_ABOVE_DEBUG,
@@ -189,6 +200,15 @@ fn check_mac(cx: &EarlyContext<'_>, mac: &MacCall) {
                      info!(field = value, \"message\"); see docs/logging.md",
                 );
             }
+            if has_trailing_punctuation(sym.as_str()) {
+                emit(
+                    cx,
+                    TRACING_MESSAGE_TRAILING_PUNCTUATION,
+                    span,
+                    "tracing message ends with punctuation".to_string(),
+                    "drop the trailing punctuation; see docs/logging.md",
+                );
+            }
         }
     }
     if let Some(span) = format_macro_segment(&segs) {
@@ -297,6 +317,12 @@ fn sole_str_literal(seg: &[&TokenTree]) -> Option<(Symbol, Span)> {
 /// True if a format string contains a `{...}` placeholder (ignoring `{{`/`}}`).
 fn has_placeholder(s: &str) -> bool {
     s.replace("{{", "").replace("}}", "").contains('{')
+}
+
+/// True if a message ends with `.`, `,`, `;`, `:`, `!` or `?`, except `...`.
+fn has_trailing_punctuation(s: &str) -> bool {
+    let s = s.trim_end();
+    !s.ends_with("...") && s.ends_with(['.', ',', ';', ':', '!', '?'])
 }
 
 /// Span of a `format!`/`format_args!` call appearing as a top-level segment.

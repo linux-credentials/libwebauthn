@@ -105,5 +105,30 @@ LL |     info!(message = %count, attempt = count);
    |
    = help: set the message to a static string literal; see docs/logging.md
 
-warning: 13 warnings emitted
+warning: tracing message ends with punctuation
+  --> $DIR/main.rs:67:11
+   |
+LL |     warn!("Channel did not return modality.");
+   |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: drop the trailing punctuation; see docs/logging.md
+   = note: `#[warn(dylint::tracing_message_trailing_punctuation)]` on by default
+
+warning: tracing message ends with punctuation
+  --> $DIR/main.rs:68:19
+   |
+LL |     debug!(count, "Starting:");
+   |                   ^^^^^^^^^^^
+   |
+   = help: drop the trailing punctuation; see docs/logging.md
+
+warning: tracing message ends with punctuation
+  --> $DIR/main.rs:69:11
+   |
+LL |     info!("Got no response??");
+   |           ^^^^^^^^^^^^^^^^^^^
+   |
+   = help: drop the trailing punctuation; see docs/logging.md
+
+warning: 16 warnings emitted
 

@@ -27,12 +27,12 @@ jobs:
       - name: Install cargo-dylint
         run: cargo install cargo-dylint dylint-link
       - name: Run logging policy lints
-        # The three deterministic lints fail the build. The sensitive-field
+        # The four deterministic lints fail the build. The sensitive-field
         # heuristic stays a warning, as documented in docs/logging.md.
         run: |
           set -o pipefail
           cargo dylint --all --workspace -- --all-features 2>&1 | tee dylint.log
-          if grep -qE 'dylint::(tracing_message_interpolation|print_macro_in_library|log_crate_macro)' dylint.log; then
+          if grep -qE 'dylint::(tracing_message_interpolation|tracing_message_trailing_punctuation|print_macro_in_library|log_crate_macro)' dylint.log; then
             echo "::error::Logging policy violations found, see docs/logging.md"
             exit 1
           fi

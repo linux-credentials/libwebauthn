@@ -112,6 +112,11 @@ level, so one that carries a per-device identifier sets `level = Level::DEBUG`.
 The message is always a static string literal. Never interpolate (`"{x}"`) and
 never pass `format!`. Put dynamic data in fields.
 
+Do not end the message with punctuation: `"Starting preflight"`, not
+`"Starting preflight."`. Fields are printed after the message, so a trailing
+full stop or colon ends up in the middle of the line. A trailing `...` is
+allowed.
+
 - Use `%value` for `Display` and `?value` for `Debug`.
 - Name fields in snake_case: `field = value`.
 - One field: bare. Two or more: a brace block.
@@ -164,6 +169,8 @@ A custom dylint lint in [`lints/`](../lints) checks the mechanical rules:
 
 - the message must be a static string literal, with no interpolation or
   `format!`
+- the message must not end with `.`, `,`, `;`, `:`, `!`, or `?`, though a
+  trailing `...` is allowed
 - no `println!`, `eprintln!`, `print!`, or `eprint!`
 - no `log::` macros
 - a best-effort denylist flags sensitive field names (pin, secret, token, and so
@@ -182,6 +189,6 @@ cargo install cargo-dylint dylint-link   # once
 cargo dylint --all --workspace -- --all-features
 ```
 
-CI runs the same command on every push. The three deterministic lints fail the
+CI runs the same command on every push. The four deterministic lints fail the
 build. The sensitive-field heuristic stays a warning, since whether a value is
 sensitive cannot be decided by a tool.

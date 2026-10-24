@@ -62,4 +62,12 @@ fn main() {
 
     // tracing_message_interpolation: dynamic message field
     info!(message = %count, attempt = count);
+
+    // tracing_message_trailing_punctuation
+    warn!("Channel did not return modality.");
+    debug!(count, "Starting:");
+    info!("Got no response??");
+    // OK: a mid-message full stop and a trailing ellipsis.
+    warn!("UV is blocked. Falling back to PIN");
+    debug!("Waiting for user presence...");
 }
