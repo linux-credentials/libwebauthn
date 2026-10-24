@@ -341,7 +341,7 @@ pub(crate) async fn connection(mut input: TunnelConnectionInput) -> Result<(), C
                 )
                 .await
                 {
-                    debug!(?e, "Could not send Shutdown; the tunnel is already gone");
+                    debug!(?e, "Could not send Shutdown");
                     return Ok(());
                 }
                 let _ = tokio::time::timeout(PEER_CLOSE_GRACE, async {

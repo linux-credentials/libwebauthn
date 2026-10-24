@@ -5,7 +5,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tokio::{task, time};
-use tracing::{debug, warn};
+use tracing::warn;
 
 use crate::pin::persistent_token::PersistentTokenStore;
 use crate::proto::{
@@ -167,7 +167,7 @@ impl Channel for CableChannel {
                 .await
                 .is_err()
         {
-            debug!("caBLE connection did not finish closing in time");
+            warn!(timeout = ?CLOSE_TIMEOUT, "caBLE connection did not finish closing in time");
         }
     }
 
