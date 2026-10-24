@@ -17,7 +17,7 @@ pub mod error;
 pub mod pin_uv_auth_token;
 
 use async_trait::async_trait;
-use tracing::{debug, info, instrument, trace, warn};
+use tracing::{debug, info, instrument, trace, warn, Level};
 
 use crate::fido::FidoProtocol;
 use crate::ops::u2f::{RegisterRequest, SignRequest, UpgradableResponse};
@@ -169,7 +169,7 @@ impl<C> WebAuthn for C
 where
     C: Channel,
 {
-    #[instrument(skip_all, fields(transport = ?self.transport()))]
+    #[instrument(level = Level::INFO, skip_all, fields(transport = ?self.transport()))]
     async fn webauthn_make_credential(
         &mut self,
         op: &MakeCredentialRequest,
@@ -196,7 +196,7 @@ where
         Ok(response)
     }
 
-    #[instrument(skip_all, fields(transport = ?self.transport()))]
+    #[instrument(level = Level::INFO, skip_all, fields(transport = ?self.transport()))]
     async fn webauthn_get_assertion(
         &mut self,
         op: &GetAssertionRequest,
@@ -691,7 +691,7 @@ async fn get_assertion_u2f<C: Channel>(
     Err(WebAuthnError::Ctap(CtapError::NoCredentials))
 }
 
-#[instrument(skip_all)]
+#[instrument(level = Level::INFO, skip_all)]
 async fn negotiate_protocol<C: Channel>(
     channel: &mut C,
     allow_u2f: bool,

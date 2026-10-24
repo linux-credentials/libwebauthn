@@ -1,7 +1,7 @@
 use ::btleplug::api::{AddressType, BDAddr};
 use async_trait::async_trait;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
-use tracing::{debug, info, instrument, trace, warn};
+use tracing::{debug, info, instrument, trace, warn, Level};
 
 use super::advertisement::{await_advertisement, DecryptedAdvert};
 use super::channel::{CableUpdate, CableUxUpdate, ConnectionState};
@@ -70,7 +70,7 @@ pub(crate) struct ConnectionInput {
 }
 
 impl ConnectionInput {
-    #[instrument(skip_all, err)]
+    #[instrument(level = Level::INFO, skip_all, err(level = Level::DEBUG))]
     pub fn new_for_qr_code(
         qr_device: &CableQrCodeDevice,
         proximity_output: &ProximityCheckOutput,
@@ -252,9 +252,9 @@ impl MpscUxUpdateSender {
 
 #[async_trait]
 impl UxUpdateSender for MpscUxUpdateSender {
-    #[instrument(skip(self))]
+    #[instrument(level = Level::INFO, skip_all)]
     async fn send_update(&self, update: CableUxUpdate) {
-        trace!("Sending UX update");
+        trace!(?update, "Sending UX update");
         if let Err(err) = self.sender.send(update) {
             warn!(?err, "No receivers found for UX update");
         }
@@ -271,7 +271,7 @@ impl UxUpdateSender for MpscUxUpdateSender {
     }
 }
 
-#[instrument(skip_all, err)]
+#[instrument(level = Level::INFO, skip_all, err(level = Level::DEBUG))]
 pub(crate) async fn proximity_check_stage(
     input: ProximityCheckInput,
     ux_sender: &dyn UxUpdateSender,
@@ -288,7 +288,7 @@ pub(crate) async fn proximity_check_stage(
     Ok(ProximityCheckOutput { device, advert })
 }
 
-#[instrument(skip_all, err)]
+#[instrument(level = Level::INFO, skip_all, err(level = Level::DEBUG))]
 pub(crate) async fn connection_stage(
     input: ConnectionInput,
     ux_sender: &dyn UxUpdateSender,
@@ -349,7 +349,7 @@ async fn connect_data_channel(
     Ok(Box::new(WebSocketDataChannel::new(ws_stream)))
 }
 
-#[instrument(skip_all, err)]
+#[instrument(level = Level::INFO, skip_all, err(level = Level::DEBUG))]
 pub(crate) async fn handshake_stage(
     input: HandshakeInput,
     ux_sender: &dyn UxUpdateSender,

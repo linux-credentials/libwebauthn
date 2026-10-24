@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
-use tracing::{debug, instrument, trace, warn};
+use tracing::{debug, instrument, trace, warn, Level};
 
 use crate::proto::ctap2::cbor::{self, CborRequest};
 use crate::proto::ctap2::{Ctap2BioEnrollmentResponse, Ctap2CommandCode};
@@ -95,7 +95,7 @@ impl<C> Ctap2 for C
 where
     C: Channel,
 {
-    #[instrument(skip_all)]
+    #[instrument(level = Level::DEBUG, skip_all)]
     async fn ctap2_get_info(
         &mut self,
     ) -> Result<Ctap2GetInfoResponse, WebAuthnError<Self::TransportError>> {
@@ -118,7 +118,7 @@ where
         Ok(ctap_response)
     }
 
-    #[instrument(skip_all)]
+    #[instrument(level = Level::DEBUG, skip_all)]
     async fn ctap2_make_credential(
         &mut self,
         request: &Ctap2MakeCredentialRequest,
@@ -144,7 +144,7 @@ where
         Ok(ctap_response)
     }
 
-    #[instrument(skip_all)]
+    #[instrument(level = Level::DEBUG, skip_all)]
     async fn ctap2_get_assertion(
         &mut self,
         request: &Ctap2GetAssertionRequest,
@@ -170,7 +170,7 @@ where
         Ok(ctap_response)
     }
 
-    #[instrument(skip_all)]
+    #[instrument(level = Level::DEBUG, skip_all)]
     async fn ctap2_get_next_assertion(
         &mut self,
         timeout: Duration,
@@ -195,7 +195,7 @@ where
         Ok(ctap_response)
     }
 
-    #[instrument(skip_all)]
+    #[instrument(level = Level::DEBUG, skip_all)]
     async fn ctap2_selection(
         &mut self,
         timeout: Duration,
@@ -221,7 +221,7 @@ where
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument(level = Level::DEBUG, skip_all)]
     async fn ctap2_authenticator_reset(
         &mut self,
         timeout: Duration,
@@ -247,7 +247,7 @@ where
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument(level = Level::DEBUG, skip_all)]
     async fn ctap2_client_pin(
         &mut self,
         request: &Ctap2ClientPinRequest,
@@ -278,7 +278,7 @@ where
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument(level = Level::DEBUG, skip_all)]
     async fn ctap2_authenticator_config(
         &mut self,
         request: &Ctap2AuthenticatorConfigRequest,
@@ -306,7 +306,7 @@ where
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument(level = Level::DEBUG, skip_all)]
     async fn ctap2_bio_enrollment(
         &mut self,
         request: &Ctap2BioEnrollmentRequest,
@@ -337,7 +337,7 @@ where
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument(level = Level::DEBUG, skip_all)]
     async fn ctap2_credential_management(
         &mut self,
         request: &Ctap2CredentialManagementRequest,
@@ -368,7 +368,7 @@ where
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument(level = Level::DEBUG, skip_all)]
     async fn ctap2_large_blobs(
         &mut self,
         request: &Ctap2LargeBlobsRequest,

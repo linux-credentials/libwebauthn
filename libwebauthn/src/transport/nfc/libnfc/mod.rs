@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 #[allow(unused_imports)]
-use tracing::{debug, info, instrument, trace, warn};
+use tracing::{debug, info, instrument, trace, warn, Level};
 
 const MAX_DEVICES: usize = 10;
 const TIMEOUT: Duration = Duration::from_millis(5000);
@@ -177,7 +177,7 @@ impl fmt::Display for Channel {
 
 impl<Ctx> NfcBackend<Ctx> for Channel where Ctx: fmt::Debug + fmt::Display {}
 
-#[instrument]
+#[instrument(level = Level::DEBUG, skip_all)]
 pub(crate) fn is_nfc_available() -> bool {
     let Ok(mut context) = nfc1::Context::new() else {
         return false;
@@ -186,7 +186,7 @@ pub(crate) fn is_nfc_available() -> bool {
     context.list_devices(1).map(|d| d.len()).unwrap_or_default() > 0
 }
 
-#[instrument]
+#[instrument(level = Level::DEBUG, skip_all)]
 pub(crate) fn list_devices() -> Result<Vec<NfcDevice>, NfcError> {
     let mut context = nfc1::Context::new()?;
     let devices = context

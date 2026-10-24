@@ -39,7 +39,7 @@ impl<C> Ctap1 for C
 where
     C: Channel,
 {
-    #[instrument(skip_all)]
+    #[instrument(level = Level::DEBUG, skip_all)]
     async fn ctap1_version(
         &mut self,
     ) -> Result<Ctap1VersionResponse, WebAuthnError<Self::TransportError>> {
@@ -57,7 +57,7 @@ where
         Ok(response)
     }
 
-    #[instrument(skip_all)]
+    #[instrument(level = Level::DEBUG, skip_all)]
     async fn ctap1_register(
         &mut self,
         request: &Ctap1RegisterRequest,
@@ -99,7 +99,7 @@ where
         Ok(response)
     }
 
-    #[instrument(skip_all, fields(preflight = !request.require_user_presence))]
+    #[instrument(level = Level::DEBUG, skip_all, fields(preflight = !request.require_user_presence))]
     async fn ctap1_sign(
         &mut self,
         request: &Ctap1SignRequest,

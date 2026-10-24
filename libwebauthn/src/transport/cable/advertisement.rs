@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use futures::StreamExt;
 use serde_cbor_2 as serde_cbor;
 use std::pin::pin;
-use tracing::{debug, instrument, trace, warn};
+use tracing::{debug, instrument, trace, warn, Level};
 use uuid::Uuid;
 
 use crate::proto::ctap2::cbor::Value;
@@ -68,7 +68,7 @@ impl From<[u8; 16]> for DecryptedAdvert {
     }
 }
 
-#[instrument(skip_all, err)]
+#[instrument(level = Level::INFO, skip_all, err(level = Level::DEBUG))]
 pub(crate) async fn await_advertisement(
     eid_key: &[u8],
 ) -> Result<(FidoDevice, DecryptedAdvert), CableError> {

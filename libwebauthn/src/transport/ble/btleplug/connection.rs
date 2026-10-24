@@ -9,7 +9,7 @@ use byteorder::{BigEndian, ReadBytesExt};
 use futures::stream::{Stream, StreamExt};
 use tokio::sync::Mutex;
 use tokio::time::timeout;
-use tracing::{debug, info, instrument, trace, warn};
+use tracing::{debug, info, instrument, trace, warn, Level};
 
 use super::device::FidoEndpoints;
 use super::gatt::write_type_for;
@@ -146,7 +146,7 @@ impl Connection {
         Ok(())
     }
 
-    #[instrument(skip_all)]
+    #[instrument(level = Level::DEBUG, skip_all)]
     pub async fn frame_recv(&self, op_timeout: Duration) -> Result<Frame, Error> {
         let mut parser = BleFrameParser::new();
         let mut stream = self.notifications.lock().await;

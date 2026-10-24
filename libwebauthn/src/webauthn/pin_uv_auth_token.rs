@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use icu_normalizer::ComposingNormalizerBorrowed;
-use tracing::{debug, info, instrument, warn};
+use tracing::{debug, info, instrument, warn, Level};
 
 use cosey::PublicKey;
 
@@ -93,7 +93,7 @@ fn enforce_no_mc_ga_with_client_pin(
     }
 }
 
-#[instrument(skip_all)]
+#[instrument(level = Level::INFO, skip_all)]
 pub(crate) async fn user_verification<R, C>(
     channel: &mut C,
     user_verification: UserVerificationRequirement,
@@ -154,7 +154,7 @@ where
     .await
 }
 
-#[instrument(skip_all)]
+#[instrument(level = Level::DEBUG, skip_all)]
 async fn user_verification_helper<R, C>(
     channel: &mut C,
     get_info_response: &mut Ctap2GetInfoResponse,

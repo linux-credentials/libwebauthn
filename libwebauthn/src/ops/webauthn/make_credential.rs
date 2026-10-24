@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use ctap_types::ctap2::credential_management::CredentialProtectionPolicy as Ctap2CredentialProtectionPolicy;
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
-use tracing::{debug, instrument, trace};
+use tracing::{debug, instrument, trace, Level};
 
 use crate::{
     fido::AuthenticatorData,
@@ -723,7 +723,7 @@ impl MakeCredentialRequest {
 }
 
 impl DowngradableRequest<RegisterRequest> for MakeCredentialRequest {
-    #[instrument(skip_all)]
+    #[instrument(level = Level::DEBUG, skip_all)]
     fn is_downgradable(&self) -> bool {
         // All of the below conditions must be true for the platform to proceed to next step.
         // If any of the below conditions is not true, platform errors out with CTAP2_ERR_UNSUPPORTED_OPTION

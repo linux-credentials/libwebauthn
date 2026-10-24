@@ -21,7 +21,7 @@ use serde_bytes::ByteBuf;
 use serde_indexed::SerializeIndexed;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tokio::task;
-use tracing::{debug, instrument, trace};
+use tracing::{debug, instrument, trace, Level};
 
 use super::channel::CableChannel;
 use super::protocol::{self, CableLinkingInfo};
@@ -162,7 +162,7 @@ impl CableKnownDevice {
         Ok(device)
     }
 
-    #[instrument(skip_all, err)]
+    #[instrument(level = Level::INFO, skip_all, err(level = Level::WARN))]
     async fn connection(
         known_device: &CableKnownDevice,
         ux_sender: &super::connection_stages::MpscUxUpdateSender,

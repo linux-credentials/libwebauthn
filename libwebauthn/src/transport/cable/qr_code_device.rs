@@ -13,7 +13,7 @@ use serde_indexed::SerializeIndexed;
 use serde_repr::Serialize_repr;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tokio::task;
-use tracing::instrument;
+use tracing::{instrument, Level};
 
 use super::connection_stages::{
     connection_stage, handshake_stage, proximity_check_stage, ConnectionInput, HandshakeInput,
@@ -210,7 +210,7 @@ impl CableQrCodeDevice {
         Self::new(hint, false, None, transports)
     }
 
-    #[instrument(skip_all, err)]
+    #[instrument(level = Level::INFO, skip_all, err(level = Level::WARN))]
     async fn connection(
         qr_device: &CableQrCodeDevice,
         ux_sender: &MpscUxUpdateSender,

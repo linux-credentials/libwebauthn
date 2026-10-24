@@ -125,7 +125,7 @@ where
         self.handle.clone()
     }
 
-    #[instrument(skip_all)]
+    #[instrument(level = Level::INFO, skip_all)]
     pub async fn wink(&mut self, _timeout: Duration) -> Result<bool, WebAuthnError<NfcError>> {
         warn!("WINK capability is not supported");
         Ok(false)
@@ -213,7 +213,7 @@ where
             })
     }
 
-    #[instrument(skip_all)]
+    #[instrument(level = Level::INFO, skip_all)]
     pub async fn blink_and_wait_for_user_presence(
         &mut self,
         _timeout: Duration,

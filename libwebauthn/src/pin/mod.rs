@@ -28,7 +28,7 @@ use p256::{
 };
 use rand::{rngs::OsRng, thread_rng, Rng, SeedableRng};
 use sha2::{Digest, Sha256};
-use tracing::{error, instrument, warn};
+use tracing::{error, instrument, warn, Level};
 use x509_parser::nom::AsBytes;
 
 pub mod persistent_token;
@@ -173,7 +173,7 @@ impl<P> ECDHPinUvAuthProtocol for P
 where
     P: ECPrivateKeyPinUvAuthProtocol,
 {
-    #[instrument(skip_all)]
+    #[instrument(level = Level::DEBUG, skip_all)]
     fn encapsulate(
         &self,
         peer_public_key: &cose::PublicKey,
@@ -256,7 +256,7 @@ impl PinUvAuthProtocol for PinUvAuthProtocolOne {
         Ctap2PinUvAuthProtocol::One
     }
 
-    #[instrument(skip_all)]
+    #[instrument(level = Level::DEBUG, skip_all)]
     fn encrypt(&self, key: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, PlatformError> {
         // Return the AES-256-CBC encryption of demPlaintext using an all-zero IV.
         // (No padding is performed as the size of demPlaintext is required to be a multiple of the AES block length.)
@@ -270,7 +270,7 @@ impl PinUvAuthProtocol for PinUvAuthProtocolOne {
         Ok(enc.encrypt_padded_vec_mut::<NoPadding>(plaintext))
     }
 
-    #[instrument(skip_all)]
+    #[instrument(level = Level::DEBUG, skip_all)]
     fn authenticate(&self, key: &[u8], message: &[u8]) -> Result<Vec<u8>, PlatformError> {
         // Return the first 16 bytes of the result of computing HMAC-SHA-256 with the given key and message.
         let hmac = hmac_sha256(key, message)?;
@@ -282,7 +282,7 @@ impl PinUvAuthProtocol for PinUvAuthProtocolOne {
         Ok(Vec::from(truncated))
     }
 
-    #[instrument(skip_all)]
+    #[instrument(level = Level::DEBUG, skip_all)]
     fn decrypt(&self, key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, PlatformError> {
         // If the size of demCiphertext is not a multiple of the AES block length, return error.
         // Otherwise return the AES-256-CBC decryption of demCiphertext using an all-zero IV.
@@ -375,7 +375,7 @@ impl PinUvAuthProtocol for PinUvAuthProtocolTwo {
         Ctap2PinUvAuthProtocol::Two
     }
 
-    #[instrument(skip_all)]
+    #[instrument(level = Level::DEBUG, skip_all)]
     fn encapsulate(
         &self,
         peer_public_key: &cose::PublicKey,

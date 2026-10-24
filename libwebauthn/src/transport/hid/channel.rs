@@ -133,7 +133,7 @@ impl<'d> HidChannel<'d> {
         self.handle.clone()
     }
 
-    #[instrument(skip_all)]
+    #[instrument(level = Level::INFO, skip_all)]
     pub async fn wink(&mut self, timeout: Duration) -> Result<bool, HidError> {
         if !self.init.caps.contains(Caps::WINK) {
             warn!(?self.init.caps, "WINK capability is not supported");
@@ -149,7 +149,7 @@ impl<'d> HidChannel<'d> {
         Ok(true)
     }
 
-    #[instrument(skip_all)]
+    #[instrument(level = Level::INFO, skip_all)]
     pub async fn blink_and_wait_for_user_presence(
         &mut self,
         timeout: Duration,
@@ -297,7 +297,7 @@ impl<'d> HidChannel<'d> {
     }
     */
 
-    #[instrument(skip_all, fields(cmd = ?msg.cmd, payload_len = msg.payload.len()))]
+    #[instrument(level = Level::DEBUG, skip_all, fields(cmd = ?msg.cmd, payload_len = msg.payload.len()))]
     pub async fn hid_send(&self, msg: &HidMessage) -> Result<(), HidError> {
         match &self.open_device {
             OpenHidDevice::HidApiDevice(hidapi_device) => {
@@ -351,7 +351,7 @@ impl<'d> HidChannel<'d> {
         Ok(())
     }
 
-    #[instrument(skip_all)]
+    #[instrument(level = Level::DEBUG, skip_all)]
     pub async fn hid_recv(&self, timeout: Duration) -> Result<HidMessage, HidError> {
         loop {
             let response = match &self.open_device {
