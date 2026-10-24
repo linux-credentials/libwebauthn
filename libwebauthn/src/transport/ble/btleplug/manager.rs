@@ -62,7 +62,7 @@ async fn on_peripheral_service_data(
     id: &PeripheralId,
     uuids: &[Uuid],
     service_data: HashMap<Uuid, Vec<u8>>,
-) -> Option<(Adapter, Peripheral, Vec<u8>)> {
+) -> Option<(Peripheral, Vec<u8>)> {
     for uuid in uuids {
         if let Some(service_data) = service_data.get(uuid) {
             trace!(?id, ?service_data, "Found service data");
@@ -72,7 +72,7 @@ async fn on_peripheral_service_data(
             };
 
             debug!({ ?id, ?service_data }, "Found service data for peripheral");
-            return Some((adapter.clone(), peripheral, service_data.to_owned()));
+            return Some((peripheral, service_data.to_owned()));
         }
     }
 
@@ -83,11 +83,32 @@ async fn on_peripheral_service_data(
     None
 }
 
+/// A discovery is abandoned whenever the caller is cancelled or returns early,
+/// which would otherwise leave the adapter scanning for the lifetime of the
+/// process.
+struct ScanGuard(Adapter);
+
+impl Drop for ScanGuard {
+    fn drop(&mut self) {
+        let adapter = self.0.clone();
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                handle.spawn(async move {
+                    if let Err(e) = adapter.stop_scan().await {
+                        warn!(?e, "Failed to stop BLE scan");
+                    }
+                });
+            }
+            Err(e) => warn!(?e, "No runtime available to stop BLE scan"),
+        }
+    }
+}
+
 #[instrument(level = Level::DEBUG, skip_all)]
 /// Starts a discovery for devices advertising service data on any of the provided UUIDs
 pub async fn start_discovery_for_service_data(
     uuids: &[Uuid],
-) -> Result<impl Stream<Item = (Adapter, Peripheral, Vec<u8>)> + use<'_>, Error> {
+) -> Result<impl Stream<Item = (Peripheral, Vec<u8>)> + use<'_>, Error> {
     let adapter = get_adapter().await?;
     let scan_filter = ScanFilter::default();
 
@@ -98,8 +119,11 @@ pub async fn start_discovery_for_service_data(
         .await
         .or(Err(Error::ConnectionFailed))?;
 
+    let scan_guard = ScanGuard(adapter.clone());
+
     let stream = events.filter_map({
         move |event| {
+            let _scan_guard = &scan_guard;
             let adapter = adapter.clone();
             let uuids = uuids.to_vec();
             async move {
