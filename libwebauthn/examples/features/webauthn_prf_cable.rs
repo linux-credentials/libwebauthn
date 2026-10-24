@@ -142,6 +142,9 @@ async fn create() -> Result<(), Box<dyn Error>> {
         "cargo run --example webauthn_prf_cable -- get {}",
         base64_url::encode(&credential.id)
     );
+
+    channel.close().await;
+
     Ok(())
 }
 
@@ -199,5 +202,8 @@ async fn get(credential_id: Option<&str>) -> Result<(), Box<dyn Error>> {
             .expect("Failed to serialize GetAssertion response");
         println!("Assertion {num} (JSON):\n{assertion_json}");
     }
+
+    channel.close().await;
+
     Ok(())
 }

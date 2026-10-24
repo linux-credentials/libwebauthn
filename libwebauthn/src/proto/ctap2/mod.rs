@@ -34,12 +34,12 @@ pub use model::{
     Ctap2CredentialManagementResponse, Ctap2RPData,
 };
 pub use model::{
-    Ctap2GetAssertionRequest, Ctap2GetAssertionResponse, Ctap2GetAssertionResponseExtensions,
-    Ctap2PrfGetAssertionInput, Ctap2PrfSalts,
+    Ctap2GetAssertionRequest, Ctap2GetAssertionRequestExtensions, Ctap2GetAssertionResponse,
+    Ctap2GetAssertionResponseExtensions, Ctap2PrfGetAssertionInput, Ctap2PrfSalts,
 };
 pub use model::{Ctap2LargeBlobsRequest, Ctap2LargeBlobsResponse};
 pub use model::{
-    Ctap2MakeCredentialRequest, Ctap2MakeCredentialResponse,
+    Ctap2MakeCredentialRequest, Ctap2MakeCredentialResponse, Ctap2MakeCredentialsRequestExtensions,
     Ctap2MakeCredentialsResponseExtensions, Ctap2PrfMakeCredentialInput,
 };
 pub mod preflight;
