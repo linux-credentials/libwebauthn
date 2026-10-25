@@ -13,12 +13,15 @@ use crate::{
         MakeCredentialsResponseUnsignedExtensions, PrfInputValue, ResidentKeyRequirement,
     },
     pin::PinUvAuthProtocol,
-    proto::{ctap2::cbor::Value, CtapError},
+    proto::{
+        ctap2::cbor::{serialize_merged, Value},
+        CtapError,
+    },
     transport::AuthTokenData,
     webauthn::{PlatformError, WebAuthnError},
 };
 use ctap_types::ctap2::credential_management::CredentialProtectionPolicy as Ctap2CredentialProtectionPolicy;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 use serde_bytes::ByteBuf;
 use serde_indexed::{DeserializeIndexed, SerializeIndexed};
 use std::collections::BTreeMap;
@@ -179,7 +182,7 @@ impl Ctap2MakeCredentialRequest {
 }
 
 #[derive(Debug, Default, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(remote = "Self", rename_all = "camelCase")]
 pub struct Ctap2MakeCredentialsRequestExtensions {
     // Field order is CTAP2 canonical CBOR map order: shortest key first, then bytewise.
     /// Native `prf` extension, used by phone/platform authenticators that advertise
@@ -200,8 +203,29 @@ pub struct Ctap2MakeCredentialsRequestExtensions {
     // CTAP 2.2 § 12.8
     #[serde(rename = "hmac-secret-mc", skip_serializing_if = "Option::is_none")]
     pub hmac_secret_mc: Option<CalculatedHMACGetSecretInput>,
+    /// Extensions without a typed field, keyed by identifier.
+    #[serde(skip)]
+    pub other: BTreeMap<String, Value>,
     #[serde(skip)]
     pub(crate) prf_input: Option<PrfInputValue>,
+}
+
+impl Serialize for Ctap2MakeCredentialsRequestExtensions {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        struct Typed<'a>(&'a Ctap2MakeCredentialsRequestExtensions);
+        impl Serialize for Typed<'_> {
+            fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                Ctap2MakeCredentialsRequestExtensions::serialize(self.0, serializer)
+            }
+        }
+        serialize_merged(
+            &Typed(self),
+            self.other
+                .iter()
+                .map(|(id, value)| (Value::Text(id.clone()), value.clone())),
+            serializer,
+        )
+    }
 }
 
 impl Ctap2MakeCredentialsRequestExtensions {
@@ -213,6 +237,7 @@ impl Ctap2MakeCredentialsRequestExtensions {
             && self.large_blob_key.is_none()
             && self.min_pin_length.is_none()
             && self.hmac_secret_mc.is_none()
+            && self.other.is_empty()
     }
 }
 
@@ -318,6 +343,7 @@ impl Ctap2MakeCredentialsRequestExtensions {
                 .map(|x| x.policy.clone().into()),
             large_blob_key,
             min_pin_length: requested_extensions.min_pin_length,
+            other: BTreeMap::new(),
         })
     }
 
@@ -497,6 +523,13 @@ pub struct Ctap2MakeCredentialsResponseExtensions {
     // Current min PIN lenght
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_pin_length: Option<u32>,
+    /// Extension outputs without a typed field, keyed by identifier.
+    #[serde(
+        flatten,
+        skip_serializing,
+        deserialize_with = "crate::proto::ctap2::cbor::deserialize_drop_non_text_keys"
+    )]
+    pub other: BTreeMap<String, Value>,
 }
 
 #[cfg(test)]
@@ -1143,6 +1176,7 @@ mod tests {
             min_pin_length: Some(true),
             hmac_secret: Some(true),
             hmac_secret_mc: None,
+            other: Default::default(),
             prf_input: None,
         };
 
@@ -1163,5 +1197,74 @@ mod tests {
             offsets, sorted,
             "extension keys not in canonical CBOR order: {canonical:?} -> {offsets:?}"
         );
+    }
+
+    fn auth_data_with_extensions(extensions: &BTreeMap<Value, Value>) -> Vec<u8> {
+        let mut auth_data = vec![0u8; 37];
+        auth_data[32] = (crate::fido::AuthenticatorDataFlags::USER_PRESENT
+            | crate::fido::AuthenticatorDataFlags::EXTENSION_DATA)
+            .bits();
+        auth_data.extend(crate::proto::ctap2::cbor::to_vec(extensions).unwrap());
+        auth_data
+    }
+
+    #[test]
+    fn other_extensions_encoded_as_one_canonical_definite_map() {
+        let mut request = Ctap2MakeCredentialRequest::dummy();
+        let other = BTreeMap::from([
+            ("zz".to_string(), Value::Bool(true)),
+            ("aaaaaaaaaaaaaaaaaaaa".to_string(), Value::Integer(7)),
+        ]);
+        request.extensions = Some(Ctap2MakeCredentialsRequestExtensions {
+            cred_protect: Some(Ctap2CredentialProtectionPolicy::Required),
+            hmac_secret: Some(true),
+            other,
+            ..Default::default()
+        });
+
+        let bytes = crate::proto::ctap2::cbor::to_vec(&request).unwrap();
+        let decoded: BTreeMap<u64, Value> = crate::proto::ctap2::cbor::from_slice(&bytes).unwrap();
+
+        let Value::Map(extensions) = &decoded[&0x06] else {
+            panic!("extensions not a map");
+        };
+        let keys: Vec<_> = extensions.keys().cloned().collect();
+        assert_eq!(
+            keys,
+            ["zz", "credProtect", "hmac-secret", "aaaaaaaaaaaaaaaaaaaa"]
+                .map(|k| Value::Text(k.into()))
+        );
+        assert_eq!(crate::proto::ctap2::cbor::to_vec(&decoded).unwrap(), bytes);
+        assert_eq!(
+            crate::proto::ctap2::cbor::to_vec(request.extensions.as_ref().unwrap()).unwrap(),
+            crate::proto::ctap2::cbor::to_vec(&Value::Map(extensions.clone())).unwrap()
+        );
+    }
+
+    #[test]
+    fn unknown_auth_data_extension_outputs_kept_in_other() {
+        let extensions = BTreeMap::from([
+            (Value::Text("credProtect".into()), Value::Integer(2)),
+            (Value::Text("fooExt".into()), Value::Bytes(vec![1, 2])),
+            (Value::Integer(1), Value::Bool(true)),
+        ]);
+
+        let response: BTreeMap<u64, Value> = BTreeMap::from([
+            (0x01, Value::Text("none".to_string())),
+            (0x02, Value::Bytes(auth_data_with_extensions(&extensions))),
+            (0x03, Value::Map(BTreeMap::new())),
+        ]);
+
+        let bytes = crate::proto::ctap2::cbor::to_vec(&response).unwrap();
+        let parsed: Ctap2MakeCredentialResponse =
+            crate::proto::ctap2::cbor::from_slice(&bytes).unwrap();
+
+        let ext = parsed.authenticator_data.extensions.unwrap();
+        assert_eq!(
+            ext.cred_protect,
+            Some(Ctap2CredentialProtectionPolicy::OptionalWithCredentialIdList)
+        );
+        let expected = BTreeMap::from([("fooExt".to_string(), Value::Bytes(vec![1, 2]))]);
+        assert_eq!(ext.other, expected);
     }
 }
