@@ -66,12 +66,12 @@ impl From<PxpKnownDevice> for ConnectTarget {
 #[derive(Debug)]
 pub struct TunnelHandle {
     /// The connection task: proximity check, handshake, then message exchange.
-    pub task: task::JoinHandle<()>,
+    task: task::JoinHandle<()>,
     /// Outbound CTAP frames: command byte followed by the CBOR payload.
     pub ctap_sender: mpsc::Sender<Vec<u8>>,
     /// Inbound CTAP frames: status byte followed by the CBOR payload.
     pub ctap_receiver: mpsc::Receiver<Vec<u8>>,
-    pub connection_state: watch::Receiver<ConnectionState>,
+    connection_state: watch::Receiver<ConnectionState>,
     /// Asks the connection task to send the tunnel Shutdown message and
     /// close. Taken by [`TunnelHandle::close`].
     shutdown_sender: Option<oneshot::Sender<()>>,
@@ -81,9 +81,14 @@ pub struct TunnelHandle {
 /// Shutdown message and see the peer close. Chromium waits up to three minutes
 /// for the peer; a short bound keeps `close()` from stalling a caller that is
 /// about to exit, and phones close within a round trip of receiving Shutdown.
-pub const CLOSE_TIMEOUT: Duration = Duration::from_secs(3);
+const CLOSE_TIMEOUT: Duration = Duration::from_secs(3);
 
 impl TunnelHandle {
+    /// Whether the connection task has ended.
+    pub fn is_finished(&self) -> bool {
+        self.task.is_finished()
+    }
+
     /// Send the tunnel Shutdown message and close the connection, the way
     /// Chromium's `FidoTunnelDevice` does. Without it the phone sees the
     /// tunnel drop and shows an error even after a successful ceremony.

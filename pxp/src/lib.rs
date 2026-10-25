@@ -22,6 +22,7 @@
 
 mod ble;
 mod cbor;
+mod connection;
 mod connection_stages;
 mod crypto;
 mod data_channel;
@@ -31,7 +32,6 @@ mod l2cap;
 mod protocol;
 
 pub mod advertisement;
-pub mod connection;
 pub mod error;
 pub mod known_devices;
 pub mod qr_code_device;

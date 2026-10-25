@@ -72,7 +72,7 @@ impl Channel for HybridChannel {
     }
 
     async fn status(&self) -> ChannelStatus {
-        match self.tunnel.task.is_finished() {
+        match self.tunnel.is_finished() {
             true => ChannelStatus::Closed,
             false => ChannelStatus::Ready,
         }
