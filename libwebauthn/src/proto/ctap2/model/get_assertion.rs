@@ -728,8 +728,12 @@ pub struct Ctap2GetAssertionResponseExtensions {
     pub hmac_secret: Option<Ctap2HMACGetSecretOutput>,
 
     /// Extension outputs without a typed field, keyed by identifier.
-    #[serde(flatten, skip_serializing)]
-    pub other: BTreeMap<Value, Value>,
+    #[serde(
+        flatten,
+        skip_serializing,
+        deserialize_with = "crate::proto::ctap2::cbor::deserialize_drop_non_text_keys"
+    )]
+    pub other: BTreeMap<String, Value>,
 }
 
 impl Ctap2GetAssertionResponseExtensions {

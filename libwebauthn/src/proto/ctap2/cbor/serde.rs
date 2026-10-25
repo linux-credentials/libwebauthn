@@ -20,6 +20,22 @@ impl PartialEq for CborError {
 
 pub(crate) type Value = serde_cbor::Value;
 
+pub(crate) fn deserialize_drop_non_text_keys<'de, D>(
+    deserializer: D,
+) -> Result<BTreeMap<String, Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let map: BTreeMap<Value, Value> = serde::Deserialize::deserialize(deserializer)?;
+    Ok(map
+        .into_iter()
+        .filter_map(|(key, value)| match key {
+            Value::Text(key) => Some((key, value)),
+            _ => None,
+        })
+        .collect())
+}
+
 /// Serializes `typed` as a single definite-length CBOR map in CTAP2 canonical key
 /// order, with the entries of `other` merged in. Entries of `typed` win on a clash.
 /// With no `other` entries, `typed` is serialized unchanged.

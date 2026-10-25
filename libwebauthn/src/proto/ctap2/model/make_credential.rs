@@ -524,8 +524,12 @@ pub struct Ctap2MakeCredentialsResponseExtensions {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_pin_length: Option<u32>,
     /// Extension outputs without a typed field, keyed by identifier.
-    #[serde(flatten, skip_serializing)]
-    pub other: BTreeMap<Value, Value>,
+    #[serde(
+        flatten,
+        skip_serializing,
+        deserialize_with = "crate::proto::ctap2::cbor::deserialize_drop_non_text_keys"
+    )]
+    pub other: BTreeMap<String, Value>,
 }
 
 #[cfg(test)]
@@ -1242,6 +1246,7 @@ mod tests {
         let extensions = BTreeMap::from([
             (Value::Text("credProtect".into()), Value::Integer(2)),
             (Value::Text("fooExt".into()), Value::Bytes(vec![1, 2])),
+            (Value::Integer(1), Value::Bool(true)),
         ]);
 
         let response: BTreeMap<u64, Value> = BTreeMap::from([
@@ -1259,7 +1264,7 @@ mod tests {
             ext.cred_protect,
             Some(Ctap2CredentialProtectionPolicy::OptionalWithCredentialIdList)
         );
-        let expected = BTreeMap::from([(Value::Text("fooExt".into()), Value::Bytes(vec![1, 2]))]);
+        let expected = BTreeMap::from([("fooExt".to_string(), Value::Bytes(vec![1, 2]))]);
         assert_eq!(ext.other, expected);
     }
 }
