@@ -1,5 +1,5 @@
 //! Transport-agnostic Noise handshake and encrypted CTAP framing for the
-//! hybrid transport. Runs over any [`CableDataChannel`].
+//! hybrid transport. Runs over any [`PxpDataChannel`].
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -15,14 +15,14 @@ use snow::{Builder, TransportState};
 use tokio::sync::mpsc::Sender;
 use tracing::{debug, error, trace, warn};
 
-use super::data_channel::CableDataChannel;
+use super::data_channel::PxpDataChannel;
 use super::known_devices::ClientPayload;
-use super::known_devices::{CableKnownDeviceInfo, CableKnownDeviceInfoStore};
-use crate::proto::ctap2::cbor::{self, CborRequest, CborResponse, Value};
-use crate::proto::ctap2::{Ctap2CommandCode, Ctap2GetInfoResponse};
-use crate::transport::cable::connection_stages::TunnelConnectionInput;
-use crate::transport::cable::error::CableError;
-use crate::transport::cable::known_devices::CableKnownDeviceId;
+use super::known_devices::{PxpKnownDeviceInfo, PxpKnownDeviceInfoStore};
+use crate::cbor::{self, Value};
+use crate::connection_stages::TunnelConnectionInput;
+use crate::error::PxpError;
+use crate::get_info::GetInfoResponse;
+use crate::known_devices::PxpKnownDeviceId;
 
 const P256_X962_LENGTH: usize = 65;
 const MAX_CBOR_SIZE: usize = 1024 * 1024;
@@ -30,36 +30,42 @@ const PADDING_GRANULARITY: usize = 32;
 /// After sending Shutdown, how long to wait for the peer to close its side.
 const PEER_CLOSE_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
 
-const CABLE_PROLOGUE_STATE_ASSISTED: &[u8] = &[0u8];
-const CABLE_PROLOGUE_QR_INITIATED: &[u8] = &[1u8];
+const PXP_PROLOGUE_STATE_ASSISTED: &[u8] = &[0u8];
+const PXP_PROLOGUE_QR_INITIATED: &[u8] = &[1u8];
+
+/// CTAP2 authenticatorGetInfo command byte. The only CTAP fact PXP relies on:
+/// the post-handshake message already carries the getInfo response.
+const CTAP2_GET_INFO: u8 = 0x04;
+/// CTAP2 success status byte, prefixed to the cached getInfo response.
+const CTAP2_OK: u8 = 0x00;
 
 #[derive(Debug, Clone)]
-struct CableTunnelMessage {
-    message_type: CableTunnelMessageType,
+struct PxpTunnelMessage {
+    message_type: PxpTunnelMessageType,
     payload: ByteBuf,
 }
 
-impl CableTunnelMessage {
-    pub fn new(message_type: CableTunnelMessageType, payload: &[u8]) -> Self {
+impl PxpTunnelMessage {
+    pub fn new(message_type: PxpTunnelMessageType, payload: &[u8]) -> Self {
         Self {
             message_type,
             payload: ByteBuf::from(payload.to_vec()),
         }
     }
-    pub fn from_slice(slice: &[u8]) -> Result<Self, CableError> {
-        let (type_byte, payload) = slice.split_first().ok_or(CableError::InvalidFraming)?;
+    pub fn from_slice(slice: &[u8]) -> Result<Self, PxpError> {
+        let (type_byte, payload) = slice.split_first().ok_or(PxpError::InvalidFraming)?;
         // Shutdown is the type byte alone (Chromium sends exactly that);
         // every other message carries a payload.
         if payload.is_empty() && *type_byte != 0 {
-            return Err(CableError::InvalidFraming);
+            return Err(PxpError::InvalidFraming);
         }
 
         let message_type = match *type_byte {
-            0 => CableTunnelMessageType::Shutdown,
-            1 => CableTunnelMessageType::Ctap,
-            2 => CableTunnelMessageType::Update,
+            0 => PxpTunnelMessageType::Shutdown,
+            1 => PxpTunnelMessageType::Ctap,
+            2 => PxpTunnelMessageType::Update,
             _ => {
-                return Err(CableError::InvalidFraming);
+                return Err(PxpError::InvalidFraming);
             }
         };
 
@@ -79,7 +85,7 @@ impl CableTunnelMessage {
 }
 
 #[derive(Clone, Debug, DeserializeIndexed)]
-struct CableInitialMessage {
+struct PxpInitialMessage {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(index = 0x00)]
     pub _padding: Option<ByteBuf>,
@@ -87,13 +93,31 @@ struct CableInitialMessage {
     #[serde(index = 0x01)]
     pub info: ByteBuf,
 
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "SupportedFeatures::is_default")]
     #[serde(index = 0x03)]
-    pub _supported_features: Option<Vec<String>>,
+    pub supported_features: SupportedFeatures,
+}
+
+/// Post-handshake message key 3. Its absence MUST be treated as `["ctap"]`.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(transparent)]
+struct SupportedFeatures(Vec<String>);
+
+impl Default for SupportedFeatures {
+    fn default() -> Self {
+        Self(vec!["ctap".to_string()])
+    }
+}
+
+impl SupportedFeatures {
+    #[allow(dead_code)]
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct CableLinkingInfo {
+pub(crate) struct PxpLinkingInfo {
     /// Used by the tunnel to identify the authenticator (eg. Android FCM token)
     pub contact_id: Vec<u8>,
     /// Used by the authenticator to identify the client platform
@@ -112,7 +136,7 @@ pub(crate) struct CableLinkingInfo {
 
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, Deserialize)]
-enum CableTunnelMessageType {
+enum PxpTunnelMessageType {
     Shutdown = 0,
     Ctap = 1,
     Update = 2,
@@ -127,7 +151,7 @@ enum RecvOutcome {
 }
 
 #[derive(Clone)]
-pub(crate) enum CableTunnelConnectionType {
+pub(crate) enum PxpTunnelConnectionType {
     QrCode {
         routing_id: String,
         tunnel_id: String,
@@ -140,7 +164,7 @@ pub(crate) enum CableTunnelConnectionType {
     },
 }
 
-impl std::fmt::Debug for CableTunnelConnectionType {
+impl std::fmt::Debug for PxpTunnelConnectionType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::QrCode {
@@ -174,24 +198,24 @@ pub(crate) struct TunnelNoiseState {
 }
 
 pub(crate) async fn do_handshake(
-    data_channel: &mut dyn CableDataChannel,
+    data_channel: &mut dyn PxpDataChannel,
     psk: [u8; 32],
-    connection_type: &CableTunnelConnectionType,
-) -> Result<TunnelNoiseState, CableError> {
+    connection_type: &PxpTunnelConnectionType,
+) -> Result<TunnelNoiseState, PxpError> {
     let noise_handshake = match connection_type {
-        CableTunnelConnectionType::QrCode { private_key, .. } => {
+        PxpTunnelConnectionType::QrCode { private_key, .. } => {
             let local_private_key = private_key.to_owned().to_bytes();
             Builder::new("Noise_KNpsk0_P256_AESGCM_SHA256".parse()?)
-                .prologue(CABLE_PROLOGUE_QR_INITIATED)?
+                .prologue(PXP_PROLOGUE_QR_INITIATED)?
                 .local_private_key(local_private_key.as_slice())?
                 .psk(0, &psk)?
                 .build_initiator()
         }
-        CableTunnelConnectionType::KnownDevice {
+        PxpTunnelConnectionType::KnownDevice {
             authenticator_public_key,
             ..
         } => Builder::new("Noise_NKpsk0_P256_AESGCM_SHA256".parse()?)
-            .prologue(CABLE_PROLOGUE_STATE_ASSISTED)?
+            .prologue(PXP_PROLOGUE_STATE_ASSISTED)?
             .remote_public_key(authenticator_public_key)?
             .psk(0, &psk)?
             .build_initiator(),
@@ -202,7 +226,7 @@ pub(crate) async fn do_handshake(
         Ok(handshake) => handshake,
         Err(e) => {
             error!(?e, "Failed to build Noise handshake");
-            return Err(CableError::ConnectionFailed);
+            return Err(PxpError::ConnectionFailed);
         }
     };
 
@@ -211,14 +235,14 @@ pub(crate) async fn do_handshake(
         Ok(msg_len) => msg_len,
         Err(e) => {
             error!(?e, "Failed to write initial handshake message");
-            return Err(CableError::ConnectionFailed);
+            return Err(PxpError::ConnectionFailed);
         }
     };
 
     let initial_msg: Vec<u8> = initial_msg_buffer
         .get(..initial_msg_len)
         .map(<[u8]>::to_vec)
-        .ok_or(CableError::ConnectionFailed)?;
+        .ok_or(PxpError::ConnectionFailed)?;
     trace!(
         { handshake = ?initial_msg },
         "Sending initial handshake message"
@@ -236,7 +260,7 @@ pub(crate) async fn do_handshake(
         }
         Ok(None) => {
             error!("Connection was closed before handshake was complete");
-            return Err(CableError::ConnectionFailed);
+            return Err(PxpError::ConnectionFailed);
         }
         Err(e) => {
             error!(?e, "Failed to read handshake response");
@@ -249,7 +273,7 @@ pub(crate) async fn do_handshake(
             { len = response.len() },
             "Peer handshake message is too short"
         );
-        return Err(CableError::ConnectionFailed);
+        return Err(PxpError::ConnectionFailed);
     }
 
     let mut payload = [0u8; 1024];
@@ -257,7 +281,7 @@ pub(crate) async fn do_handshake(
         Ok(len) => len,
         Err(e) => {
             error!(?e, "Failed to read handshake response message");
-            return Err(CableError::ConnectionFailed);
+            return Err(PxpError::ConnectionFailed);
         }
     };
 
@@ -268,7 +292,7 @@ pub(crate) async fn do_handshake(
 
     if !noise_handshake.is_handshake_finished() {
         error!("Handshake did not complete");
-        return Err(CableError::ConnectionFailed);
+        return Err(PxpError::ConnectionFailed);
     }
 
     Ok(TunnelNoiseState {
@@ -279,7 +303,7 @@ pub(crate) async fn do_handshake(
 
 /// Returns `Ok(())` on a clean close and `Err(_)` on any fault that leaves
 /// the encrypted channel unusable; callers surface `Err(_)` via `send_error`.
-pub(crate) async fn connection(mut input: TunnelConnectionInput) -> Result<(), CableError> {
+pub(crate) async fn connection(mut input: TunnelConnectionInput) -> Result<(), PxpError> {
     let get_info_response_serialized: Vec<u8> = match input.data_channel.recv().await {
         Ok(Some(message)) => match connection_recv_initial(message, &mut input.noise_state).await {
             Ok(initial) => initial,
@@ -290,7 +314,7 @@ pub(crate) async fn connection(mut input: TunnelConnectionInput) -> Result<(), C
         },
         Ok(None) => {
             error!("Connection closed before initial message was received");
-            return Err(CableError::ConnectionLost);
+            return Err(PxpError::ConnectionLost);
         }
         Err(e) => {
             error!(?e, "Failed to read initial message");
@@ -311,7 +335,7 @@ pub(crate) async fn connection(mut input: TunnelConnectionInput) -> Result<(), C
                             &input.tunnel_domain,
                             &input.known_device_store,
                             message,
-                            &input.cbor_rx_send,
+                            &input.ctap_rx_send,
                             &mut input.noise_state,
                         )
                         .await
@@ -334,13 +358,13 @@ pub(crate) async fn connection(mut input: TunnelConnectionInput) -> Result<(), C
                     }
                 }
             }
-            // `CableChannel::close` asked to end the session. Send
+            // `TunnelHandle::close` asked to end the session. Send
             // Shutdown, as Chromium does, so the authenticator ends in its
             // success state, then give the peer a moment to close first.
             _ = &mut input.shutdown_recv => {
                 debug!("Sending Shutdown control message");
                 if let Err(e) = send_tunnel_message(
-                    CableTunnelMessageType::Shutdown,
+                    PxpTunnelMessageType::Shutdown,
                     &[],
                     &mut *input.data_channel,
                     &mut input.noise_state,
@@ -356,19 +380,20 @@ pub(crate) async fn connection(mut input: TunnelConnectionInput) -> Result<(), C
                 .await;
                 return Ok(());
             }
-            Some(request) = input.cbor_tx_recv.recv() => {
-                match request.command {
+            Some(request) = input.ctap_tx_recv.recv() => {
+                match request.first() {
                     // Optimisation: respond to GetInfo requests immediately with the cached response
-                    Ctap2CommandCode::AuthenticatorGetInfo => {
+                    Some(&CTAP2_GET_INFO) => {
                         debug!("Responding to GetInfo request with cached response");
-                        let response = CborResponse::new_success_from_slice(&get_info_response_serialized);
-                        if let Err(e) = input.cbor_rx_send.send(response).await {
-                            error!(?e, "CBOR response receiver dropped");
-                            return Err(CableError::ConnectionFailed);
+                        let mut response = vec![CTAP2_OK];
+                        response.extend_from_slice(&get_info_response_serialized);
+                        if let Err(e) = input.ctap_rx_send.send(response).await {
+                            error!(?e, "CTAP response receiver dropped");
+                            return Err(PxpError::ConnectionFailed);
                         }
                     }
-                    _ => {
-                        debug!(?request.command, "Sending CBOR request");
+                    command => {
+                        debug!(?command, "Sending CTAP request");
                         if let Err(e) = connection_send(
                             request,
                             &mut *input.data_channel,
@@ -387,25 +412,22 @@ pub(crate) async fn connection(mut input: TunnelConnectionInput) -> Result<(), C
 }
 
 async fn connection_send(
-    request: CborRequest,
-    data_channel: &mut dyn CableDataChannel,
+    cbor_request: Vec<u8>,
+    data_channel: &mut dyn PxpDataChannel,
     noise_state: &mut TunnelNoiseState,
-) -> Result<(), CableError> {
+) -> Result<(), PxpError> {
     debug!("Sending CBOR request");
-    trace!(?request);
-
-    let cbor_request = request.raw_long().map_err(CableError::from)?;
     if cbor_request.len() > MAX_CBOR_SIZE {
         error!(
             cbor_request_len = cbor_request.len(),
             "CBOR request too large"
         );
-        return Err(CableError::InvalidFraming);
+        return Err(PxpError::InvalidFraming);
     }
     trace!(?cbor_request, cbor_request_len = cbor_request.len());
 
     send_tunnel_message(
-        CableTunnelMessageType::Ctap,
+        PxpTunnelMessageType::Ctap,
         &cbor_request,
         data_channel,
         noise_state,
@@ -416,11 +438,11 @@ async fn connection_send(
 /// Pad, frame, encrypt and send one tunnel message. Shared by CTAP requests
 /// and the Shutdown control message.
 async fn send_tunnel_message(
-    message_type: CableTunnelMessageType,
+    message_type: PxpTunnelMessageType,
     payload: &[u8],
-    data_channel: &mut dyn CableDataChannel,
+    data_channel: &mut dyn PxpDataChannel,
     noise_state: &mut TunnelNoiseState,
-) -> Result<(), CableError> {
+) -> Result<(), PxpError> {
     let extra_bytes = PADDING_GRANULARITY - (payload.len() % PADDING_GRANULARITY);
     let padded_len = payload.len() + extra_bytes;
 
@@ -430,7 +452,7 @@ async fn send_tunnel_message(
         *last = (extra_bytes - 1) as u8;
     }
 
-    let frame = CableTunnelMessage::new(message_type, &padded_payload);
+    let frame = PxpTunnelMessage::new(message_type, &padded_payload);
     let frame_serialized = frame.to_vec();
     trace!(?frame_serialized);
 
@@ -444,7 +466,7 @@ async fn send_tunnel_message(
         }
         Err(e) => {
             error!(?e, "Failed to encrypt frame");
-            return Err(CableError::EncryptionFailed);
+            return Err(PxpError::EncryptionFailed);
         }
     }
 
@@ -458,12 +480,12 @@ async fn send_tunnel_message(
 /// Strip the trailing padding-length byte and `padding_len` bytes of padding
 /// from a decrypted Noise transport frame, returning `InvalidFraming` on an
 /// empty plaintext or a declared padding length that exceeds the frame.
-fn strip_frame_padding(mut decrypted_frame: Vec<u8>) -> Result<Vec<u8>, CableError> {
+fn strip_frame_padding(mut decrypted_frame: Vec<u8>) -> Result<Vec<u8>, PxpError> {
     let padding_len = match decrypted_frame.last() {
         Some(&b) => b as usize,
         None => {
             error!("Decrypted frame is empty; cannot read padding length");
-            return Err(CableError::InvalidFraming);
+            return Err(PxpError::InvalidFraming);
         }
     };
     let new_len = decrypted_frame
@@ -474,7 +496,7 @@ fn strip_frame_padding(mut decrypted_frame: Vec<u8>) -> Result<Vec<u8>, CableErr
                 frame_len = decrypted_frame.len(),
                 padding_len, "Padding length exceeds frame length"
             );
-            CableError::InvalidFraming
+            PxpError::InvalidFraming
         })?;
     decrypted_frame.truncate(new_len);
     Ok(decrypted_frame)
@@ -483,7 +505,7 @@ fn strip_frame_padding(mut decrypted_frame: Vec<u8>) -> Result<Vec<u8>, CableErr
 async fn decrypt_frame(
     encrypted_frame: Vec<u8>,
     noise_state: &mut TunnelNoiseState,
-) -> Result<Vec<u8>, CableError> {
+) -> Result<Vec<u8>, PxpError> {
     let mut decrypted_frame = vec![0u8; MAX_CBOR_SIZE];
     match noise_state
         .transport_state
@@ -496,7 +518,7 @@ async fn decrypt_frame(
         }
         Err(e) => {
             error!(?e, "Failed to decrypt CBOR response");
-            return Err(CableError::EncryptionFailed);
+            return Err(PxpError::EncryptionFailed);
         }
     }
 
@@ -513,29 +535,28 @@ async fn decrypt_frame(
 async fn connection_recv_initial(
     encrypted_frame: Vec<u8>,
     noise_state: &mut TunnelNoiseState,
-) -> Result<Vec<u8>, CableError> {
+) -> Result<Vec<u8>, PxpError> {
     let decrypted_frame = decrypt_frame(encrypted_frame, noise_state).await?;
 
-    let initial_message: CableInitialMessage = match cbor::from_slice(&decrypted_frame) {
+    let initial_message: PxpInitialMessage = match cbor::from_slice(&decrypted_frame) {
         Ok(initial_message) => initial_message,
         Err(e) => {
             error!(?e, "Failed to decode initial message");
-            return Err(CableError::InvalidFraming);
+            return Err(PxpError::InvalidFraming);
         }
     };
 
-    let _: Ctap2GetInfoResponse = match cbor::from_slice(&initial_message.info) {
-        Ok(get_info_response) => get_info_response,
-        Err(e) => {
-            error!(?e, "Failed to decode GetInfo response");
-            return Err(CableError::InvalidFraming);
-        }
-    };
+    if let Err(e) = cbor::from_slice::<GetInfoResponse>(&initial_message.info) {
+        error!(?e, "Failed to decode GetInfo response");
+        return Err(PxpError::InvalidFraming);
+    }
+
+    debug!(?initial_message.supported_features, "Received post-handshake message");
 
     Ok(initial_message.info.to_vec())
 }
 
-async fn connection_recv_update(message: &[u8]) -> Result<Option<CableLinkingInfo>, CableError> {
+async fn connection_recv_update(message: &[u8]) -> Result<Option<PxpLinkingInfo>, PxpError> {
     // TODO(#66): Android adds a 999-key to the end the message, which is not part of the standard.
     // For now, we parse the message to a map and manuually import fields.
 
@@ -543,7 +564,7 @@ async fn connection_recv_update(message: &[u8]) -> Result<Option<CableLinkingInf
         Ok(update_message) => update_message,
         Err(e) => {
             error!(?e, "Failed to decode update message");
-            return Err(CableError::InvalidFraming);
+            return Err(PxpError::InvalidFraming);
         }
     };
 
@@ -586,7 +607,7 @@ async fn connection_recv_update(message: &[u8]) -> Result<Option<CableLinkingInf
         return Ok(None);
     };
 
-    let linking_info = CableLinkingInfo {
+    let linking_info = PxpLinkingInfo {
         contact_id: contact_id.clone(),
         link_id: link_id.clone(),
         link_secret: link_secret.clone(),
@@ -599,40 +620,36 @@ async fn connection_recv_update(message: &[u8]) -> Result<Option<CableLinkingInf
 }
 
 async fn connection_recv(
-    connection_type: &CableTunnelConnectionType,
+    connection_type: &PxpTunnelConnectionType,
     tunnel_domain: &str,
-    known_device_store: &Option<Arc<dyn CableKnownDeviceInfoStore>>,
+    known_device_store: &Option<Arc<dyn PxpKnownDeviceInfoStore>>,
     encrypted_frame: Vec<u8>,
-    cbor_rx_send: &Sender<CborResponse>,
+    ctap_rx_send: &Sender<Vec<u8>>,
     noise_state: &mut TunnelNoiseState,
-) -> Result<RecvOutcome, CableError> {
+) -> Result<RecvOutcome, PxpError> {
     let decrypted_frame = decrypt_frame(encrypted_frame, noise_state).await?;
 
-    let cable_message: CableTunnelMessage = CableTunnelMessage::from_slice(&decrypted_frame)
+    let pxp_message: PxpTunnelMessage = PxpTunnelMessage::from_slice(&decrypted_frame)
         .inspect_err(|e| error!(?e, "Failed to decode CABLE tunnel message"))?;
 
-    trace!(?cable_message);
-    match cable_message.message_type {
-        CableTunnelMessageType::Shutdown => {
+    trace!(?pxp_message);
+    match pxp_message.message_type {
+        PxpTunnelMessageType::Shutdown => {
             debug!("Peer sent Shutdown control message; closing connection cleanly");
             Ok(RecvOutcome::PeerShutdown)
         }
-        CableTunnelMessageType::Ctap => {
-            let cbor_response: CborResponse = (&cable_message.payload.to_vec())
-                .try_into()
-                .or(Err(CableError::InvalidFraming))?;
-
-            debug!("Received CBOR response");
-            trace!(?cbor_response);
-            cbor_rx_send
-                .send(cbor_response)
+        PxpTunnelMessageType::Ctap => {
+            debug!("Received CTAP response");
+            trace!(?pxp_message.payload);
+            ctap_rx_send
+                .send(pxp_message.payload.into_vec())
                 .await
-                .or(Err(CableError::ConnectionFailed))?;
+                .or(Err(PxpError::ConnectionFailed))?;
             Ok(RecvOutcome::Continue)
         }
-        CableTunnelMessageType::Update => {
+        PxpTunnelMessageType::Update => {
             // Malformed or unsigned update: log, drop the update, keep the channel.
-            let maybe_update_message = match connection_recv_update(&cable_message.payload).await {
+            let maybe_update_message = match connection_recv_update(&pxp_message.payload).await {
                 Ok(m) => m,
                 Err(e) => {
                     warn!(?e, "Malformed update message; ignoring");
@@ -645,7 +662,7 @@ async fn connection_recv(
                 return Ok(RecvOutcome::Continue);
             };
 
-            let CableTunnelConnectionType::QrCode { private_key, .. } = connection_type else {
+            let PxpTunnelConnectionType::QrCode { private_key, .. } = connection_type else {
                 warn!("Ignoring update message for non-QR code connection");
                 return Ok(RecvOutcome::Continue);
             };
@@ -675,13 +692,13 @@ async fn connection_recv(
 
 /// Stores the update only on a valid signature; invalid updates are dropped without evicting.
 async fn apply_linking_update(
-    store: &Arc<dyn CableKnownDeviceInfoStore>,
+    store: &Arc<dyn PxpKnownDeviceInfoStore>,
     private_key: &NonZeroScalar,
     tunnel_domain: &str,
-    linking_info: &CableLinkingInfo,
+    linking_info: &PxpLinkingInfo,
     handshake_hash: &[u8],
 ) {
-    let device_id: CableKnownDeviceId = linking_info.into();
+    let device_id: PxpKnownDeviceId = linking_info.into();
     match parse_known_device(private_key, tunnel_domain, linking_info, handshake_hash) {
         Ok(known_device) => {
             debug!(?device_id, "Updating known device");
@@ -701,17 +718,17 @@ async fn apply_linking_update(
 fn parse_known_device(
     private_key: &NonZeroScalar,
     tunnel_domain: &str,
-    linking_info: &CableLinkingInfo,
+    linking_info: &PxpLinkingInfo,
     handshake_hash: &[u8],
-) -> Result<CableKnownDeviceInfo, CableError> {
-    let known_device = CableKnownDeviceInfo::new(tunnel_domain, linking_info)?;
+) -> Result<PxpKnownDeviceInfo, PxpError> {
+    let known_device = PxpKnownDeviceInfo::new(tunnel_domain, linking_info)?;
     let secret_key = SecretKey::from(private_key);
 
     let Ok(authenticator_public_key) =
         PublicKey::from_sec1_bytes(&linking_info.authenticator_public_key)
     else {
         error!("Failed to parse public key.");
-        return Err(CableError::InvalidKey);
+        return Err(PxpError::InvalidKey);
     };
 
     let shared_secret: Vec<u8> = ecdh::diffie_hellman(
@@ -722,14 +739,14 @@ fn parse_known_device(
     .to_vec();
 
     let mut hmac =
-        Hmac::<Sha256>::new_from_slice(&shared_secret).map_err(|_| CableError::InvalidKey)?;
+        Hmac::<Sha256>::new_from_slice(&shared_secret).map_err(|_| PxpError::InvalidKey)?;
     hmac.update(handshake_hash);
     let expected_mac = hmac.finalize().into_bytes().to_vec();
 
     if expected_mac != linking_info.handshake_signature {
         error!("Invalid handshake signature, rejecting update message");
         trace!(?expected_mac, ?linking_info.handshake_signature);
-        return Err(CableError::InvalidSignature);
+        return Err(PxpError::InvalidSignature);
     }
 
     debug!("Parsed known device with valid signature");
@@ -748,30 +765,30 @@ mod tests {
 
     #[derive(Debug, Default)]
     struct RecordingStore {
-        puts: Mutex<Vec<CableKnownDeviceId>>,
-        deletes: Mutex<Vec<CableKnownDeviceId>>,
+        puts: Mutex<Vec<PxpKnownDeviceId>>,
+        deletes: Mutex<Vec<PxpKnownDeviceId>>,
     }
 
     #[async_trait]
-    impl CableKnownDeviceInfoStore for RecordingStore {
+    impl PxpKnownDeviceInfoStore for RecordingStore {
         async fn put_known_device(
             &self,
-            device_id: &CableKnownDeviceId,
-            _device: &CableKnownDeviceInfo,
+            device_id: &PxpKnownDeviceId,
+            _device: &PxpKnownDeviceInfo,
         ) {
             if let Ok(mut puts) = self.puts.lock() {
                 puts.push(device_id.clone());
             }
         }
-        async fn delete_known_device(&self, device_id: &CableKnownDeviceId) {
+        async fn delete_known_device(&self, device_id: &PxpKnownDeviceId) {
             if let Ok(mut deletes) = self.deletes.lock() {
                 deletes.push(device_id.clone());
             }
         }
     }
 
-    fn linking_info_with_authenticator_key(authenticator_public_key: Vec<u8>) -> CableLinkingInfo {
-        CableLinkingInfo {
+    fn linking_info_with_authenticator_key(authenticator_public_key: Vec<u8>) -> PxpLinkingInfo {
+        PxpLinkingInfo {
             contact_id: vec![0u8; 4],
             link_id: vec![0u8; 8],
             link_secret: vec![0u8; 32],
@@ -794,7 +811,7 @@ mod tests {
         let linking_info = linking_info_with_authenticator_key(authenticator_public_key);
 
         let recording = Arc::new(RecordingStore::default());
-        let store: Arc<dyn CableKnownDeviceInfoStore> = recording.clone();
+        let store: Arc<dyn PxpKnownDeviceInfoStore> = recording.clone();
 
         // Signature is intentionally bogus, so the update must be rejected.
         apply_linking_update(
@@ -840,12 +857,12 @@ mod tests {
     }
 
     #[async_trait]
-    impl CableDataChannel for RecordingChannel {
-        async fn send(&mut self, message: &[u8]) -> Result<(), CableError> {
+    impl PxpDataChannel for RecordingChannel {
+        async fn send(&mut self, message: &[u8]) -> Result<(), PxpError> {
             self.sent.push(message.to_vec());
             Ok(())
         }
-        async fn recv(&mut self) -> Result<Option<Vec<u8>>, CableError> {
+        async fn recv(&mut self) -> Result<Option<Vec<u8>>, PxpError> {
             Ok(None)
         }
     }
@@ -858,12 +875,12 @@ mod tests {
     }
 
     #[async_trait]
-    impl CableDataChannel for ScriptedChannel {
-        async fn send(&mut self, message: &[u8]) -> Result<(), CableError> {
+    impl PxpDataChannel for ScriptedChannel {
+        async fn send(&mut self, message: &[u8]) -> Result<(), PxpError> {
             self.sent.lock().unwrap().push(message.to_vec());
             Ok(())
         }
-        async fn recv(&mut self) -> Result<Option<Vec<u8>>, CableError> {
+        async fn recv(&mut self) -> Result<Option<Vec<u8>>, PxpError> {
             Ok(self.inbox.recv().await)
         }
     }
@@ -886,11 +903,11 @@ mod tests {
         let (desktop, mut phone) = noise_pair();
         let (inbox_tx, inbox) = tokio::sync::mpsc::unbounded_channel();
         let sent = Arc::new(Mutex::new(Vec::new()));
-        let (cbor_tx, cbor_tx_recv) = tokio::sync::mpsc::channel(4);
-        let (cbor_rx_send, _cbor_rx_recv) = tokio::sync::mpsc::channel(4);
+        let (ctap_tx, ctap_tx_recv) = tokio::sync::mpsc::channel(4);
+        let (ctap_rx_send, _ctap_rx_recv) = tokio::sync::mpsc::channel(4);
         let (shutdown, shutdown_recv) = tokio::sync::oneshot::channel();
         let input = TunnelConnectionInput {
-            connection_type: CableTunnelConnectionType::QrCode {
+            connection_type: PxpTunnelConnectionType::QrCode {
                 routing_id: "000000".into(),
                 tunnel_id: "00".repeat(16),
                 private_key: NonZeroScalar::random(&mut OsRng),
@@ -902,8 +919,8 @@ mod tests {
                 sent: Arc::clone(&sent),
             }),
             noise_state: desktop,
-            cbor_tx_recv,
-            cbor_rx_send,
+            ctap_tx_recv,
+            ctap_rx_send,
             shutdown_recv,
         };
         let task = tokio::spawn(connection(input));
@@ -916,12 +933,7 @@ mod tests {
             .write_message(&initial_message_plaintext(), &mut frame)
             .unwrap();
         inbox_tx.send(frame[..len].to_vec()).unwrap();
-        cbor_tx
-            .send(CborRequest::new(
-                Ctap2CommandCode::AuthenticatorGetAssertion,
-            ))
-            .await
-            .unwrap();
+        ctap_tx.send(vec![0x02]).await.unwrap();
         while sent.lock().unwrap().is_empty() {
             tokio::task::yield_now().await;
         }
@@ -938,25 +950,25 @@ mod tests {
         let frames = sent.lock().unwrap().clone();
         assert_eq!(frames.len(), 2, "the request, then exactly one more frame");
         let request = decrypt_frame(frames[0].clone(), &mut phone).await.unwrap();
-        assert_eq!(request[0], CableTunnelMessageType::Ctap as u8);
+        assert_eq!(request[0], PxpTunnelMessageType::Ctap as u8);
         let shutdown = decrypt_frame(frames[1].clone(), &mut phone).await.unwrap();
         assert_eq!(shutdown, vec![0u8], "the second frame is Shutdown");
     }
 
     #[test]
     fn a_bare_shutdown_parses_and_other_empty_messages_do_not() {
-        let message = CableTunnelMessage::from_slice(&[0]).unwrap();
+        let message = PxpTunnelMessage::from_slice(&[0]).unwrap();
         assert!(matches!(
             message.message_type,
-            CableTunnelMessageType::Shutdown
+            PxpTunnelMessageType::Shutdown
         ));
         assert!(matches!(
-            CableTunnelMessage::from_slice(&[1]),
-            Err(CableError::InvalidFraming)
+            PxpTunnelMessage::from_slice(&[1]),
+            Err(PxpError::InvalidFraming)
         ));
         assert!(matches!(
-            CableTunnelMessage::from_slice(&[2]),
-            Err(CableError::InvalidFraming)
+            PxpTunnelMessage::from_slice(&[2]),
+            Err(PxpError::InvalidFraming)
         ));
     }
 
@@ -965,7 +977,7 @@ mod tests {
         let (mut desktop, mut phone) = noise_pair();
         let mut channel = RecordingChannel::default();
         send_tunnel_message(
-            CableTunnelMessageType::Shutdown,
+            PxpTunnelMessageType::Shutdown,
             &[],
             &mut channel,
             &mut desktop,
@@ -977,10 +989,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(plaintext, vec![0u8], "Shutdown is the type byte alone");
-        let message = CableTunnelMessage::from_slice(&plaintext).unwrap();
+        let message = PxpTunnelMessage::from_slice(&plaintext).unwrap();
         assert!(matches!(
             message.message_type,
-            CableTunnelMessageType::Shutdown
+            PxpTunnelMessageType::Shutdown
         ));
     }
 
@@ -990,7 +1002,7 @@ mod tests {
         let mut channel = RecordingChannel::default();
         let payload = vec![0xA1, 0x01, 0x02];
         send_tunnel_message(
-            CableTunnelMessageType::Ctap,
+            PxpTunnelMessageType::Ctap,
             &payload,
             &mut channel,
             &mut desktop,
@@ -1000,14 +1012,22 @@ mod tests {
         let plaintext = decrypt_frame(channel.sent.remove(0), &mut phone)
             .await
             .unwrap();
-        assert_eq!(plaintext[0], CableTunnelMessageType::Ctap as u8);
+        assert_eq!(plaintext[0], PxpTunnelMessageType::Ctap as u8);
         assert_eq!(&plaintext[1..], payload.as_slice());
+    }
+
+    #[test]
+    fn absent_supported_features_defaults_to_ctap() {
+        let map = BTreeMap::from([(Value::Integer(1), Value::Bytes(vec![]))]);
+        let bytes = cbor::to_vec(&map).unwrap();
+        let message: PxpInitialMessage = cbor::from_slice(&bytes).unwrap();
+        assert_eq!(message.supported_features.0, vec!["ctap"]);
     }
 
     #[test]
     fn strip_frame_padding_rejects_empty() {
         let result = strip_frame_padding(Vec::new());
-        assert!(matches!(result, Err(CableError::InvalidFraming)));
+        assert!(matches!(result, Err(PxpError::InvalidFraming)));
     }
 
     #[test]
@@ -1015,7 +1035,7 @@ mod tests {
         // Length 1 + declared padding of 5 -> would require subtracting 6 from 1.
         let frame = vec![0x05u8];
         let result = strip_frame_padding(frame);
-        assert!(matches!(result, Err(CableError::InvalidFraming)));
+        assert!(matches!(result, Err(PxpError::InvalidFraming)));
     }
 
     #[test]

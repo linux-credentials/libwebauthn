@@ -1,19 +1,19 @@
 use std::collections::BTreeMap;
 
-use ::btleplug::api::Central;
+use ::btleplug::api::{Central, PeripheralProperties};
 use futures::StreamExt;
 use serde_cbor_2 as serde_cbor;
 use std::pin::pin;
 use tracing::{debug, instrument, trace, warn};
 use uuid::Uuid;
 
-use crate::proto::ctap2::cbor::Value;
-use crate::transport::ble::btleplug::{self, FidoDevice};
-use crate::transport::cable::crypto::trial_decrypt_advert;
-use crate::transport::cable::error::CableError;
+use crate::ble;
+use crate::cbor::Value;
+use crate::crypto::trial_decrypt_advert;
+use crate::error::PxpError;
 
-const CABLE_UUID_FIDO: &str = "0000fff9-0000-1000-8000-00805f9b34fb";
-const CABLE_UUID_GOOGLE: &str = "0000fde2-0000-1000-8000-00805f9b34fb";
+const PXP_UUID_FIDO: &str = "0000fff9-0000-1000-8000-00805f9b34fb";
+const PXP_UUID_GOOGLE: &str = "0000fde2-0000-1000-8000-00805f9b34fb";
 
 /// `transport_channel_identifier` for the BLE data channel.
 const TRANSPORT_CHANNEL_BLE: i128 = 1;
@@ -72,23 +72,18 @@ impl From<[u8; 16]> for DecryptedAdvert {
 #[instrument(skip_all, err)]
 pub(crate) async fn await_advertisement(
     eid_key: &[u8],
-) -> Result<(FidoDevice, DecryptedAdvert), CableError> {
+) -> Result<(PeripheralProperties, DecryptedAdvert), PxpError> {
     let uuids = &[
-        Uuid::parse_str(CABLE_UUID_FIDO)?,
-        Uuid::parse_str(CABLE_UUID_GOOGLE)?, // Deprecated, but may still be in use.
+        Uuid::parse_str(PXP_UUID_FIDO)?,
+        Uuid::parse_str(PXP_UUID_GOOGLE)?, // Deprecated, but may still be in use.
     ];
-    let stream = btleplug::manager::start_discovery_for_service_data(uuids)
-        .await
-        .or(Err(CableError::TransportUnavailable))?;
+    let (adapter, stream) = ble::start_discovery_for_service_data(uuids).await?;
 
     let mut stream = pin!(stream);
-    while let Some((adapter, peripheral, data)) = stream.as_mut().next().await {
+    while let Some((peripheral, data)) = stream.as_mut().next().await {
         debug!({ ?peripheral, ?data }, "Found device with service data");
 
-        let Some(device) = btleplug::manager::get_device(peripheral.clone())
-            .await
-            .or(Err(CableError::TransportUnavailable))?
-        else {
+        let Some(device) = ble::get_properties(&peripheral).await? else {
             warn!(
                 ?peripheral,
                 "Unable to fetch peripheral properties, ignoring"
@@ -126,13 +121,13 @@ pub(crate) async fn await_advertisement(
         adapter
             .stop_scan()
             .await
-            .or(Err(CableError::TransportUnavailable))?;
+            .or(Err(PxpError::TransportUnavailable))?;
 
         return Ok((device, advert));
     }
 
     warn!("BLE advertisement discovery stream terminated");
-    Err(CableError::TransportUnavailable)
+    Err(PxpError::TransportUnavailable)
 }
 
 #[cfg(test)]

@@ -9,7 +9,7 @@
 use std::io::{self, Write};
 
 use libwebauthn::pin::{PinNotSetReason, PinRequestReason};
-use libwebauthn::transport::cable::channel::{CableUpdate, CableUxUpdate};
+use libwebauthn::transport::hybrid::channel::{HybridUxUpdate, PxpUpdate};
 use libwebauthn::UvUpdate;
 use text_io::read;
 use tokio::sync::broadcast::Receiver;
@@ -32,16 +32,16 @@ pub async fn handle_uv_updates(mut rx: Receiver<UvUpdate>) {
 
 /// Like [`handle_uv_updates`], but for caBLE channels which surface both
 /// transport-level updates and UV updates.
-pub async fn handle_cable_updates(mut rx: Receiver<CableUxUpdate>) {
+pub async fn handle_hybrid_updates(mut rx: Receiver<HybridUxUpdate>) {
     while let Ok(update) = rx.recv().await {
         match update {
-            CableUxUpdate::UvUpdate(uv) => handle_uv_update(uv),
-            CableUxUpdate::CableUpdate(c) => match c {
-                CableUpdate::ProximityCheck => println!("Proximity check in progress..."),
-                CableUpdate::Connecting => println!("Connecting to the device..."),
-                CableUpdate::Authenticating => println!("Authenticating with the device..."),
-                CableUpdate::Connected => println!("Tunnel established successfully!"),
-                CableUpdate::Error(err) => println!("Error during connection: {}", err),
+            HybridUxUpdate::UvUpdate(uv) => handle_uv_update(uv),
+            HybridUxUpdate::PxpUpdate(c) => match c {
+                PxpUpdate::ProximityCheck => println!("Proximity check in progress..."),
+                PxpUpdate::Connecting => println!("Connecting to the device..."),
+                PxpUpdate::Authenticating => println!("Authenticating with the device..."),
+                PxpUpdate::Connected => println!("Tunnel established successfully!"),
+                PxpUpdate::Error(err) => println!("Error during connection: {}", err),
             },
         }
     }

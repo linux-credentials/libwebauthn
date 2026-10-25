@@ -938,7 +938,7 @@ mod tests {
         // An id longer than maxCredentialIdLength cannot belong to this device and must be
         // dropped before sending (CTAP 2.1/2.2 6.4).
         #[tokio::test]
-        async fn oversized_allow_entries_are_filtered_before_send_on_cable() {
+        async fn oversized_allow_entries_are_filtered_before_send_on_hybrid() {
             let valid = descriptor(&[1u8; 16]);
             let oversized = descriptor(&[2u8; 64]);
             let info = Ctap2GetInfoResponse {
