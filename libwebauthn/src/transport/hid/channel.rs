@@ -13,7 +13,7 @@ use tokio::sync::broadcast;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::time::sleep;
-use tracing::{debug, info, instrument, trace, warn, Level};
+use tracing::{debug, instrument, trace, warn, Level};
 
 use crate::pin::persistent_token::PersistentTokenStore;
 use crate::proto::ctap1::apdu::{ApduRequest, ApduResponse};
@@ -133,7 +133,7 @@ impl<'d> HidChannel<'d> {
         self.handle.clone()
     }
 
-    #[instrument(skip_all)]
+    #[instrument(level = Level::INFO, skip_all)]
     pub async fn wink(&mut self, timeout: Duration) -> Result<bool, HidError> {
         if !self.init.caps.contains(Caps::WINK) {
             warn!(?self.init.caps, "WINK capability is not supported");
@@ -149,7 +149,7 @@ impl<'d> HidChannel<'d> {
         Ok(true)
     }
 
-    #[instrument(skip_all)]
+    #[instrument(level = Level::INFO, skip_all)]
     pub async fn blink_and_wait_for_user_presence(
         &mut self,
         timeout: Duration,
@@ -163,7 +163,7 @@ impl<'d> HidChannel<'d> {
                     Err(_) => Ok(false),
                 }
             } else {
-                info!("Creating dummy request to make the device blink");
+                debug!("Creating dummy request to make the device blink");
                 let ctap2_request = Ctap2MakeCredentialRequest::dummy();
                 match self.ctap2_make_credential(&ctap2_request, timeout).await {
                     Ok(_)
@@ -174,7 +174,7 @@ impl<'d> HidChannel<'d> {
                 }
             }
         } else if supported.u2f {
-            info!("Creating dummy request to make the device blink");
+            debug!("Creating dummy request to make the device blink");
             let register_request = Ctap1RegisterRequest::dummy(timeout);
             match self.ctap1_register(&register_request).await {
                 Ok(_)
@@ -203,10 +203,7 @@ impl<'d> HidChannel<'d> {
         }
 
         if response.payload.len() < INIT_PAYLOAD_LEN {
-            warn!(
-                { len = response.payload.len() },
-                "INIT payload is too small"
-            );
+            warn!(len = response.payload.len(), "INIT payload is too small");
             return Err(HidError::InvalidInit);
         }
 
@@ -215,7 +212,7 @@ impl<'d> HidChannel<'d> {
             .get(..INIT_NONCE_LEN)
             .ok_or(HidError::InvalidInit)?;
         if payload_nonce != nonce.as_slice() {
-            warn!("INIT nonce mismatch. Terminating.");
+            warn!("INIT nonce mismatch");
             return Err(HidError::InvalidInit);
         }
 
@@ -300,7 +297,7 @@ impl<'d> HidChannel<'d> {
     }
     */
 
-    #[instrument(skip_all, fields(cmd = ?msg.cmd, payload_len = msg.payload.len()))]
+    #[instrument(level = Level::DEBUG, skip_all, fields(cmd = ?msg.cmd, payload_len = msg.payload.len()))]
     pub async fn hid_send(&self, msg: &HidMessage) -> Result<(), HidError> {
         match &self.open_device {
             OpenHidDevice::HidApiDevice(hidapi_device) => {
@@ -354,7 +351,7 @@ impl<'d> HidChannel<'d> {
         Ok(())
     }
 
-    #[instrument(skip_all)]
+    #[instrument(level = Level::DEBUG, skip_all)]
     pub async fn hid_recv(&self, timeout: Duration) -> Result<HidMessage, HidError> {
         loop {
             let response = match &self.open_device {
@@ -443,7 +440,7 @@ impl<'d> HidChannel<'d> {
                 trace!("hidapi read_timeout returned 0 bytes, continuing");
                 continue;
             }
-            debug!({ len = bytes_read }, "Received HID report");
+            debug!(len = bytes_read, "Received HID report");
             trace!(?report);
             if let HidMessageParserState::Done =
                 parser.update(&report).map_err(HidError::FrameParse)?
@@ -512,7 +509,7 @@ impl Channel for HidChannel<'_> {
         _timeout: std::time::Duration,
     ) -> Result<(), HidError> {
         let cid = self.init.cid;
-        debug!({ cid }, "Sending APDU request");
+        debug!(cid, "Sending APDU request");
         trace!(?request);
         let apdu_raw = request.raw_long().map_err(HidError::PacketEncode)?;
         self.hid_send(&HidMessage::new(cid, HidCommand::Msg, &apdu_raw))
@@ -535,7 +532,7 @@ impl Channel for HidChannel<'_> {
         _timeout: Duration,
     ) -> Result<(), HidError> {
         let cid = self.init.cid;
-        debug!({ cid }, "Sending CBOR request");
+        debug!(cid, "Sending CBOR request");
         trace!(?request);
         self.hid_send(&HidMessage::new(
             cid,
@@ -550,10 +547,7 @@ impl Channel for HidChannel<'_> {
         let hid_response = self.hid_recv(timeout).await?;
         let cbor_response =
             CborResponse::try_from(&hid_response.payload).map_err(HidError::ResponseDecode)?;
-        debug!(
-            { status = ?cbor_response.status_code },
-            "Received CBOR response"
-        );
+        debug!(status = ?cbor_response.status_code, "Received CBOR response");
         trace!(?cbor_response);
         Ok(cbor_response)
     }

@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use std::collections::HashSet;
 use std::fmt;
 #[allow(unused_imports)]
-use tracing::{debug, info, instrument, trace};
+use tracing::{debug, info, instrument, trace, Level};
 
 use crate::{
     transport::{device::Device, hid::HidDevice, Channel, ChannelSettings, UsbDeviceId},
@@ -77,7 +77,7 @@ impl NfcDevice {
         &self,
         settings: ChannelSettings,
     ) -> Result<NfcChannel<Context>, WebAuthnError<NfcError>> {
-        trace!("nfc channel {:?}", self);
+        trace!(?self, "Opening NFC channel");
         let mut channel: NfcChannel<Context> = match &self.info {
             #[cfg(feature = "nfc-backend-libnfc")]
             DeviceInfo::LibNfc(info) => info.channel(settings),
@@ -111,7 +111,7 @@ async fn is_fido(device: &NfcDevice) -> bool {
     inner(device).await.is_ok()
 }
 
-#[instrument]
+#[instrument(level = Level::DEBUG, skip_all)]
 /// Returns Ok(None) if no devices are found, otherwise returns
 /// the first device found by either NFC-backend.
 pub async fn get_nfc_device() -> Result<Option<NfcDevice>, WebAuthnError<NfcError>> {
@@ -138,7 +138,7 @@ pub async fn get_nfc_device() -> Result<Option<NfcDevice>, WebAuthnError<NfcErro
     Ok(None)
 }
 
-#[instrument]
+#[instrument(level = Level::DEBUG, skip_all)]
 pub fn is_nfc_available() -> bool {
     let mut available = false;
     #[cfg(feature = "nfc-backend-libnfc")]
@@ -155,7 +155,7 @@ pub fn is_nfc_available() -> bool {
 
 /// Lists all NFC devices from the compiled backends, unfiltered. A failing
 /// backend is skipped. Cross-backend duplicates are not removed.
-#[instrument]
+#[instrument(level = Level::DEBUG, skip_all)]
 pub async fn list_devices() -> Vec<NfcDevice> {
     #[allow(unused_mut)]
     let mut devices = Vec::new();

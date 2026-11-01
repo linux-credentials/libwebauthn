@@ -9,7 +9,7 @@
 //! protocol through running the request with error handling.
 
 use async_trait::async_trait;
-use tracing::{instrument, warn};
+use tracing::{instrument, warn, Level};
 
 use crate::fido::FidoProtocol;
 use crate::ops::u2f::{RegisterRequest, SignRequest};
@@ -38,7 +38,7 @@ impl<C> U2F for C
 where
     C: Channel,
 {
-    #[instrument(skip_all)]
+    #[instrument(level = Level::INFO, skip_all)]
     async fn u2f_negotiate_protocol(
         &mut self,
     ) -> Result<FidoProtocol, WebAuthnError<Self::TransportError>> {
@@ -53,7 +53,7 @@ where
         Ok(selected)
     }
 
-    #[instrument(skip_all, fields(dev = %self))]
+    #[instrument(level = Level::INFO, skip_all, fields(transport = ?self.transport()))]
     async fn u2f_register(
         &mut self,
         op: &RegisterRequest,
@@ -65,7 +65,7 @@ where
         }
     }
 
-    #[instrument(skip_all, fields(dev = %self))]
+    #[instrument(level = Level::INFO, skip_all, fields(transport = ?self.transport()))]
     async fn u2f_sign(
         &mut self,
         op: &SignRequest,

@@ -29,7 +29,7 @@ pub(crate) async fn check_bonded(peripheral: &Peripheral) -> BondingState {
 
     match result {
         Ok(Ok((paired, bonded))) => {
-            info!(?address, paired, bonded, "bluez bonding state");
+            info!({ paired, bonded }, "BlueZ bonding state");
             if paired && bonded {
                 BondingState::Bonded
             } else {
@@ -37,11 +37,11 @@ pub(crate) async fn check_bonded(peripheral: &Peripheral) -> BondingState {
             }
         }
         Ok(Err(e)) => {
-            warn!(?address, error = ?e, "Could not query bluez bonding state");
+            warn!(error = ?e, "Could not query bluez bonding state");
             BondingState::Unknown
         }
         Err(e) => {
-            warn!(error = ?e, "bluez bonding query task panicked");
+            warn!(error = ?e, "BlueZ bonding query task panicked");
             BondingState::Unknown
         }
     }
@@ -60,7 +60,7 @@ fn bonded_or_refused(state: BondingState) -> Result<(), Error> {
         ?state,
         "BLE FIDO authenticator link is not confirmed bonded with LE Secure \
          Connections; CTAP 2.2 §11.4 requires bonding. Pair the device via the OS \
-         (e.g. `bluetoothctl pair <ADDR>`) before retrying."
+         (e.g. `bluetoothctl pair <ADDR>`) before retrying"
     );
     Err(Error::ConnectionFailed)
 }
@@ -101,7 +101,7 @@ fn query_bluez_bonded(address: BDAddr) -> Result<(bool, bool), String> {
         return Ok((paired, bonded));
     }
 
-    Err(format!("device {address} not found in bluez ObjectManager"))
+    Err("device not found in bluez ObjectManager".to_string())
 }
 
 #[cfg(test)]

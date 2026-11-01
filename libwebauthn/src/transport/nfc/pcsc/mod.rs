@@ -11,7 +11,7 @@ use std::fmt::Debug;
 use std::ops::Deref;
 use std::sync::{Arc, Mutex};
 #[allow(unused_imports)]
-use tracing::{debug, info, instrument, trace};
+use tracing::{debug, info, instrument, trace, Level};
 
 #[derive(Clone, Debug)]
 pub struct Info {
@@ -140,17 +140,17 @@ where
         command: &[u8],
         response: &mut [u8],
     ) -> Result<usize, NfcError> {
-        trace!("TX: {:?}", command);
+        trace!(?command, "Transmitting APDU");
 
         let card = self.card.lock().map_err(|_| NfcError::MutexPoisoned)?;
         let rapdu = card.transmit(command, response).map_err(NfcError::Pcsc)?;
 
-        trace!("RX: {:?}", rapdu);
+        trace!(?rapdu, "Received APDU");
         Ok(rapdu.len())
     }
 }
 
-#[instrument]
+#[instrument(level = Level::DEBUG, skip_all)]
 pub(crate) fn is_nfc_available() -> bool {
     let Ok(ctx) = pcsc::Context::establish(pcsc::Scope::User) else {
         return false;
@@ -159,7 +159,7 @@ pub(crate) fn is_nfc_available() -> bool {
     ctx.list_readers_len().unwrap_or_default() > 0
 }
 
-#[instrument]
+#[instrument(level = Level::DEBUG, skip_all)]
 pub(crate) fn list_devices() -> Result<Vec<NfcDevice>, NfcError> {
     let ctx = pcsc::Context::establish(pcsc::Scope::User)?;
     let len = ctx.list_readers_len()?;
