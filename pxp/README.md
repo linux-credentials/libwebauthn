@@ -2,17 +2,17 @@
 
 A Linux-native implementation of the [FIDO2 Proximity Exchange Protocol (PXP) spec][pxp-spec], fully written in Rust.
 
-PXP, formerly the FIDO2 hybrid transport, allows a FIDO2 client and authenticator to communicate over a Bluetooth or Websocket tunnel after initiation via via QR code scan or NFC and establishing physical proximity over BLE.
+PXP, formerly the CTAP hybrid transport, allows a FIDO2 client and authenticator to communicate over a Bluetooth or WebSocket tunnel after initiation via QR code scan or NFC and establishing physical proximity over BLE.
 
 ## Features
 
 - Initiation
   - 🟢 QR code
   - 🟢 State-assisted
-  - 🟠 NFC
+  - 🟠 NFC (planned)
 - Data channel
   - 🟢 BLE
-  - 🟢 Websockets
+  - 🟢 WebSockets
 
 ## Minimum Supported Rust Version (MSRV)
 
