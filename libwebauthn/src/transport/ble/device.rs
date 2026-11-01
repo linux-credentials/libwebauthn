@@ -3,7 +3,7 @@ use std::fmt;
 use ::btleplug::api::Peripheral;
 use async_trait::async_trait;
 use hex::ToHex;
-use tracing::{info, instrument};
+use tracing::{debug, instrument, Level};
 
 use crate::transport::ble::error::BleError;
 use crate::transport::device::Device;
@@ -21,14 +21,14 @@ pub async fn is_available() -> bool {
     btleplug::is_available().await
 }
 
-#[instrument]
+#[instrument(level = Level::DEBUG, skip_all)]
 pub async fn list_devices() -> Result<Vec<BleDevice>, BleError> {
     let devices: Vec<_> = btleplug::list_fido_devices()
         .await?
         .iter()
         .map(|bluez_device| bluez_device.into())
         .collect();
-    info!({ count = devices.len() }, "Listing available BLE devices");
+    debug!(count = devices.len(), "Listing available BLE devices");
     Ok(devices)
 }
 
