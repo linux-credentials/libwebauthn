@@ -7,7 +7,7 @@ use crate::{
         GetAssertionResponseUnsignedExtensions, HMACGetSecretInput, PrfInputValue, PrfOutputValue,
     },
     pin::PinUvAuthProtocol,
-    proto::ctap2::cbor::{map_to_json_object, Value},
+    proto::ctap2::cbor::{map_to_json_object, serialize_merged, Value},
     transport::AuthTokenData,
     webauthn::PlatformError,
 };
@@ -18,7 +18,7 @@ use super::{
     Ctap2UserVerifiableRequest,
 };
 use cosey::PublicKey;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 use serde_bytes::ByteBuf;
 use serde_indexed::{DeserializeIndexed, SerializeIndexed};
 use std::collections::{BTreeMap, HashMap};
@@ -198,7 +198,7 @@ impl From<GetAssertionRequest> for Ctap2GetAssertionRequest {
 }
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(remote = "Self", rename_all = "camelCase")]
 pub struct Ctap2GetAssertionRequestExtensions {
     // Field order is CTAP2 canonical CBOR map order: shortest key first, then bytewise.
     /// Native `prf` extension, used by phone/platform authenticators that advertise
@@ -220,6 +220,27 @@ pub struct Ctap2GetAssertionRequestExtensions {
     /// `authenticatorLargeBlobs(set)` (CTAP 2.2 §6.10.2/§6.5.5.7.1).
     #[serde(skip)]
     pub(crate) large_blob_write: bool,
+    /// Extensions without a typed field, keyed by identifier.
+    #[serde(skip)]
+    pub other: BTreeMap<String, Value>,
+}
+
+impl Serialize for Ctap2GetAssertionRequestExtensions {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        struct Typed<'a>(&'a Ctap2GetAssertionRequestExtensions);
+        impl Serialize for Typed<'_> {
+            fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                Ctap2GetAssertionRequestExtensions::serialize(self.0, serializer)
+            }
+        }
+        serialize_merged(
+            &Typed(self),
+            self.other
+                .iter()
+                .map(|(id, value)| (Value::Text(id.clone()), value.clone())),
+            serializer,
+        )
+    }
 }
 
 impl From<GetAssertionRequestExtensions> for Ctap2GetAssertionRequestExtensions {
@@ -242,6 +263,7 @@ impl From<GetAssertionRequestExtensions> for Ctap2GetAssertionRequestExtensions 
             hmac_or_prf: other.prf.map(GetAssertionHmacOrPrfInput::Prf),
             large_blob_key: if needs_key { Some(true) } else { None },
             large_blob_write: is_write,
+            other: BTreeMap::new(),
         }
     }
 }
@@ -253,6 +275,7 @@ impl Ctap2GetAssertionRequestExtensions {
             && self.hmac_secret.is_none()
             && self.large_blob_key.is_none()
             && self.hmac_or_prf.is_none()
+            && self.other.is_empty()
     }
 
     /// Rewrites the buffered PRF input as a native `prf` extension, bypassing the
@@ -703,6 +726,14 @@ pub struct Ctap2GetAssertionResponseExtensions {
         skip_serializing_if = "Option::is_none"
     )]
     pub hmac_secret: Option<Ctap2HMACGetSecretOutput>,
+
+    /// Extension outputs without a typed field, keyed by identifier.
+    #[serde(
+        flatten,
+        skip_serializing,
+        deserialize_with = "crate::proto::ctap2::cbor::deserialize_drop_non_text_keys"
+    )]
+    pub other: BTreeMap<String, Value>,
 }
 
 impl Ctap2GetAssertionResponseExtensions {
@@ -866,6 +897,7 @@ mod tests {
         response.authenticator_data.extensions = Some(Ctap2GetAssertionResponseExtensions {
             cred_blob: None,
             hmac_secret: None,
+            other: Default::default(),
         });
 
         let mut request = make_request(vec![cred]);
@@ -1454,5 +1486,30 @@ mod tests {
             results["blobby"],
             serde_json::json!(base64_url::encode(&[0xDE, 0xAD, 0xBE, 0xEF]))
         );
+    }
+
+    #[test]
+    fn other_extensions_encoded_as_one_canonical_definite_map() {
+        let mut request = make_request(vec![]);
+        request.extensions = Some(GetAssertionRequestExtensions {
+            cred_blob: true,
+            ..Default::default()
+        });
+        let mut ctap2 = Ctap2GetAssertionRequest::from(request);
+        ctap2.extensions.as_mut().unwrap().other =
+            BTreeMap::from([("fooExt".to_string(), Value::Bytes(vec![1, 2, 3]))]);
+        let bytes = crate::proto::ctap2::cbor::to_vec(&ctap2).unwrap();
+        let decoded: BTreeMap<u64, Value> = crate::proto::ctap2::cbor::from_slice(&bytes).unwrap();
+
+        let Value::Map(extensions) = &decoded[&0x04] else {
+            panic!("extensions not a map");
+        };
+        let keys: Vec<_> = extensions.keys().cloned().collect();
+        assert_eq!(keys, ["fooExt", "credBlob"].map(|k| Value::Text(k.into())));
+        assert_eq!(
+            crate::proto::ctap2::cbor::to_vec(ctap2.extensions.as_ref().unwrap()).unwrap(),
+            crate::proto::ctap2::cbor::to_vec(&Value::Map(extensions.clone())).unwrap()
+        );
+        assert_eq!(crate::proto::ctap2::cbor::to_vec(&decoded).unwrap(), bytes);
     }
 }
