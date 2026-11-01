@@ -123,6 +123,7 @@ async fn make_credential_call<C: Channel>(
         exclude: exclude_list,
         extensions: None,
         attestation: None,
+        attestation_formats: vec![],
         timeout: TIMEOUT,
     };
 

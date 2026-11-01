@@ -56,6 +56,7 @@ async fn test_webauthn_large_blob_read_returns_planted_blob() {
         user_verification: UserVerificationRequirement::Discouraged,
         algorithms: vec![Ctap2CredentialType::default()],
         attestation: None,
+        attestation_formats: vec![],
         exclude: None,
         extensions: Some(MakeCredentialsRequestExtensions {
             large_blob: Some(MakeCredentialLargeBlobExtensionInput {
@@ -253,6 +254,7 @@ async fn register_with_large_blob(
         user_verification: UserVerificationRequirement::Discouraged,
         algorithms: vec![Ctap2CredentialType::default()],
         attestation: None,
+        attestation_formats: vec![],
         exclude: None,
         extensions: Some(MakeCredentialsRequestExtensions {
             large_blob: Some(MakeCredentialLargeBlobExtensionInput {

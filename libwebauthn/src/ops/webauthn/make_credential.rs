@@ -435,6 +435,7 @@ pub struct MakeCredentialRequest {
     pub extensions: Option<MakeCredentialsRequestExtensions>,
     /// Attestation conveyance preference. `Some("none")` scrubs attestation.
     pub attestation: Option<String>,
+    pub attestation_formats: Vec<String>,
     pub timeout: Duration,
 }
 
@@ -545,6 +546,7 @@ impl FromIdlModel<PublicKeyCredentialCreationOptionsJSON> for MakeCredentialRequ
             extensions: inner.extensions,
             // WebAuthn IDL defaults attestation conveyance to "none".
             attestation: inner.attestation.or_else(|| Some("none".to_string())),
+            attestation_formats: inner.attestation_formats.unwrap_or_default(),
             timeout,
         })
     }
@@ -715,6 +717,7 @@ impl MakeCredentialRequest {
             exclude: None,
             extensions: None,
             attestation: None,
+            attestation_formats: vec![],
             resident_key: None,
             user_verification: UserVerificationRequirement::Discouraged,
             timeout: Duration::from_secs(10),
@@ -934,6 +937,7 @@ mod tests {
             exclude: None,
             extensions: None,
             attestation: Some("none".to_string()),
+            attestation_formats: vec!["packed".to_string(), "fido-u2f".to_string()],
             timeout: Duration::from_secs(30),
         }
     }
@@ -1834,6 +1838,7 @@ mod tests {
             exclude: None,
             extensions: None,
             attestation: None,
+            attestation_formats: vec![],
             timeout: Duration::from_secs(30),
         }
     }

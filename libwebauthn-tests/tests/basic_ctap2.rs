@@ -49,6 +49,7 @@ async fn test_webauthn_basic_ctap2() {
         user_verification: UserVerificationRequirement::Preferred,
         algorithms: vec![Ctap2CredentialType::default()],
         attestation: None,
+        attestation_formats: vec![],
         exclude: None,
         extensions: None,
         timeout: TIMEOUT,

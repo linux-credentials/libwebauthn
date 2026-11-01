@@ -121,6 +121,7 @@ async fn create() -> Result<(), Box<dyn Error>> {
         exclude: None,
         extensions: Some(extensions),
         attestation: None,
+        attestation_formats: vec![],
         timeout: TIMEOUT,
     };
 

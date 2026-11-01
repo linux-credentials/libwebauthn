@@ -59,6 +59,7 @@ async fn make_credential_call_with_rp(
         user_verification: UserVerificationRequirement::Preferred,
         algorithms: vec![Ctap2CredentialType::default()],
         attestation: None,
+        attestation_formats: vec![],
         exclude: exclude_list,
         extensions: None,
         timeout: TIMEOUT,
