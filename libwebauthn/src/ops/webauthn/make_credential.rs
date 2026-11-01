@@ -84,20 +84,6 @@ fn registration_transports(transport: Option<Transport>) -> Vec<String> {
     tokens
 }
 
-fn scrub_aaguid(authenticator_data: &mut [u8]) -> Result<(), ResponseSerializationError> {
-    const AAGUID_OFFSET: usize = 37;
-    const AAGUID_LEN: usize = 16;
-    authenticator_data
-        .get_mut(AAGUID_OFFSET..AAGUID_OFFSET + AAGUID_LEN)
-        .ok_or_else(|| {
-            ResponseSerializationError::AuthenticatorDataError(
-                "authenticator data too short to scrub AAGUID".into(),
-            )
-        })?
-        .fill(0);
-    Ok(())
-}
-
 fn build_attestation_object(
     format: &str,
     attestation_statement: &Ctap2AttestationStatement,
@@ -135,15 +121,10 @@ impl WebAuthnIDLResponse for MakeCredentialResponse {
         let id = base64_url::encode(&attested.credential_id);
         let raw_id = Base64UrlString::from(attested.credential_id.clone());
 
-        let mut authenticator_data_bytes = self
+        let authenticator_data_bytes = self
             .authenticator_data
             .to_response_bytes()
             .map_err(|e| ResponseSerializationError::AuthenticatorDataError(e.to_string()))?;
-
-        let scrub_attestation = request.attestation.as_deref() == Some("none");
-        if scrub_attestation {
-            scrub_aaguid(&mut authenticator_data_bytes)?;
-        }
 
         let public_key_algorithm = i64::from(
             cose::read_alg(&attested.credential_public_key)
@@ -158,6 +139,7 @@ impl WebAuthnIDLResponse for MakeCredentialResponse {
             .map(Base64UrlString::from);
 
         // Build attestation object (CBOR map with authData, fmt, attStmt)
+        let scrub_attestation = request.attestation.as_deref() == Some("none");
         let none_statement = Ctap2AttestationStatement::None(BTreeMap::new());
         let (format, attestation_statement) = if scrub_attestation {
             ("none", &none_statement)
@@ -2135,7 +2117,7 @@ mod tests {
     }
 
     #[test]
-    fn attestation_none_conveyance_scrubs_fmt_attstmt_and_aaguid() {
+    fn attestation_none_conveyance_scrubs_fmt_and_attstmt() {
         let response = create_attested_response([0x11u8; 16]);
         let mut request = create_test_request();
         request.attestation = Some("none".to_string());
@@ -2143,7 +2125,11 @@ mod tests {
         let model = response.to_idl_model(&request).unwrap();
 
         let auth_data = &model.response.authenticator_data.0;
-        assert_eq!(&auth_data[37..53], &[0u8; 16], "top-level authData AAGUID");
+        assert_eq!(
+            &auth_data[37..53],
+            &[0x11u8; 16],
+            "top-level authData AAGUID"
+        );
 
         let attestation: cbor::Value =
             cbor::from_slice(&model.response.attestation_object.0).unwrap();
@@ -2165,7 +2151,7 @@ mod tests {
         }
         match value_for("authData") {
             Some(cbor::Value::Bytes(embedded)) => {
-                assert_eq!(&embedded[37..53], &[0u8; 16], "embedded authData AAGUID");
+                assert_eq!(&embedded[37..53], &[0x11u8; 16], "embedded authData AAGUID");
             }
             other => panic!("authData must be CBOR bytes, got {other:?}"),
         }
