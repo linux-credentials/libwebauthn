@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use icu_normalizer::ComposingNormalizerBorrowed;
-use tracing::{debug, error, info, instrument, warn};
+use tracing::{debug, info, instrument, warn, Level};
 
 use cosey::PublicKey;
 
@@ -88,12 +88,12 @@ fn enforce_no_mc_ga_with_client_pin(
     if get_info_response.option_enabled("uv") && !uv_unavailable {
         Ok(Ctap2UserVerificationOperation::GetPinUvAuthTokenUsingUvWithPermissions)
     } else {
-        error!("noMcGaPermissionsWithClientPin is set but built-in UV is unavailable for mc/ga");
+        warn!("noMcGaPermissionsWithClientPin is set but built-in UV is unavailable for mc/ga");
         Err(PlatformError::NoUvAvailable)
     }
 }
 
-#[instrument(skip_all)]
+#[instrument(level = Level::INFO, skip_all)]
 pub(crate) async fn user_verification<R, C>(
     channel: &mut C,
     user_verification: UserVerificationRequirement,
@@ -154,7 +154,7 @@ where
     .await
 }
 
-#[instrument(skip_all)]
+#[instrument(level = Level::DEBUG, skip_all)]
 async fn user_verification_helper<R, C>(
     channel: &mut C,
     get_info_response: &mut Ctap2GetInfoResponse,
@@ -174,11 +174,11 @@ where
     // If it is not discouraged and either RP or device requires it.
     let uv = !rp_uv_discouraged && (rp_uv_preferred || dev_uv_protected);
 
-    debug!(%rp_uv_preferred, %rp_uv_discouraged, %dev_uv_protected, %uv, %needs_shared_secret, %can_establish_shared_secret, "Checking if user verification is required");
+    debug!({ %rp_uv_preferred, %rp_uv_discouraged, %dev_uv_protected, %uv, %needs_shared_secret, %can_establish_shared_secret }, "Checking if user verification is required");
     // Enforce required UV even on the shared-secret path. A shared-secret-only result performs no UV.
     if user_verification.is_required() && !dev_uv_protected {
-        error!(
-            "Request requires user verification, but device user verification is not available. Try letting the user set a PIN."
+        debug!(
+            "Request requires user verification, but device user verification is not available. Trying to set a PIN"
         );
         // Lets try setting a PIN. Either we succeed in some fashion, or we return the resulting error here instead.
         try_to_set_pin(
@@ -200,19 +200,19 @@ where
     // If we do not need to create a shared secret, we can error out here early
     if !needs_shared_secret {
         if !uv {
-            debug!("User verification not requested by either RP nor authenticator. Ignoring.");
+            debug!("User verification not requested by either RP nor authenticator. Ignoring");
             return Ok(UsedPinUvAuthToken::None);
         }
 
         if !dev_uv_protected && user_verification.is_preferred() {
-            warn!("User verification is preferred, but device user verification is not available. Ignoring.");
+            warn!("User verification is preferred, but device user verification is not available. Ignoring");
             return Ok(UsedPinUvAuthToken::None);
         }
     } else if !can_establish_shared_secret && !uv {
         // We need a shared secret, but the device does not support any form of query-able UV, so we can't establish a
         // shared secret that is needed
         warn!(
-            "Request requires a shared secret, but device is not capable of establishing one. Skipping UV."
+            "Request requires a shared secret, but device is not capable of establishing one. Skipping UV"
         );
         // We treat this currently as a non-fatal error as this is only for HMAC-calculations, which
         // we can drop
@@ -235,7 +235,7 @@ where
                 }
             })?;
         if let Ctap2UserVerificationOperation::LegacyUv = uv_operation {
-            debug!("No client operation. Setting deprecated request options.uv flag to true.");
+            debug!("No client operation. Setting deprecated request options.uv flag to true");
             ctap2_request.ensure_uv_set();
             // If the device is UV protected, but has no fitting operation, we have to use the legacy UV option.
             // If we don't have to or we can't establish a shared secret, we can return right here
@@ -289,7 +289,7 @@ where
         )
         .await
         else {
-            error!("No supported PIN/UV auth protocols found");
+            warn!("No supported PIN/UV auth protocols found");
             return Err(WebAuthnError::Ctap(CtapError::Other));
         };
 
@@ -346,7 +346,7 @@ where
                     &uv_proto.encrypt(
                         &shared_secret,
                         &pin_hash(&pin.ok_or_else(|| {
-                            error!("PIN expected but not available");
+                            warn!("PIN expected but not available");
                             WebAuthnError::Ctap(CtapError::PINRequired)
                         })?),
                     )?,
@@ -359,7 +359,7 @@ where
                     &uv_proto.encrypt(
                         &shared_secret,
                         &pin_hash(&pin.ok_or_else(|| {
-                            error!("PIN expected but not available");
+                            warn!("PIN expected but not available");
                             WebAuthnError::Ctap(CtapError::PINRequired)
                         })?),
                     )?,
@@ -386,7 +386,7 @@ where
             }
             // Internal retry, because we otherwise can't fall back to PIN, if the UV is blocked
             Err(WebAuthnError::Ctap(CtapError::UvBlocked)) => {
-                warn!("UV failed too many times and is now blocked. Trying to fall back to PIN.");
+                warn!("UV failed too many times and is now blocked. Trying to fall back to PIN");
                 uv_blocked = true;
                 continue;
             }
@@ -405,7 +405,7 @@ where
                     // So, this check MAY prevent one additional fingerprint scan for the user,
                     // that is going to fail with UvBlocked.
                     if attempts == 0 {
-                        warn!("UV failed too many times and is now blocked. Trying to fall back to PIN.");
+                        warn!("UV failed too many times and is now blocked. Trying to fall back to PIN");
                         uv_blocked = true;
                         continue;
                     }
@@ -446,11 +446,11 @@ where
         | Ctap2UserVerificationOperation::GetPinToken => {
             {
                 let token_response = token_response.ok_or_else(|| {
-                    error!("Expected token response but got None");
+                    warn!("Expected token response but got None");
                     WebAuthnError::Ctap(CtapError::Other)
                 })?;
                 let Some(encrypted_pin_uv_auth_token) = token_response.pin_uv_auth_token else {
-                    error!("Client PIN response did not include a PIN UV auth token");
+                    warn!("Client PIN response did not include a PIN UV auth token");
                     return Err(WebAuthnError::Ctap(CtapError::Other));
                 };
 
@@ -459,9 +459,8 @@ where
 
                 // Reject a spec-invalid token length before it is used as a key downstream.
                 if !pin_uv_auth_token_len_valid(uv_proto.version(), uv_auth_token.len()) {
-                    error!(
-                        protocol = ?uv_proto.version(),
-                        token_len = uv_auth_token.len(),
+                    warn!(
+                        { protocol = ?uv_proto.version(), token_len = uv_auth_token.len() },
                         "Decrypted pinUvAuthToken has an invalid length"
                     );
                     return Err(WebAuthnError::Ctap(CtapError::Other));
@@ -526,7 +525,7 @@ where
         .ctap2_client_pin(&client_pin_request, timeout)
         .await?;
     let Some(public_key) = client_pin_response.key_agreement else {
-        error!("Missing public key from Client PIN response");
+        warn!("Missing public key from Client PIN response");
         return Err(WebAuthnError::Ctap(CtapError::Other));
     };
     Ok(pin_proto.encapsulate(&public_key)?)

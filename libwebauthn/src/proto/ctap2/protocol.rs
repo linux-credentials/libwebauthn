@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
-use tracing::{debug, instrument, trace, warn};
+use tracing::{debug, instrument, trace, warn, Level};
 
 use crate::proto::ctap2::cbor::{self, CborRequest};
 use crate::proto::ctap2::{Ctap2BioEnrollmentResponse, Ctap2CommandCode};
@@ -24,10 +24,9 @@ macro_rules! parse_cbor {
         match cbor::from_slice::<$type>($data) {
             Ok(f) => f,
             Err(e) => {
-                tracing::error!(
-                    "Failed to parse {} from CBOR-data provided by the device. Parsing error: {:?}",
-                    stringify!($type),
-                    e
+                tracing::warn!(
+                    { type_name = stringify!($type), error = ?e },
+                    "Failed to parse device CBOR response"
                 );
                 return Err(WebAuthnError::Platform(
                     PlatformError::InvalidDeviceResponse,
@@ -96,7 +95,7 @@ impl<C> Ctap2 for C
 where
     C: Channel,
 {
-    #[instrument(skip_all)]
+    #[instrument(level = Level::DEBUG, skip_all)]
     async fn ctap2_get_info(
         &mut self,
     ) -> Result<Ctap2GetInfoResponse, WebAuthnError<Self::TransportError>> {
@@ -119,7 +118,7 @@ where
         Ok(ctap_response)
     }
 
-    #[instrument(skip_all)]
+    #[instrument(level = Level::DEBUG, skip_all)]
     async fn ctap2_make_credential(
         &mut self,
         request: &Ctap2MakeCredentialRequest,
@@ -138,14 +137,14 @@ where
             error => return Err(WebAuthnError::Ctap(error)),
         };
         let data = unwrap_field!(cbor_response.data);
-        trace!("MakeCredential: {:?}", data);
+        trace!(?data, "MakeCredential response");
         let ctap_response = parse_cbor!(Ctap2MakeCredentialResponse, &data);
         debug!("CTAP2 MakeCredential successful");
         trace!(?ctap_response);
         Ok(ctap_response)
     }
 
-    #[instrument(skip_all)]
+    #[instrument(level = Level::DEBUG, skip_all)]
     async fn ctap2_get_assertion(
         &mut self,
         request: &Ctap2GetAssertionRequest,
@@ -164,14 +163,14 @@ where
             error => return Err(WebAuthnError::Ctap(error)),
         };
         let data = unwrap_field!(cbor_response.data);
-        trace!("GetAssertion: {:?}", data);
+        trace!(?data, "GetAssertion response");
         let ctap_response = parse_cbor!(Ctap2GetAssertionResponse, &data);
         debug!("CTAP2 GetAssertion successful");
         trace!(?ctap_response);
         Ok(ctap_response)
     }
 
-    #[instrument(skip_all)]
+    #[instrument(level = Level::DEBUG, skip_all)]
     async fn ctap2_get_next_assertion(
         &mut self,
         timeout: Duration,
@@ -196,7 +195,7 @@ where
         Ok(ctap_response)
     }
 
-    #[instrument(skip_all)]
+    #[instrument(level = Level::DEBUG, skip_all)]
     async fn ctap2_selection(
         &mut self,
         timeout: Duration,
@@ -222,7 +221,7 @@ where
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument(level = Level::DEBUG, skip_all)]
     async fn ctap2_authenticator_reset(
         &mut self,
         timeout: Duration,
@@ -248,7 +247,7 @@ where
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument(level = Level::DEBUG, skip_all)]
     async fn ctap2_client_pin(
         &mut self,
         request: &Ctap2ClientPinRequest,
@@ -279,7 +278,7 @@ where
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument(level = Level::DEBUG, skip_all)]
     async fn ctap2_authenticator_config(
         &mut self,
         request: &Ctap2AuthenticatorConfigRequest,
@@ -307,7 +306,7 @@ where
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument(level = Level::DEBUG, skip_all)]
     async fn ctap2_bio_enrollment(
         &mut self,
         request: &Ctap2BioEnrollmentRequest,
@@ -338,7 +337,7 @@ where
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument(level = Level::DEBUG, skip_all)]
     async fn ctap2_credential_management(
         &mut self,
         request: &Ctap2CredentialManagementRequest,
@@ -369,7 +368,7 @@ where
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument(level = Level::DEBUG, skip_all)]
     async fn ctap2_large_blobs(
         &mut self,
         request: &Ctap2LargeBlobsRequest,

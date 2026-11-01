@@ -48,7 +48,7 @@ impl L2capDataChannel {
             bluer::l2cap::Stream::connect(bluer::l2cap::SocketAddr::new(addr, addr_type, psm))
                 .await
                 .map_err(|e| {
-                    error!(?e, %addr, psm, "Failed to connect L2CAP CoC");
+                    warn!({ ?e, psm }, "Failed to connect L2CAP CoC");
                     CableError::from(e)
                 })?;
 
@@ -100,7 +100,7 @@ impl CableDataChannel for L2capDataChannel {
         frame.extend_from_slice(&len.to_be_bytes());
         frame.extend_from_slice(message);
         self.stream.write_all(&frame).await.map_err(|e| {
-            error!(?e, "Failed to write L2CAP message");
+            warn!(?e, "Failed to write L2CAP message");
             CableError::from(e)
         })?;
         Ok(())
@@ -128,7 +128,7 @@ impl CableDataChannel for L2capDataChannel {
                     0
                 }
                 Err(e) => {
-                    error!(?e, "Failed to read L2CAP message");
+                    warn!(?e, "Failed to read L2CAP message");
                     return Err(CableError::from(e));
                 }
             };
@@ -137,7 +137,7 @@ impl CableDataChannel for L2capDataChannel {
                 if self.read_buf.is_empty() {
                     return Ok(None);
                 }
-                error!(buffered = self.read_buf.len(), "L2CAP closed mid-message");
+                warn!(buffered = self.read_buf.len(), "L2CAP closed mid-message");
                 return Err(CableError::ConnectionLost);
             }
             self.read_buf
@@ -164,8 +164,8 @@ fn bdaddr_to_bluer(
     addr: BDAddr,
     addr_type: Option<AddressType>,
 ) -> Result<(bluer::Address, bluer::AddressType), CableError> {
-    let addr = bluer::Address::from_str(&addr.to_string()).map_err(|e| {
-        error!(?e, "Failed to parse Bluetooth address");
+    let addr = bluer::Address::from_str(&addr.to_string()).map_err(|_| {
+        warn!("Failed to parse Bluetooth address");
         CableError::InvalidEndpoint
     })?;
     let addr_type = match addr_type {

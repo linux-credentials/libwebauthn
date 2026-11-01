@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use futures::StreamExt;
 use serde_cbor_2 as serde_cbor;
 use std::pin::pin;
-use tracing::{debug, instrument, trace, warn};
+use tracing::{debug, instrument, trace, warn, Level};
 use uuid::Uuid;
 
 use crate::proto::ctap2::cbor::Value;
@@ -68,7 +68,7 @@ impl From<[u8; 16]> for DecryptedAdvert {
     }
 }
 
-#[instrument(skip_all, err)]
+#[instrument(level = Level::INFO, skip_all, err(level = Level::DEBUG))]
 pub(crate) async fn await_advertisement(
     eid_key: &[u8],
 ) -> Result<(FidoDevice, DecryptedAdvert), CableError> {
@@ -82,25 +82,22 @@ pub(crate) async fn await_advertisement(
 
     let mut stream = pin!(stream);
     while let Some((peripheral, data)) = stream.as_mut().next().await {
-        debug!({ ?peripheral, ?data }, "Found device with service data");
+        debug!({ ?peripheral, data_len = data.len() }, "Found device with service data");
 
         let Some(device) = btleplug::manager::get_device(peripheral.clone())
             .await
             .or(Err(CableError::TransportUnavailable))?
         else {
-            warn!(
-                ?peripheral,
-                "Unable to fetch peripheral properties, ignoring"
-            );
+            warn!("Unable to fetch peripheral properties, ignoring");
             continue;
         };
 
-        trace!(?device, ?data, ?eid_key);
+        trace!({ ?device, ?data, ?eid_key }, "Trial-decrypting advertisement");
         let Some(decrypted) = trial_decrypt_advert(eid_key, &data) else {
-            warn!(?device, "Trial decrypt failed, ignoring");
+            debug!(?device, "Trial decrypt failed, ignoring");
             continue;
         };
-        trace!(?decrypted);
+        trace!(?decrypted, "Decrypted advertisement");
 
         let mut advert = DecryptedAdvert::from(decrypted);
         if let Some(suffix_bytes) = data.get(20..).filter(|s| !s.is_empty()) {
@@ -109,18 +106,10 @@ pub(crate) async fn await_advertisement(
                     trace!(?suffix, "Parsed advertisement suffix");
                     advert.suffix = Some(suffix);
                 }
-                Err(e) => warn!(
-                    ?device,
-                    ?e,
-                    "Failed to parse advertisement suffix, ignoring it"
-                ),
+                Err(e) => warn!(?e, "Failed to parse advertisement suffix, ignoring it"),
             }
         }
-        debug!(
-            ?device,
-            ?decrypted,
-            "Successfully decrypted advertisement from device"
-        );
+        debug!(?device, "Successfully decrypted advertisement from device");
 
         scan.stop().await;
 

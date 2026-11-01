@@ -7,7 +7,7 @@ use std::fmt;
 #[cfg(feature = "virt")]
 use std::sync::{Arc, Mutex};
 #[allow(unused_imports)]
-use tracing::{debug, info, instrument, trace};
+use tracing::{debug, info, instrument, trace, Level};
 
 #[cfg(feature = "virt")]
 use super::framing::HidMessage;
@@ -72,7 +72,7 @@ pub(crate) fn get_hidapi() -> Result<HidApi, HidError> {
     HidApi::new().map_err(HidError::ApiInit)
 }
 
-#[instrument]
+#[instrument(level = Level::DEBUG, skip_all)]
 pub async fn list_devices() -> Result<Vec<HidDevice>, HidError> {
     let devices: Vec<_> = get_hidapi()?
         .device_list()
@@ -80,7 +80,7 @@ pub async fn list_devices() -> Result<Vec<HidDevice>, HidError> {
         .filter(|device| device.usage() == 0x0001)
         .map(|device| device.into())
         .collect();
-    debug!({ count = devices.len() }, "Listing available HID devices");
+    debug!(count = devices.len(), "Listing available HID devices");
     trace!(?devices);
     Ok(devices)
 }
