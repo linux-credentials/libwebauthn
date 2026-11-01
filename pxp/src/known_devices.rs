@@ -13,7 +13,7 @@ use futures::lock::Mutex;
 use serde::Serialize;
 use serde_bytes::ByteBuf;
 use serde_indexed::SerializeIndexed;
-use tracing::{debug, instrument, trace};
+use tracing::{debug, instrument, trace, Level};
 
 use super::protocol::PxpLinkingInfo;
 
@@ -54,7 +54,7 @@ unsafe impl Send for EphemeralDeviceInfoStore {}
 impl PxpKnownDeviceInfoStore for EphemeralDeviceInfoStore {
     async fn put_known_device(&self, device_id: &PxpKnownDeviceId, device: &PxpKnownDeviceInfo) {
         debug!(?device_id, "Inserting or updating known device");
-        trace!(?device);
+        trace!(?device, "Known device info");
         let mut known_devices = self.known_devices.lock().await;
         known_devices.insert(device_id.clone(), device.clone());
     }
@@ -148,7 +148,7 @@ impl PxpKnownDevice {
         Ok(device)
     }
 
-    #[instrument(skip_all, err)]
+    #[instrument(level = Level::INFO, skip_all, err(level = Level::WARN))]
     pub(crate) async fn connection(
         known_device: &PxpKnownDevice,
         ux_sender: &MpscUxUpdateSender,

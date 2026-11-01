@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::{task, time};
-use tracing::debug;
+use tracing::warn;
 
 use crate::connection_stages::{MpscUxUpdateSender, TunnelConnectionInput, UxUpdateSender};
 use crate::error::PxpError;
@@ -104,7 +104,7 @@ impl TunnelHandle {
         };
         if shutdown.send(()).is_ok() && time::timeout(CLOSE_TIMEOUT, &mut self.task).await.is_err()
         {
-            debug!("PXP connection did not finish closing in time");
+            warn!(timeout = ?CLOSE_TIMEOUT, "PXP connection did not finish closing in time");
         }
     }
 

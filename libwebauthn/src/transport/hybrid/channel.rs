@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use pxp::TunnelHandle;
 use tokio::sync::broadcast;
 use tokio::time;
-use tracing::error;
+use tracing::warn;
 
 use crate::pin::persistent_token::PersistentTokenStore;
 use crate::proto::{
@@ -87,12 +87,12 @@ impl Channel for HybridChannel {
         _request: &ApduRequest,
         _timeout: Duration,
     ) -> Result<(), PxpError> {
-        error!("APDU send not supported in caBLE transport");
+        warn!("APDU send not supported in caBLE transport");
         Err(PxpError::TransportUnavailable)
     }
 
     async fn apdu_recv(&mut self, _timeout: Duration) -> Result<ApduResponse, PxpError> {
-        error!("APDU recv not supported in caBLE transport");
+        warn!("APDU recv not supported in caBLE transport");
         Err(PxpError::TransportUnavailable)
     }
 
@@ -109,11 +109,11 @@ impl Channel for HybridChannel {
         match time::timeout(timeout, self.tunnel.ctap_sender.send(frame)).await {
             Ok(Ok(_)) => Ok(()),
             Ok(Err(error)) => {
-                error!(%error, "CBOR request send failure");
+                warn!(%error, "CBOR request send failure");
                 Err(PxpError::TransportUnavailable)
             }
             Err(elapsed) => {
-                error!({ %elapsed, ?timeout }, "CBOR request send timeout");
+                warn!({ %elapsed, ?timeout }, "CBOR request send timeout");
                 Err(PxpError::Timeout)
             }
         }
@@ -126,12 +126,12 @@ impl Channel for HybridChannel {
         // Now apply timeout only to the actual CBOR operation
         match time::timeout(timeout, self.tunnel.ctap_receiver.recv()).await {
             Ok(Some(frame)) => CborResponse::try_from(&frame).map_err(|e| {
-                error!(%e, "Malformed CTAP response frame");
+                warn!(%e, "Malformed CTAP response frame");
                 PxpError::InvalidFraming
             }),
             Ok(None) => Err(PxpError::TransportUnavailable),
             Err(elapsed) => {
-                error!({ %elapsed, ?timeout }, "CBOR response recv timeout");
+                warn!({ %elapsed, ?timeout }, "CBOR response recv timeout");
                 Err(PxpError::Timeout)
             }
         }

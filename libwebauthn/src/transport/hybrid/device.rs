@@ -19,7 +19,7 @@ impl UpdateSink for UxUpdateForwarder {
     fn send_update(&self, update: PxpUpdate) {
         trace!("Sending UX update");
         if let Err(err) = self.0.send(HybridUxUpdate::PxpUpdate(update)) {
-            warn!(?err, "No receivers found for UX update.");
+            warn!(?err, "No receivers found for UX update");
         }
     }
 }
@@ -50,7 +50,7 @@ impl<'d> Device<'d, Hybrid, HybridChannel> for PxpKnownDevice {
         &'d mut self,
         settings: ChannelSettings,
     ) -> Result<HybridChannel, WebAuthnError<PxpError>> {
-        debug!(?self.device_info.tunnel_domain, "Creating channel to tunnel server");
+        debug!(tunnel_domain = %self.device_info.tunnel_domain, "Creating channel to tunnel server");
         Ok(open_channel(self.clone().into(), settings))
     }
 }

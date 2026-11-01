@@ -17,7 +17,7 @@ pub mod error;
 pub mod pin_uv_auth_token;
 
 use async_trait::async_trait;
-use tracing::{debug, error, info, instrument, trace, warn};
+use tracing::{debug, info, instrument, trace, warn, Level};
 
 use crate::fido::FidoProtocol;
 use crate::ops::u2f::{RegisterRequest, SignRequest, UpgradableResponse};
@@ -60,10 +60,7 @@ fn filter_oversized_credentials(
 fn ensure_credential_count(count: usize, info: &Ctap2GetInfoResponse) -> Result<(), PlatformError> {
     if let Some(max) = info.max_credential_count_in_list() {
         if count > max {
-            warn!(
-                count,
-                max, "credential list exceeds maxCredentialCountInList"
-            );
+            warn!({ count, max }, "credential list exceeds maxCredentialCountInList");
             return Err(PlatformError::RequestTooLarge);
         }
     }
@@ -77,7 +74,7 @@ fn ensure_msg_size(
     let size = request.ctap_hid_data().len();
     let max = info.max_msg_size();
     if size > max {
-        warn!(size, max, "serialized request exceeds maxMsgSize");
+        warn!({ size, max }, "serialized request exceeds maxMsgSize");
         return Err(PlatformError::RequestTooLarge);
     }
     Ok(())
@@ -119,14 +116,14 @@ macro_rules! handle_errors {
             Err(WebAuthnError::Ctap(CtapError::PINAuthInvalid))
                 if $uv_auth_used == UsedPinUvAuthToken::FromEphemeralStorage =>
             {
-                info!("PINAuthInvalid: Clearing auth token storage and trying again.");
+                info!("PINAuthInvalid: Clearing auth token storage and trying again");
                 $channel.clear_uv_auth_token_store();
                 continue;
             }
             Err(WebAuthnError::Ctap(CtapError::PINAuthInvalid))
                 if matches!($uv_auth_used, UsedPinUvAuthToken::FromPersistentStorage(_)) =>
             {
-                info!("PINAuthInvalid on a persistent token: evicting the record and retrying.");
+                info!("PINAuthInvalid on a persistent token: evicting the record and retrying");
                 if let UsedPinUvAuthToken::FromPersistentStorage(id) = &$uv_auth_used {
                     if let Some(store) = $channel.persistent_token_store() {
                         store.delete(id).await;
@@ -172,7 +169,7 @@ impl<C> WebAuthn for C
 where
     C: Channel,
 {
-    #[instrument(skip_all, fields(dev = % self))]
+    #[instrument(level = Level::INFO, skip_all, fields(transport = ?self.transport()))]
     async fn webauthn_make_credential(
         &mut self,
         op: &MakeCredentialRequest,
@@ -199,7 +196,7 @@ where
         Ok(response)
     }
 
-    #[instrument(skip_all, fields(dev = % self))]
+    #[instrument(level = Level::INFO, skip_all, fields(transport = ?self.transport()))]
     async fn webauthn_get_assertion(
         &mut self,
         op: &GetAssertionRequest,
@@ -353,7 +350,7 @@ async fn get_assertion_fido2<C: Channel>(
             // credentials are present on this device. So we error out here
             // But the spec requires some form of user interaction, so we run a
             // dummy request, ignore the result and error out.
-            warn!("Preflight removed all credentials from the allow-list. Sending dummy request and erroring out.");
+            warn!("Preflight removed all credentials from the allow-list. Sending dummy request and erroring out");
             let dummy_request: Ctap2MakeCredentialRequest = Ctap2MakeCredentialRequest::dummy();
             channel
                 .send_ux_update(UvUpdate::PresenceRequired.into())
@@ -434,7 +431,7 @@ async fn get_assertion_fido2<C: Channel>(
     let count = (response.credentials_count.unwrap_or(1) as usize).min(max_count);
     let mut ctap_responses = vec![response];
     for i in 1..count {
-        debug!({ i }, "Fetching additional credential");
+        debug!(i, "Fetching additional credential");
         // GetNextAssertion doesn't use PinUVAuthToken, so we don't need to check uv_auth_used here
         let next = channel.ctap2_get_next_assertion(op.timeout).await?;
         validate_rp_id_hash(&next)?;
@@ -679,22 +676,22 @@ async fn get_assertion_u2f<C: Channel>(
                 return Ok(upgraded);
             }
             Err(WebAuthnError::Ctap(CtapError::NoCredentials)) => {
-                debug!("No credentials found, trying with the next.");
+                debug!("No credentials found, trying with the next");
             }
             Err(err) => {
-                error!(
+                warn!(
                     ?err,
-                    "Unexpected error whilst trying each credential in allowList."
+                    "Unexpected error whilst trying each credential in allowList"
                 );
                 return Err(err);
             }
         }
     }
-    warn!("None of the credentials in the original request's allowList were found.");
+    warn!("None of the credentials in the original request's allowList were found");
     Err(WebAuthnError::Ctap(CtapError::NoCredentials))
 }
 
-#[instrument(skip_all)]
+#[instrument(level = Level::INFO, skip_all)]
 async fn negotiate_protocol<C: Channel>(
     channel: &mut C,
     allow_u2f: bool,
@@ -719,7 +716,7 @@ async fn negotiate_protocol<C: Channel>(
     if fido_protocol == FidoProtocol::U2F {
         warn!("Negotiated protocol downgrade from FIDO2 to FIDO U2F");
     } else {
-        debug!("Selected protocol: {:?}", fido_protocol);
+        debug!(?fido_protocol, "Selected protocol");
     }
     Ok(fido_protocol)
 }

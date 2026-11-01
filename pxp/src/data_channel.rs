@@ -4,7 +4,7 @@ use futures::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::{Error, Message};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
-use tracing::error;
+use tracing::warn;
 
 use crate::error::PxpError;
 
@@ -40,7 +40,7 @@ impl PxpDataChannel for WebSocketDataChannel {
             .send(Message::Binary(message.to_vec().into()))
             .await
             .map_err(|e| {
-                error!(?e, "Failed to send WebSocket message");
+                warn!(?e, "Failed to send WebSocket message");
                 match e {
                     Error::Io(io) => PxpError::from(io),
                     _ => PxpError::ConnectionFailed,
@@ -57,15 +57,15 @@ impl PxpDataChannel for WebSocketDataChannel {
                     return Ok(None)
                 }
                 Some(Ok(other)) => {
-                    error!(?other, "Unexpected WebSocket message type");
+                    warn!(?other, "Unexpected WebSocket message type");
                     return Err(PxpError::ConnectionFailed);
                 }
                 Some(Err(Error::Io(e))) => {
-                    error!(?e, "Failed to read WebSocket message");
+                    warn!(?e, "Failed to read WebSocket message");
                     return Err(PxpError::from(e));
                 }
                 Some(Err(e)) => {
-                    error!(?e, "Failed to read WebSocket message");
+                    warn!(?e, "Failed to read WebSocket message");
                     return Err(PxpError::ConnectionFailed);
                 }
             }

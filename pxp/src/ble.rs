@@ -32,28 +32,72 @@ async fn on_peripheral_service_data(
     service_data: HashMap<Uuid, Vec<u8>>,
 ) -> Option<(Peripheral, Vec<u8>)> {
     let data = uuids.iter().find_map(|uuid| service_data.get(uuid))?;
-    trace!(?id, ?data, "Found service data");
+    trace!({ ?id, ?data }, "Found service data");
 
     let Ok(peripheral) = adapter.peripheral(id).await else {
-        warn!(?id, "Could not get peripheral");
+        warn!("Could not get peripheral");
         return None;
     };
 
-    debug!({ ?id, ?data }, "Found service data for peripheral");
+    debug!({ ?id, len = data.len() }, "Found service data for peripheral");
     Some((peripheral, data.to_owned()))
 }
 
+/// A discovery is abandoned whenever the caller is cancelled or returns early,
+/// which would otherwise leave the adapter scanning for the lifetime of the
+/// process.
+pub(crate) struct ScanGuard(Option<Adapter>);
+
+impl ScanGuard {
+    /// Stops the scan and waits for the adapter to acknowledge it.
+    pub(crate) async fn stop(mut self) {
+        let Some(adapter) = self.0.take() else {
+            return;
+        };
+        if let Err(e) = adapter.stop_scan().await {
+            warn!(?e, "Failed to stop BLE scan");
+        }
+    }
+}
+
+impl Drop for ScanGuard {
+    fn drop(&mut self) {
+        // We start the scan but don't block on it being stopped.
+        let Some(adapter) = self.0.take() else {
+            return;
+        };
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                handle.spawn(async move {
+                    if let Err(e) = adapter.stop_scan().await {
+                        warn!(?e, "Failed to stop BLE scan");
+                    }
+                });
+            }
+            Err(e) => warn!(?e, "No runtime available to stop BLE scan"),
+        }
+    }
+}
+
 /// Scans for peripherals advertising service data on any of `uuids`. Returns
-/// the adapter, so the caller can stop the scan, and the matching stream.
+/// a guard that stops the scan, and the matching stream.
 #[instrument(level = Level::DEBUG, skip_all)]
 pub(crate) async fn start_discovery_for_service_data(
     uuids: &[Uuid],
-) -> Result<(Adapter, impl Stream<Item = (Peripheral, Vec<u8>)> + use<'_>), PxpError> {
+) -> Result<
+    (
+        ScanGuard,
+        impl Stream<Item = (Peripheral, Vec<u8>)> + use<'_>,
+    ),
+    PxpError,
+> {
     let adapter = get_adapter().await?;
     let events = adapter
         .events()
         .await
         .or(Err(PxpError::TransportUnavailable))?;
+
+    let scan_guard = ScanGuard(Some(adapter.clone()));
 
     adapter
         .start_scan(ScanFilter::default())
@@ -73,7 +117,7 @@ pub(crate) async fn start_discovery_for_service_data(
         }
     });
 
-    Ok((adapter, stream))
+    Ok((scan_guard, stream))
 }
 
 pub(crate) async fn get_properties(

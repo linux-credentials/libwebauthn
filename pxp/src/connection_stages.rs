@@ -1,7 +1,7 @@
 use ::btleplug::api::{AddressType, BDAddr, PeripheralProperties};
 use async_trait::async_trait;
 use tokio::sync::{mpsc, oneshot, watch};
-use tracing::{debug, error, info, instrument, trace, warn};
+use tracing::{debug, info, instrument, trace, warn, Level};
 
 use super::advertisement::{await_advertisement, DecryptedAdvert};
 use super::connection::{ConnectionState, PxpUpdate, UpdateSink};
@@ -68,7 +68,7 @@ pub(crate) struct ConnectionInput {
 }
 
 impl ConnectionInput {
-    #[instrument(skip_all, err)]
+    #[instrument(level = Level::INFO, skip_all, err(level = Level::DEBUG))]
     pub fn new_for_qr_code(
         qr_device: &PxpQrCodeDevice,
         proximity_output: &ProximityCheckOutput,
@@ -250,9 +250,9 @@ impl MpscUxUpdateSender {
 
 #[async_trait]
 impl UxUpdateSender for MpscUxUpdateSender {
-    #[instrument(skip(self))]
+    #[instrument(level = Level::INFO, skip_all)]
     async fn send_update(&self, update: PxpUpdate) {
-        trace!("Sending UX update");
+        trace!(?update, "Sending UX update");
         self.sender.send_update(update);
     }
 
@@ -266,7 +266,7 @@ impl UxUpdateSender for MpscUxUpdateSender {
     }
 }
 
-#[instrument(skip_all, err)]
+#[instrument(level = Level::INFO, skip_all, err(level = Level::DEBUG))]
 pub(crate) async fn proximity_check_stage(
     input: ProximityCheckInput,
     ux_sender: &dyn UxUpdateSender,
@@ -281,12 +281,12 @@ pub(crate) async fn proximity_check_stage(
     Ok(ProximityCheckOutput { device, advert })
 }
 
-#[instrument(skip_all, err)]
+#[instrument(level = Level::INFO, skip_all, err(level = Level::DEBUG))]
 pub(crate) async fn connection_stage(
     input: ConnectionInput,
     ux_sender: &dyn UxUpdateSender,
 ) -> Result<ConnectionOutput, PxpError> {
-    debug!(?input.tunnel_domain, "Starting connection stage");
+    debug!(tunnel_domain = %input.tunnel_domain, "Starting connection stage");
 
     ux_sender.send_update(PxpUpdate::Connecting).await;
 
@@ -328,10 +328,8 @@ async fn connect_data_channel(
                 tunnel::known_device_id_to_forget(&error, &input.connection_type)
             {
                 if let Some(store) = &input.known_device_store {
-                    warn!(
-                        ?device_id,
-                        "Tunnel server returned 410 Gone; forgetting known device"
-                    );
+                    warn!("Tunnel server returned 410 Gone; forgetting known device");
+                    debug!(?device_id, "Forgetting known device");
                     store.delete_known_device(&device_id).await;
                 }
             }
@@ -342,7 +340,7 @@ async fn connect_data_channel(
     Ok(Box::new(WebSocketDataChannel::new(ws_stream)))
 }
 
-#[instrument(skip_all, err)]
+#[instrument(level = Level::INFO, skip_all, err(level = Level::DEBUG))]
 pub(crate) async fn handshake_stage(
     input: HandshakeInput,
     ux_sender: &dyn UxUpdateSender,
@@ -382,7 +380,7 @@ pub(crate) fn decode_tunnel_domain_from_advert(
 ) -> Result<String, PxpError> {
     tunnel::decode_tunnel_server_domain(advert.encoded_tunnel_server_domain)
         .ok_or_else(|| {
-            error!({ encoded = %advert.encoded_tunnel_server_domain }, "Failed to decode tunnel server domain");
+            warn!(encoded = %advert.encoded_tunnel_server_domain, "Failed to decode tunnel server domain");
             PxpError::InvalidFraming
         })
 }

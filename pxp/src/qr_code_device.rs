@@ -10,7 +10,7 @@ use serde::Serialize;
 use serde_bytes::ByteArray;
 use serde_indexed::SerializeIndexed;
 use serde_repr::Serialize_repr;
-use tracing::instrument;
+use tracing::{instrument, Level};
 
 use super::connection_stages::{
     connection_stage, handshake_stage, proximity_check_stage, ConnectionInput, HandshakeInput,
@@ -202,7 +202,7 @@ impl PxpQrCodeDevice {
         Self::new(hint, false, None, transports)
     }
 
-    #[instrument(skip_all, err)]
+    #[instrument(level = Level::INFO, skip_all, err(level = Level::WARN))]
     pub(crate) async fn connection(
         qr_device: &PxpQrCodeDevice,
         ux_sender: &MpscUxUpdateSender,
