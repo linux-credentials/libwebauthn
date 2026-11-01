@@ -61,6 +61,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
             exclude: None,
             extensions: Some(extensions.clone()),
             attestation: None,
+            attestation_formats: vec![],
             timeout: TIMEOUT,
         };
 

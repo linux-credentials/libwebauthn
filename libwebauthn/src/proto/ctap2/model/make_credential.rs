@@ -92,6 +92,11 @@ pub struct Ctap2MakeCredentialRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(index = 0x0A)]
     pub enterprise_attestation: Option<u32>,
+
+    /// attestationFormatsPreference (0x0B)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(index = 0x0B)]
+    pub attestation_formats_preference: Option<Vec<String>>,
 }
 
 impl Ctap2MakeCredentialRequest {
@@ -111,6 +116,7 @@ impl Ctap2MakeCredentialRequest {
             pin_auth_param: Some(ByteBuf::from(Vec::new())),
             pin_auth_proto: Some(Ctap2PinUvAuthProtocol::One as u32),
             enterprise_attestation: None,
+            attestation_formats_preference: None,
         }
     }
 
@@ -163,6 +169,16 @@ impl Ctap2MakeCredentialRequest {
             None => None,
         };
 
+        let attestation_formats_preference = if info.attestation_formats.is_none() {
+            None
+        } else if req.attestation.as_deref() == Some("none") {
+            Some(vec!["none".to_string()])
+        } else if req.attestation_formats.is_empty() {
+            None
+        } else {
+            Some(req.attestation_formats.clone())
+        };
+
         Ok(Ctap2MakeCredentialRequest {
             hash: ByteBuf::from(req.client_data_hash()),
             relying_party: req.relying_party.clone(),
@@ -177,6 +193,7 @@ impl Ctap2MakeCredentialRequest {
             pin_auth_param: None,
             pin_auth_proto: None,
             enterprise_attestation: None,
+            attestation_formats_preference,
         })
     }
 }
@@ -732,6 +749,7 @@ mod tests {
                 ..Default::default()
             }),
             attestation: None,
+            attestation_formats: vec![],
             timeout: Duration::from_secs(10),
         }
     }
@@ -866,6 +884,97 @@ mod tests {
         let prf = out.prf.expect("prf output present");
         assert_eq!(prf.enabled, Some(true));
         assert!(prf.results.is_none());
+    }
+
+    fn mc_request_with_attestation(
+        attestation: Option<&str>,
+        formats: &[&str],
+    ) -> MakeCredentialRequest {
+        MakeCredentialRequest {
+            attestation: attestation.map(str::to_string),
+            attestation_formats: formats.iter().map(|s| s.to_string()).collect(),
+            ..MakeCredentialRequest::dummy()
+        }
+    }
+
+    fn info_with_attestation_formats(formats: &[&str]) -> Ctap2GetInfoResponse {
+        Ctap2GetInfoResponse {
+            attestation_formats: Some(formats.iter().map(|s| s.to_string()).collect()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn attestation_formats_forwarded_when_authenticator_advertises_formats() {
+        let info = info_with_attestation_formats(&["packed"]);
+        let req = mc_request_with_attestation(Some("direct"), &["tpm", "packed"]);
+        let ctap =
+            Ctap2MakeCredentialRequest::from_webauthn_request::<Infallible>(&req, &info).unwrap();
+        assert_eq!(
+            ctap.attestation_formats_preference,
+            Some(vec!["tpm".to_string(), "packed".to_string()])
+        );
+    }
+
+    #[test]
+    fn android_key_attestation_format_is_forwarded() {
+        let info = info_with_attestation_formats(&["android-key"]);
+        let req = mc_request_with_attestation(Some("direct"), &["android-key"]);
+        let ctap =
+            Ctap2MakeCredentialRequest::from_webauthn_request::<Infallible>(&req, &info).unwrap();
+        assert_eq!(
+            ctap.attestation_formats_preference,
+            Some(vec!["android-key".to_string()])
+        );
+    }
+
+    #[test]
+    fn attestation_none_requests_none_format_over_rp_formats() {
+        let info = info_with_attestation_formats(&["packed"]);
+        let req = mc_request_with_attestation(Some("none"), &["packed"]);
+        let ctap =
+            Ctap2MakeCredentialRequest::from_webauthn_request::<Infallible>(&req, &info).unwrap();
+        assert_eq!(
+            ctap.attestation_formats_preference,
+            Some(vec!["none".to_string()])
+        );
+    }
+
+    #[test]
+    fn attestation_formats_omitted_without_rp_preference() {
+        let info = info_with_attestation_formats(&["packed"]);
+        let req = mc_request_with_attestation(Some("direct"), &[]);
+        let ctap =
+            Ctap2MakeCredentialRequest::from_webauthn_request::<Infallible>(&req, &info).unwrap();
+        assert_eq!(ctap.attestation_formats_preference, None);
+    }
+
+    #[test]
+    fn attestation_formats_omitted_when_authenticator_lacks_formats() {
+        let info = Ctap2GetInfoResponse::default();
+        for req in [
+            mc_request_with_attestation(Some("none"), &[]),
+            mc_request_with_attestation(Some("direct"), &["packed"]),
+        ] {
+            let ctap = Ctap2MakeCredentialRequest::from_webauthn_request::<Infallible>(&req, &info)
+                .unwrap();
+            assert_eq!(ctap.attestation_formats_preference, None);
+        }
+    }
+
+    #[test]
+    fn attestation_formats_preference_serializes_at_0x0b() {
+        let info = info_with_attestation_formats(&["packed"]);
+        let req = mc_request_with_attestation(Some("direct"), &["packed"]);
+        let ctap =
+            Ctap2MakeCredentialRequest::from_webauthn_request::<Infallible>(&req, &info).unwrap();
+
+        let bytes = crate::proto::ctap2::cbor::to_vec(&ctap).unwrap();
+        let parsed: BTreeMap<u64, Value> = crate::proto::ctap2::cbor::from_slice(&bytes).unwrap();
+        assert_eq!(
+            parsed.get(&0x0B),
+            Some(&Value::Array(vec![Value::Text("packed".to_string())]))
+        );
     }
 
     #[test]

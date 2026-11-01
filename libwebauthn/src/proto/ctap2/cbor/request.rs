@@ -156,6 +156,7 @@ mod tests {
             pin_auth_param: None,
             pin_auth_proto: None,
             enterprise_attestation: None,
+            attestation_formats_preference: None,
         }
     }
 
