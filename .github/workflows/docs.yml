@@ -19,3 +19,5 @@ jobs:
         run: cargo install --locked cargo-docs-rs
       - name: Build docs the way docs.rs does
         run: cargo +nightly docs-rs -p libwebauthn
+      - name: Build pxp docs the way docs.rs does
+        run: cargo +nightly docs-rs -p pxp
