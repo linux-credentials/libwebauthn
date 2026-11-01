@@ -2816,7 +2816,6 @@ dependencies = [
  "serde_repr",
  "sha2 0.10.9",
  "snow",
- "test-log",
  "thiserror 2.0.18",
  "tokio",
  "tokio-tungstenite",
