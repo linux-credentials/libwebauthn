@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["libwebauthn", "libwebauthn-tests"]
+members = ["libwebauthn", "pxp", "libwebauthn-tests"]
 
 # Custom dylint lints enforcing the logging policy (docs/logging.md).
 # Run with `cargo dylint --all --workspace -- --all-features`.

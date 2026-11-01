@@ -22,10 +22,10 @@ use libwebauthn::proto::ctap2::{
     Ctap2CredentialType, Ctap2PublicKeyCredentialDescriptor, Ctap2PublicKeyCredentialRpEntity,
     Ctap2PublicKeyCredentialType, Ctap2PublicKeyCredentialUserEntity,
 };
-use libwebauthn::transport::cable::channel::CableChannel;
-use libwebauthn::transport::cable::is_available;
-use libwebauthn::transport::cable::qr_code_device::{
-    CableQrCodeDevice, CableTransports, QrCodeOperationHint,
+use libwebauthn::transport::hybrid::channel::HybridChannel;
+use libwebauthn::transport::hybrid::is_available;
+use libwebauthn::transport::hybrid::qr_code_device::{
+    PxpQrCodeDevice, PxpTransports, QrCodeOperationHint,
 };
 use libwebauthn::transport::{Channel as _, ChannelSettings, Device};
 use libwebauthn::webauthn::WebAuthn;
@@ -73,9 +73,9 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
 
 async fn connect(
     hint: QrCodeOperationHint,
-) -> Result<(CableQrCodeDevice, CableChannel), Box<dyn Error>> {
-    let mut device: CableQrCodeDevice =
-        CableQrCodeDevice::new_transient(hint, CableTransports::CloudAssistedOrLocal)?;
+) -> Result<(PxpQrCodeDevice, HybridChannel), Box<dyn Error>> {
+    let mut device: PxpQrCodeDevice =
+        PxpQrCodeDevice::new_transient(hint, PxpTransports::CloudAssistedOrLocal)?;
 
     println!("Created QR code, awaiting advertisement.");
     let qr_code = QrCode::new(device.qr_code.to_string()).unwrap();
@@ -90,7 +90,7 @@ async fn connect(
     println!("Channel established {:?}", channel);
 
     let state_recv = channel.get_ux_update_receiver();
-    tokio::spawn(common::handle_cable_updates(state_recv));
+    tokio::spawn(common::handle_hybrid_updates(state_recv));
     Ok((device, channel))
 }
 

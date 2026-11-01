@@ -45,3 +45,5 @@ jobs:
           LIBWEBAUTHN_PSL_SYSTEM_TEST: "1"
       - name: Verify libwebauthn publishes cleanly
         run: cargo publish --dry-run -p libwebauthn
+      - name: Verify libwebauthn pxp publishes cleanly
+        run: cargo publish --dry-run -p pxp
