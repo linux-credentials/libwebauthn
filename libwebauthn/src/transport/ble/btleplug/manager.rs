@@ -62,7 +62,7 @@ async fn on_peripheral_service_data(
     id: &PeripheralId,
     uuids: &[Uuid],
     service_data: HashMap<Uuid, Vec<u8>>,
-) -> Option<(Adapter, Peripheral, Vec<u8>)> {
+) -> Option<(Peripheral, Vec<u8>)> {
     for uuid in uuids {
         if let Some(service_data) = service_data.get(uuid) {
             trace!(?id, ?service_data, "Found service data");
@@ -72,7 +72,7 @@ async fn on_peripheral_service_data(
             };
 
             debug!({ ?id, ?service_data }, "Found service data for peripheral");
-            return Some((adapter.clone(), peripheral, service_data.to_owned()));
+            return Some((peripheral, service_data.to_owned()));
         }
     }
 
@@ -83,15 +83,59 @@ async fn on_peripheral_service_data(
     None
 }
 
+/// A discovery is abandoned whenever the caller is cancelled or returns early,
+/// which would otherwise leave the adapter scanning for the lifetime of the
+/// process.
+pub struct ScanGuard(Option<Adapter>);
+
+impl ScanGuard {
+    /// Stops the scan and waits for the adapter to acknowledge it.
+    pub async fn stop(mut self) {
+        let Some(adapter) = self.0.take() else {
+            return;
+        };
+        if let Err(e) = adapter.stop_scan().await {
+            warn!(?e, "Failed to stop BLE scan");
+        }
+    }
+}
+
+impl Drop for ScanGuard {
+    fn drop(&mut self) {
+        // We start the scan but don't block on it being stopped.
+        let Some(adapter) = self.0.take() else {
+            return;
+        };
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                handle.spawn(async move {
+                    if let Err(e) = adapter.stop_scan().await {
+                        warn!(?e, "Failed to stop BLE scan");
+                    }
+                });
+            }
+            Err(e) => warn!(?e, "No runtime available to stop BLE scan"),
+        }
+    }
+}
+
 #[instrument(level = Level::DEBUG, skip_all)]
 /// Starts a discovery for devices advertising service data on any of the provided UUIDs
 pub async fn start_discovery_for_service_data(
     uuids: &[Uuid],
-) -> Result<impl Stream<Item = (Adapter, Peripheral, Vec<u8>)> + use<'_>, Error> {
+) -> Result<
+    (
+        ScanGuard,
+        impl Stream<Item = (Peripheral, Vec<u8>)> + use<'_>,
+    ),
+    Error,
+> {
     let adapter = get_adapter().await?;
     let scan_filter = ScanFilter::default();
 
     let events = adapter.events().await.or(Err(Error::Unavailable))?;
+
+    let scan_guard = ScanGuard(Some(adapter.clone()));
 
     adapter
         .start_scan(scan_filter)
@@ -114,7 +158,7 @@ pub async fn start_discovery_for_service_data(
         }
     });
 
-    Ok(stream)
+    Ok((scan_guard, stream))
 }
 
 /// TODO(#86): Support multiple adapters.
@@ -158,6 +202,8 @@ const SCAN_DURATION: std::time::Duration = std::time::Duration::from_secs(3);
 #[instrument(level = Level::DEBUG, skip_all)]
 pub async fn list_fido_devices() -> Result<Vec<FidoDevice>, Error> {
     let adapter = get_adapter().await?;
+
+    let scan_guard = ScanGuard(Some(adapter.clone()));
     adapter
         .start_scan(ScanFilter {
             services: vec![FIDO_PROFILE_UUID],
@@ -165,7 +211,8 @@ pub async fn list_fido_devices() -> Result<Vec<FidoDevice>, Error> {
         .await
         .or(Err(Error::ConnectionFailed))?;
     tokio::time::sleep(SCAN_DURATION).await;
-    let _ = adapter.stop_scan().await;
+    scan_guard.stop().await;
+
     let peripherals: Vec<Peripheral> = adapter
         .peripherals()
         .await
