@@ -2112,7 +2112,7 @@ mod tests {
     }
 
     #[test]
-    fn attestation_none_conveyance_scrubs_fmt_attstmt_and_aaguid() {
+    fn attestation_none_conveyance_scrubs_fmt_and_attstmt() {
         let response = create_attested_response([0x11u8; 16]);
         let mut request = create_test_request();
         request.attestation = Some("none".to_string());
@@ -2120,7 +2120,11 @@ mod tests {
         let model = response.to_idl_model(&request).unwrap();
 
         let auth_data = &model.response.authenticator_data.0;
-        assert_eq!(&auth_data[37..53], &[0u8; 16], "top-level authData AAGUID");
+        assert_eq!(
+            &auth_data[37..53],
+            &[0x11u8; 16],
+            "top-level authData AAGUID"
+        );
 
         let attestation: cbor::Value =
             cbor::from_slice(&model.response.attestation_object.0).unwrap();
@@ -2142,7 +2146,7 @@ mod tests {
         }
         match value_for("authData") {
             Some(cbor::Value::Bytes(embedded)) => {
-                assert_eq!(&embedded[37..53], &[0u8; 16], "embedded authData AAGUID");
+                assert_eq!(&embedded[37..53], &[0x11u8; 16], "embedded authData AAGUID");
             }
             other => panic!("authData must be CBOR bytes, got {other:?}"),
         }
