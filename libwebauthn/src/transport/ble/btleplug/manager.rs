@@ -6,7 +6,7 @@ use btleplug::api::{
 };
 use btleplug::platform::{Adapter, Manager, Peripheral, PeripheralId};
 use futures::{Stream, StreamExt};
-use tracing::{debug, info, instrument, trace, warn, Level};
+use tracing::{debug, error, info, instrument, trace, warn, Level};
 use uuid::Uuid;
 
 use super::device::FidoEndpoints;
@@ -133,14 +133,20 @@ pub async fn start_discovery_for_service_data(
     let adapter = get_adapter().await?;
     let scan_filter = ScanFilter::default();
 
-    let events = adapter.events().await.or(Err(Error::Unavailable))?;
+    let events = match adapter.events().await {
+        Ok(events) => events,
+        Err(err) => {
+            error!({ %err }, "Failed to subscribe to adapter events");
+            return Err(Error::Unavailable);
+        }
+    };
 
     let scan_guard = ScanGuard(Some(adapter.clone()));
 
-    adapter
-        .start_scan(scan_filter)
-        .await
-        .or(Err(Error::ConnectionFailed))?;
+    if let Err(err) = adapter.start_scan(scan_filter).await {
+        error!({ %err }, "Failed to start scan");
+        return Err(Error::ConnectionFailed);
+    }
 
     let stream = events.filter_map({
         move |event| {
@@ -163,14 +169,21 @@ pub async fn start_discovery_for_service_data(
 
 /// TODO(#86): Support multiple adapters.
 async fn get_adapter() -> Result<Adapter, Error> {
-    let manager = Manager::new().await.or(Err(Error::Unavailable))?;
-    manager
-        .adapters()
-        .await
-        .or(Err(Error::Unavailable))?
-        .into_iter()
-        .next()
-        .ok_or(Error::PoweredOff)
+    let manager = match Manager::new().await {
+        Ok(manager) => manager,
+        Err(err) => {
+            error!({ %err }, "Failed to create Bluetooth manager");
+            return Err(Error::Unavailable);
+        }
+    };
+    let adapters = match manager.adapters().await {
+        Ok(adapters) => adapters,
+        Err(err) => {
+            error!({ %err }, "Failed to list Bluetooth adapters");
+            return Err(Error::Unavailable);
+        }
+    };
+    adapters.into_iter().next().ok_or(Error::PoweredOff)
 }
 
 /// Checks if a Bluetooth adapter is available on the system.
@@ -183,10 +196,13 @@ async fn discover_properties(
 ) -> Result<Vec<(Peripheral, PeripheralProperties)>, Error> {
     let mut result = vec![];
     for peripheral in peripherals {
-        let properties = peripheral
-            .properties()
-            .await
-            .or(Err(Error::ConnectionFailed))?;
+        let properties = match peripheral.properties().await {
+            Ok(properties) => properties,
+            Err(err) => {
+                error!({ ?peripheral, %err }, "Failed to read peripheral properties");
+                return Err(Error::ConnectionFailed);
+            }
+        };
         trace!({ ?peripheral, ?properties }, "Discovered peripheral properties");
         if let Some(properties) = properties {
             result.push((peripheral, properties));
@@ -204,19 +220,25 @@ pub async fn list_fido_devices() -> Result<Vec<FidoDevice>, Error> {
     let adapter = get_adapter().await?;
 
     let scan_guard = ScanGuard(Some(adapter.clone()));
-    adapter
+    if let Err(err) = adapter
         .start_scan(ScanFilter {
             services: vec![FIDO_PROFILE_UUID],
         })
         .await
-        .or(Err(Error::ConnectionFailed))?;
+    {
+        error!({ %err }, "Failed to start FIDO service scan");
+        return Err(Error::ConnectionFailed);
+    }
     tokio::time::sleep(SCAN_DURATION).await;
     scan_guard.stop().await;
 
-    let peripherals: Vec<Peripheral> = adapter
-        .peripherals()
-        .await
-        .or(Err(Error::ConnectionFailed))?;
+    let peripherals: Vec<Peripheral> = match adapter.peripherals().await {
+        Ok(peripherals) => peripherals,
+        Err(err) => {
+            error!({ %err }, "Failed to list peripherals");
+            return Err(Error::ConnectionFailed);
+        }
+    };
     let with_properties: Vec<FidoDevice> = discover_properties(peripherals)
         .await?
         .into_iter()
@@ -230,11 +252,13 @@ pub async fn list_fido_devices() -> Result<Vec<FidoDevice>, Error> {
 }
 
 pub async fn get_device(peripheral: Peripheral) -> Result<Option<FidoDevice>, Error> {
-    let Some(properties) = peripheral
-        .properties()
-        .await
-        .or(Err(Error::ConnectionFailed))?
-    else {
+    let Some(properties) = (match peripheral.properties().await {
+        Ok(properties) => properties,
+        Err(err) => {
+            error!({ ?peripheral, %err }, "Failed to read peripheral properties");
+            return Err(Error::ConnectionFailed);
+        }
+    }) else {
         return Ok(None);
     };
 
@@ -249,19 +273,22 @@ pub async fn supported_fido_revisions(
     peripheral: &Peripheral,
 ) -> Result<SupportedRevisions, Error> {
     enforce_bonded(peripheral).await?;
-    peripheral
-        .connect()
-        .await
-        .or(Err(Error::ConnectionFailed))?;
-    peripheral
-        .discover_services()
-        .await
-        .or(Err(Error::ConnectionFailed))?;
+    if let Err(err) = peripheral.connect().await {
+        error!({ ?peripheral, %err }, "Failed to connect to peripheral");
+        return Err(Error::ConnectionFailed);
+    }
+    if let Err(err) = peripheral.discover_services().await {
+        error!({ ?peripheral, %err }, "Failed to discover GATT services");
+        return Err(Error::ConnectionFailed);
+    }
     let services = discover_services(peripheral).await?;
-    let revision = peripheral
-        .read(&services.service_revision_bitfield)
-        .await
-        .or(Err(Error::ConnectionFailed))?;
+    let revision = match peripheral.read(&services.service_revision_bitfield).await {
+        Ok(revision) => revision,
+        Err(err) => {
+            error!({ ?peripheral, %err }, "Failed to read service revision bitfield");
+            return Err(Error::ConnectionFailed);
+        }
+    };
     let bitfield = revision.first().ok_or(Error::OperationFailed)?;
     debug!(?revision, "Supported revision bitfield");
 
@@ -280,33 +307,54 @@ pub async fn connect(
     peripheral: &Peripheral,
     revision: &FidoRevision,
 ) -> Result<Connection, Error> {
-    peripheral
-        .connect()
-        .await
-        .or(Err(Error::ConnectionFailed))?;
+    if let Err(err) = peripheral.connect().await {
+        error!({ ?peripheral, %err }, "Failed to connect to peripheral");
+        return Err(Error::ConnectionFailed);
+    }
     enforce_bonded(peripheral).await?;
-    peripheral
-        .discover_services()
-        .await
-        .or(Err(Error::ConnectionFailed))?;
+    if let Err(err) = peripheral.discover_services().await {
+        error!({ ?peripheral, %err }, "Failed to discover GATT services");
+        return Err(Error::ConnectionFailed);
+    }
     let services = discover_services(peripheral).await?;
     Connection::new(peripheral, &services, revision).await
 }
 
 async fn discover_services(peripheral: &Peripheral) -> Result<FidoEndpoints, Error> {
-    let control_point_uuid =
-        Uuid::parse_str(FIDO_CONTROL_POINT_UUID).or(Err(Error::OperationFailed))?;
+    let control_point_uuid = match Uuid::parse_str(FIDO_CONTROL_POINT_UUID) {
+        Ok(uuid) => uuid,
+        Err(err) => {
+            error!({ %err }, "Invalid FIDO control point UUID constant");
+            return Err(Error::OperationFailed);
+        }
+    };
     let control_point = get_gatt_characteristic(peripheral, control_point_uuid)?;
 
-    let control_point_length_uuid =
-        Uuid::parse_str(FIDO_CONTROL_POINT_LENGTH_UUID).or(Err(Error::OperationFailed))?;
+    let control_point_length_uuid = match Uuid::parse_str(FIDO_CONTROL_POINT_LENGTH_UUID) {
+        Ok(uuid) => uuid,
+        Err(err) => {
+            error!({ %err }, "Invalid FIDO control point length UUID constant");
+            return Err(Error::OperationFailed);
+        }
+    };
     let control_point_length = get_gatt_characteristic(peripheral, control_point_length_uuid)?;
 
-    let status_uuid = Uuid::parse_str(FIDO_STATUS_UUID).or(Err(Error::OperationFailed))?;
+    let status_uuid = match Uuid::parse_str(FIDO_STATUS_UUID) {
+        Ok(uuid) => uuid,
+        Err(err) => {
+            error!({ %err }, "Invalid FIDO status UUID constant");
+            return Err(Error::OperationFailed);
+        }
+    };
     let status = get_gatt_characteristic(peripheral, status_uuid)?;
 
-    let service_revision_bitfield_uuid =
-        Uuid::parse_str(FIDO_REVISION_BITFIELD_UUID).or(Err(Error::OperationFailed))?;
+    let service_revision_bitfield_uuid = match Uuid::parse_str(FIDO_REVISION_BITFIELD_UUID) {
+        Ok(uuid) => uuid,
+        Err(err) => {
+            error!({ %err }, "Invalid FIDO service revision bitfield UUID constant");
+            return Err(Error::OperationFailed);
+        }
+    };
     let service_revision_bitfield =
         get_gatt_characteristic(peripheral, service_revision_bitfield_uuid)?;
 
