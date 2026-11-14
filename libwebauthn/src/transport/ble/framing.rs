@@ -133,10 +133,12 @@ impl BleFrameParser {
         let cmd_byte = *initial
             .first()
             .ok_or_else(|| IOError::new(IOErrorKind::InvalidData, "Initial fragment is empty"))?;
-        let cmd = cmd_byte.try_into().or(Err(IOError::new(
-            IOErrorKind::InvalidData,
-            format!("Invalid BLE frame command: {:x}", cmd_byte),
-        )))?;
+        let cmd = cmd_byte.try_into().map_err(|_| {
+            IOError::new(
+                IOErrorKind::InvalidData,
+                format!("Invalid BLE frame command: {:x}", cmd_byte),
+            )
+        })?;
         let mut data = vec![];
         if let Some(initial_data) = initial.get(INITIAL_FRAGMENT_HEADER_LENGTH..) {
             data.extend(initial_data);

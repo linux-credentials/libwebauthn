@@ -6,20 +6,28 @@ use btleplug::api::{Central as _, CentralEvent, Manager as _, Peripheral as _};
 use btleplug::api::{PeripheralProperties, ScanFilter};
 use btleplug::platform::{Adapter, Manager, Peripheral, PeripheralId};
 use futures::{Stream, StreamExt};
-use tracing::{debug, instrument, trace, warn, Level};
+use tracing::{debug, error, instrument, trace, warn, Level};
 use uuid::Uuid;
 
 use crate::error::PxpError;
 
 /// TODO(#86): Support multiple adapters.
 async fn get_adapter() -> Result<Adapter, PxpError> {
-    let manager = Manager::new()
-        .await
-        .or(Err(PxpError::TransportUnavailable))?;
-    manager
-        .adapters()
-        .await
-        .or(Err(PxpError::TransportUnavailable))?
+    let manager = match Manager::new().await {
+        Ok(manager) => manager,
+        Err(err) => {
+            error!({ %err }, "Failed to create Bluetooth manager");
+            return Err(PxpError::TransportUnavailable);
+        }
+    };
+    let adapters = match manager.adapters().await {
+        Ok(adapters) => adapters,
+        Err(err) => {
+            error!({ %err }, "Failed to list Bluetooth adapters");
+            return Err(PxpError::TransportUnavailable);
+        }
+    };
+    adapters
         .into_iter()
         .next()
         .ok_or(PxpError::TransportUnavailable)
@@ -92,17 +100,20 @@ pub(crate) async fn start_discovery_for_service_data(
     PxpError,
 > {
     let adapter = get_adapter().await?;
-    let events = adapter
-        .events()
-        .await
-        .or(Err(PxpError::TransportUnavailable))?;
+    let events = match adapter.events().await {
+        Ok(events) => events,
+        Err(err) => {
+            error!({ %err }, "Failed to subscribe to adapter events");
+            return Err(PxpError::TransportUnavailable);
+        }
+    };
 
     let scan_guard = ScanGuard(Some(adapter.clone()));
 
-    adapter
-        .start_scan(ScanFilter::default())
-        .await
-        .or(Err(PxpError::TransportUnavailable))?;
+    if let Err(err) = adapter.start_scan(ScanFilter::default()).await {
+        error!({ %err }, "Failed to start scan");
+        return Err(PxpError::TransportUnavailable);
+    }
 
     let scan_adapter = adapter.clone();
     let stream = events.filter_map(move |event| {
@@ -123,8 +134,11 @@ pub(crate) async fn start_discovery_for_service_data(
 pub(crate) async fn get_properties(
     peripheral: &Peripheral,
 ) -> Result<Option<PeripheralProperties>, PxpError> {
-    peripheral
-        .properties()
-        .await
-        .or(Err(PxpError::TransportUnavailable))
+    match peripheral.properties().await {
+        Ok(properties) => Ok(properties),
+        Err(err) => {
+            error!({ %err }, "Failed to read peripheral properties");
+            Err(PxpError::TransportUnavailable)
+        }
+    }
 }
