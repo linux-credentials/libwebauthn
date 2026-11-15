@@ -163,7 +163,7 @@ impl UpgradableResponse<MakeCredentialResponse, MakeCredentialRequest> for Regis
         let resp = Ctap2MakeCredentialResponse {
             format: String::from("fido-u2f"),
             authenticator_data,
-            attestation_statement,
+            attestation_statement: Some(attestation_statement),
             enterprise_attestation: None,
             large_blob_key: None,
             unsigned_extension_outputs: None,
