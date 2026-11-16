@@ -48,7 +48,7 @@ use super::{
 pub struct MakeCredentialResponse {
     pub format: String,
     pub authenticator_data: AuthenticatorData<MakeCredentialsResponseExtensions>,
-    pub attestation_statement: Ctap2AttestationStatement,
+    pub attestation_statement: Option<Ctap2AttestationStatement>,
     pub enterprise_attestation: Option<bool>,
     pub large_blob_key: Option<Vec<u8>>,
     pub unsigned_extensions_output: MakeCredentialsResponseUnsignedExtensions,
@@ -144,7 +144,12 @@ impl WebAuthnIDLResponse for MakeCredentialResponse {
         let (format, attestation_statement) = if scrub_attestation {
             ("none", &none_statement)
         } else {
-            (self.format.as_str(), &self.attestation_statement)
+            (
+                self.format.as_str(),
+                self.attestation_statement
+                    .as_ref()
+                    .unwrap_or(&none_statement),
+            )
         };
         let attestation_object_bytes =
             build_attestation_object(format, attestation_statement, &authenticator_data_bytes)?;
@@ -1796,7 +1801,7 @@ mod tests {
         MakeCredentialResponse {
             format: "none".to_string(),
             authenticator_data,
-            attestation_statement: Ctap2AttestationStatement::None(BTreeMap::new()),
+            attestation_statement: Some(Ctap2AttestationStatement::None(BTreeMap::new())),
             enterprise_attestation: None,
             large_blob_key: None,
             unsigned_extensions_output: MakeCredentialsResponseUnsignedExtensions::default(),
@@ -2104,10 +2109,12 @@ mod tests {
         MakeCredentialResponse {
             format: "fido-u2f".to_string(),
             authenticator_data,
-            attestation_statement: Ctap2AttestationStatement::FidoU2F(FidoU2fAttestationStmt {
-                signature: ByteBuf::from(vec![0xAA; 16]),
-                certificates: vec![ByteBuf::from(vec![0xBB; 8])],
-            }),
+            attestation_statement: Some(Ctap2AttestationStatement::FidoU2F(
+                FidoU2fAttestationStmt {
+                    signature: ByteBuf::from(vec![0xAA; 16]),
+                    certificates: vec![ByteBuf::from(vec![0xBB; 8])],
+                },
+            )),
             enterprise_attestation: None,
             large_blob_key: None,
             unsigned_extensions_output: MakeCredentialsResponseUnsignedExtensions::default(),

@@ -411,8 +411,9 @@ pub struct Ctap2MakeCredentialResponse {
     #[serde(index = 0x02)]
     pub authenticator_data: AuthenticatorData<Ctap2MakeCredentialsResponseExtensions>,
 
+    #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(index = 0x03)]
-    pub attestation_statement: Ctap2AttestationStatement,
+    pub attestation_statement: Option<Ctap2AttestationStatement>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(index = 0x04)]

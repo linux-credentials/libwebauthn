@@ -133,7 +133,7 @@ async fn test_ctap2_signature_roundtrip() {
     );
 
     let (attestation_signature, x5c) = match &registration.attestation_statement {
-        Ctap2AttestationStatement::PackedOrAndroid(stmt) => (
+        Some(Ctap2AttestationStatement::PackedOrAndroid(stmt)) => (
             stmt.signature.as_ref(),
             stmt.certificates
                 .first()
