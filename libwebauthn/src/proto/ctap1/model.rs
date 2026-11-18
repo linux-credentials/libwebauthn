@@ -136,10 +136,12 @@ impl TryFrom<ApduResponse> for Ctap1RegisterResponse {
         let mut remaining = vec![];
         cursor.read_to_end(&mut remaining)?;
 
-        let (signature, _) = X509Certificate::from_der(&remaining).or(Err(IOError::new(
-            IOErrorKind::InvalidData,
-            "Failed to parse X509 attestation data",
-        )))?;
+        let (signature, _) = X509Certificate::from_der(&remaining).map_err(|err| {
+            IOError::new(
+                IOErrorKind::InvalidData,
+                format!("Failed to parse X509 attestation data: {err}"),
+            )
+        })?;
         let signature = Vec::from(signature);
         // `signature` is a suffix of `remaining` returned by `X509Certificate::from_der`,
         // so the split index is always within bounds in practice; bound it explicitly.
@@ -252,10 +254,12 @@ impl TryFrom<ApduResponse> for Ctap1VersionResponse {
             "Emtpy APDU packet.",
         ))?;
 
-        let version_string = String::from_utf8(data).or(Err(IOError::new(
-            IOErrorKind::InvalidInput,
-            "Invalid UTF-8 bytes in CTAP1 version string",
-        )))?;
+        let version_string = String::from_utf8(data).map_err(|err| {
+            IOError::new(
+                IOErrorKind::InvalidInput,
+                format!("Invalid UTF-8 bytes in CTAP1 version string: {err}"),
+            )
+        })?;
 
         let version = match version_string.as_str() {
             "U2F_V2" => Ctap1Version::U2fV2,

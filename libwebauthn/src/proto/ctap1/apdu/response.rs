@@ -36,10 +36,12 @@ impl ApduResponse {
         let mut cursor = IOCursor::new(vec![self.sw1, self.sw2]);
         let code = cursor.read_u16::<BigEndian>()?;
 
-        code.try_into().or(Err(IOError::new(
-            IOErrorKind::InvalidData,
-            format!("Unknown APDU response code returned: {:x}", code),
-        )))
+        code.try_into().map_err(|_| {
+            IOError::new(
+                IOErrorKind::InvalidData,
+                format!("Unknown APDU response code returned: {:x}", code),
+            )
+        })
     }
 }
 

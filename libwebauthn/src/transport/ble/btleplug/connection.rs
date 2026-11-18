@@ -9,7 +9,7 @@ use byteorder::{BigEndian, ReadBytesExt};
 use futures::stream::{Stream, StreamExt};
 use tokio::sync::Mutex;
 use tokio::time::timeout;
-use tracing::{debug, info, instrument, trace, warn, Level};
+use tracing::{debug, error, info, instrument, trace, warn, Level};
 
 use super::device::FidoEndpoints;
 use super::gatt::write_type_for;
@@ -46,16 +46,19 @@ impl Connection {
         revision: &FidoRevision,
     ) -> Result<Self, Error> {
         // Subscribe before opening the stream so early frames aren't dropped.
-        peripheral
-            .subscribe(&services.status)
-            .await
-            .or(Err(Error::OperationFailed))?;
+        if let Err(err) = peripheral.subscribe(&services.status).await {
+            error!({ %err }, "Failed to subscribe to FIDO status characteristic");
+            return Err(Error::OperationFailed);
+        }
 
         let status_uuid = services.status.uuid;
-        let raw_stream = peripheral
-            .notifications()
-            .await
-            .or(Err(Error::OperationFailed))?;
+        let raw_stream = match peripheral.notifications().await {
+            Ok(stream) => stream,
+            Err(err) => {
+                error!({ %err }, "Failed to open notification stream");
+                return Err(Error::OperationFailed);
+            }
+        };
         let notifications: NotificationStream = Box::pin(raw_stream.filter(move |n| {
             let matches = n.uuid == status_uuid;
             async move { matches }
@@ -71,11 +74,17 @@ impl Connection {
     }
 
     async fn control_point_length(&self) -> Result<usize, Error> {
-        let max_fragment_length = self
+        let max_fragment_length = match self
             .peripheral
             .read(&self.services.control_point_length)
             .await
-            .or(Err(Error::OperationFailed))?;
+        {
+            Ok(value) => value,
+            Err(err) => {
+                error!({ %err }, "Failed to read control point length");
+                return Err(Error::OperationFailed);
+            }
+        };
 
         if max_fragment_length.len() != 2 {
             warn!(
@@ -94,9 +103,13 @@ impl Connection {
 
     pub async fn frame_send(&self, frame: &Frame) -> Result<(), Error> {
         let max_fragment_size = self.control_point_length().await?;
-        let fragments = frame
-            .fragments(max_fragment_size)
-            .or(Err(Error::InvalidFraming))?;
+        let fragments = match frame.fragments(max_fragment_size) {
+            Ok(fragments) => fragments,
+            Err(err) => {
+                error!({ %err, ?frame }, "Failed to fragment frame");
+                return Err(Error::InvalidFraming);
+            }
+        };
 
         let write_type = write_type_for(&self.services.control_point);
 
@@ -104,10 +117,14 @@ impl Connection {
             debug!({ fragment = i, len = fragment.len() }, "Sending fragment");
             trace!(?fragment, "Sending fragment");
 
-            self.peripheral
+            if let Err(err) = self
+                .peripheral
                 .write(&self.services.control_point, fragment, write_type)
                 .await
-                .or(Err(Error::OperationFailed))?;
+            {
+                error!({ %err, fragment = i }, "Failed to write fragment");
+                return Err(Error::OperationFailed);
+            }
         }
 
         Ok(())
@@ -116,10 +133,14 @@ impl Connection {
     pub(crate) async fn select_fido_revision(&self, revision: &FidoRevision) -> Result<(), Error> {
         let ack: u8 = *revision as u8;
         let write_type = write_type_for(&self.services.service_revision_bitfield);
-        self.peripheral
+        if let Err(err) = self
+            .peripheral
             .write(&self.services.service_revision_bitfield, &[ack], write_type)
             .await
-            .or(Err(Error::OperationFailed))?;
+        {
+            error!({ %err, ?revision }, "Failed to select FIDO revision");
+            return Err(Error::OperationFailed);
+        }
 
         info!(?revision, "Successfully selected FIDO revision");
         Ok(())
@@ -130,18 +151,26 @@ impl Connection {
     async fn send_cancel(&self) -> Result<(), Error> {
         let cancel_frame = Frame::new(BleCommand::Cancel, &[]);
         let max_fragment_size = self.control_point_length().await.unwrap_or(20);
-        let fragments = cancel_frame
-            .fragments(max_fragment_size)
-            .or(Err(Error::InvalidFraming))?;
+        let fragments = match cancel_frame.fragments(max_fragment_size) {
+            Ok(fragments) => fragments,
+            Err(err) => {
+                error!({ %err }, "Failed to fragment cancel frame");
+                return Err(Error::InvalidFraming);
+            }
+        };
         for fragment in fragments {
-            self.peripheral
+            if let Err(err) = self
+                .peripheral
                 .write(
                     &self.services.control_point,
                     &fragment,
                     WriteType::WithoutResponse,
                 )
                 .await
-                .or(Err(Error::OperationFailed))?;
+            {
+                error!({ %err }, "Failed to write cancel fragment");
+                return Err(Error::OperationFailed);
+            }
         }
         Ok(())
     }
@@ -175,10 +204,22 @@ impl Connection {
             debug!("Received fragment");
             trace!(?fragment, "Received fragment");
 
-            let status = parser.update(&fragment).or(Err(Error::InvalidFraming))?;
+            let status = match parser.update(&fragment) {
+                Ok(status) => status,
+                Err(err) => {
+                    error!({ %err, ?fragment }, "Failed to parse frame fragment");
+                    return Err(Error::InvalidFraming);
+                }
+            };
             match status {
                 BleFrameParserResult::Done => {
-                    let frame = parser.frame().or(Err(Error::InvalidFraming))?;
+                    let frame = match parser.frame() {
+                        Ok(frame) => frame,
+                        Err(err) => {
+                            error!({ %err }, "Failed to assemble frame");
+                            return Err(Error::InvalidFraming);
+                        }
+                    };
                     trace!(?frame, "Received frame");
                     match frame.cmd {
                         BleCommand::Keepalive => {
@@ -209,9 +250,12 @@ impl Connection {
 
     /// Enables notifications on `fidoStatus`. Idempotent.
     pub async fn subscribe(&self) -> Result<(), Error> {
-        self.peripheral
-            .subscribe(&self.services.status)
-            .await
-            .or(Err(Error::OperationFailed))
+        match self.peripheral.subscribe(&self.services.status).await {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                error!({ %err }, "Failed to subscribe to FIDO status characteristic");
+                Err(Error::OperationFailed)
+            }
+        }
     }
 }

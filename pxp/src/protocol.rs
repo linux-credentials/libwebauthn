@@ -634,10 +634,10 @@ async fn connection_recv(
         PxpTunnelMessageType::Ctap => {
             debug!("Received CTAP response");
             trace!(?pxp_message.payload);
-            ctap_rx_send
-                .send(pxp_message.payload.into_vec())
-                .await
-                .or(Err(PxpError::ConnectionFailed))?;
+            if let Err(err) = ctap_rx_send.send(pxp_message.payload.into_vec()).await {
+                error!({ ?err }, "CTAP response channel closed; dropping response");
+                return Err(PxpError::ConnectionFailed);
+            }
             Ok(RecvOutcome::Continue)
         }
         PxpTunnelMessageType::Update => {

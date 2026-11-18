@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use tokio::time::{sleep, timeout as tokio_timeout};
-use tracing::{debug, instrument, span, trace, warn, Level};
+use tracing::{debug, error, instrument, span, trace, warn, Level};
 
 use super::apdu::{ApduRequest, ApduResponse, ApduResponseStatus};
 use super::{
@@ -52,7 +52,13 @@ where
             .apdu_recv(VERSION_TIMEOUT)
             .await
             .map_err(WebAuthnError::Transport)?;
-        let response: Ctap1VersionResponse = apdu_response.try_into().or(Err(CtapError::Other))?;
+        let response: Ctap1VersionResponse = match apdu_response.try_into() {
+            Ok(response) => response,
+            Err(err) => {
+                error!({ ?err }, "Failed to parse CTAP1 version response");
+                return Err(CtapError::Other.into());
+            }
+        };
         debug!(?response.version, "CTAP1 version response");
         Ok(response)
     }
@@ -87,13 +93,25 @@ where
 
         let apdu_request: ApduRequest = (&request).into();
         let apdu_response = send_apdu_request_wait_uv(self, &apdu_request, request.timeout).await?;
-        let status = apdu_response.status().or(Err(CtapError::Other))?;
+        let status = match apdu_response.status() {
+            Ok(status) => status,
+            Err(err) => {
+                error!({ ?err }, "Failed to parse APDU status in CTAP1 register response");
+                return Err(CtapError::Other.into());
+            }
+        };
         if status != ApduResponseStatus::NoError {
             debug!(?status, "APDU response has error code");
             return Err(WebAuthnError::Ctap(CtapError::from(status)));
         }
 
-        let response: Ctap1RegisterResponse = apdu_response.try_into().or(Err(CtapError::Other))?;
+        let response: Ctap1RegisterResponse = match apdu_response.try_into() {
+            Ok(response) => response,
+            Err(err) => {
+                error!({ ?err }, "Failed to parse CTAP1 register response");
+                return Err(CtapError::Other.into());
+            }
+        };
         debug!("CTAP1 register response");
         trace!(?response, "CTAP1 register response");
         Ok(response)
@@ -110,13 +128,25 @@ where
 
         let apdu_request: ApduRequest = request.into();
         let apdu_response = send_apdu_request_wait_uv(self, &apdu_request, request.timeout).await?;
-        let status = apdu_response.status().or(Err(CtapError::Other))?;
+        let status = match apdu_response.status() {
+            Ok(status) => status,
+            Err(err) => {
+                error!({ ?err }, "Failed to parse APDU status in CTAP1 sign response");
+                return Err(CtapError::Other.into());
+            }
+        };
         if status != ApduResponseStatus::NoError {
             debug!(?status, "APDU response has error code");
             return Err(WebAuthnError::Ctap(CtapError::from(status)));
         }
 
-        let response: Ctap1SignResponse = apdu_response.try_into().or(Err(CtapError::Other))?;
+        let response: Ctap1SignResponse = match apdu_response.try_into() {
+            Ok(response) => response,
+            Err(err) => {
+                error!({ ?err }, "Failed to parse CTAP1 sign response");
+                return Err(CtapError::Other.into());
+            }
+        };
         debug!(?response.user_presence_verified, "CTAP1 sign response received");
         trace!(?response, "CTAP1 sign response");
         Ok(response)
@@ -128,7 +158,7 @@ async fn send_apdu_request_wait_uv<C: Channel>(
     request: &ApduRequest,
     timeout: Duration,
 ) -> Result<ApduResponse, WebAuthnError<C::TransportError>> {
-    tokio_timeout(timeout, async {
+    match tokio_timeout(timeout, async {
         loop {
             channel
                 .apdu_send(request, timeout)
@@ -138,9 +168,15 @@ async fn send_apdu_request_wait_uv<C: Channel>(
                 .apdu_recv(timeout)
                 .await
                 .map_err(WebAuthnError::Transport)?;
-            let apdu_status = apdu_response.status().or(Err(WebAuthnError::Platform(
-                PlatformError::InvalidDeviceResponse,
-            )))?;
+            let apdu_status = match apdu_response.status() {
+                Ok(status) => status,
+                Err(err) => {
+                    error!({ ?err }, "Failed to parse APDU status");
+                    return Err(WebAuthnError::Platform(
+                        PlatformError::InvalidDeviceResponse,
+                    ));
+                }
+            };
             let ctap_error: CtapError = apdu_status.into();
             match ctap_error {
                 CtapError::Ok => return Ok(apdu_response),
@@ -152,5 +188,11 @@ async fn send_apdu_request_wait_uv<C: Channel>(
         }
     })
     .await
-    .or(Err(WebAuthnError::Ctap(CtapError::UserActionTimeout)))?
+    {
+        Ok(result) => result,
+        Err(err) => {
+            error!({ ?err, ?timeout }, "Timed out waiting for user presence");
+            Err(WebAuthnError::Ctap(CtapError::UserActionTimeout))
+        }
+    }
 }
